@@ -49,14 +49,10 @@ void TieShapeOp::build(Builder *builder, OperationState &result, Value operand,
 }
 
 static LogicalResult verifyTieShapeOp(TieShapeOp op) {
-  if (op.operand().getType() != op.result().getType()) {
-    return op.emitOpError("must have the same operand and result type");
-  }
-
   // Validate RankedTensorType and ranked_shape_type conservatively in this
   // case (tie_shape supports arbitrary operand() but we constrain it if
   // it is specific enough.
-  auto rankedTensorType = op.operand().getType().dyn_cast<RankedTensorType>();
+  auto rankedTensorType = op.operand().getType().dyn_cast<ShapedType>();
   auto rsType = op.shape().getType().dyn_cast<RankedShapeType>();
   if (rankedTensorType && rsType) {
     if (!rankedTensorType.getShape().equals(rsType.getAllDims())) {
@@ -66,6 +62,8 @@ static LogicalResult verifyTieShapeOp(TieShapeOp op) {
 
   return success();
 }
+
+Value TieShapeOp::getViewSource() { return operand(); }
 
 //===----------------------------------------------------------------------===//
 // shape.cast_compatible_shape

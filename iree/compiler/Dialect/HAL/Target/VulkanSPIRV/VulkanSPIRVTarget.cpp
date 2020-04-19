@@ -155,11 +155,11 @@ class VulkanSPIRVTargetBackend : public TargetBackend {
 
   void buildTranslationPassPipeline(IREE::HAL::ExecutableTargetOp targetOp,
                                     OpPassManager &passManager) override {
-    passManager.addPass(createHALInterfaceToMemrefPass());
     if (targetOp.getAttr("vkspv.use_linalg")) {
-      addHLOToLinalgToSPIRVPasses(passManager,
-                                  options_.linalgToSPIRVWorkgroupSize);
+      buildSPIRVTransformPassPipeline(passManager,
+                                      options_.linalgToSPIRVWorkgroupSize);
     } else {
+      passManager.addPass(createHALInterfaceToMemrefPass());
       addIREEToSPIRVPasses(passManager);
     }
   }

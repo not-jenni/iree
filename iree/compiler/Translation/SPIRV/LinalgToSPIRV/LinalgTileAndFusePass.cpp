@@ -25,6 +25,8 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/FoldUtils.h"
 
+#define DEBUG_TYPE "iree-linalg-tile-and-fuse-buffer"
+
 namespace mlir {
 namespace iree_compiler {
 
@@ -189,7 +191,6 @@ struct TileAndFuseLinalgOpPattern
 void LinalgTileAndFusePass::runOnFunction() {
   MLIRContext *context = &getContext();
   FuncOp funcOp = getFunction();
-  if (!isDispatchFuncImpl(funcOp)) return;
 
   Region &body = funcOp.getBody();
   // Only handle single block functions.
@@ -202,7 +203,7 @@ void LinalgTileAndFusePass::runOnFunction() {
   if (linalgOps.empty()) return;
 
   // Compute the minimum number of outer parallel loops across linalg
-  // operations. This gives the dimensionality of tiling to be used .
+  // operations. This gives the dimensionality of tiling to be used.
   unsigned numParallelLoops = kMaxWorkgroupRank;
   for (linalg::LinalgOp op : linalgOps)
     numParallelLoops = std::min(numParallelLoops, getNumOuterParallelLoops(op));
@@ -210,6 +211,16 @@ void LinalgTileAndFusePass::runOnFunction() {
   // Get the tile sizes to use for the lowering.
   SmallVector<int64_t, 3> tileSizes;
   getTileSizes(numParallelLoops, workGroupSize, tileSizes);
+
+  LLVM_DEBUG({
+    llvm::dbgs() << "--- IREE Linalg tile and fuse configuration ---\n";
+    llvm::dbgs() << "# parallel loops: " << numParallelLoops;
+    llvm::dbgs() << "\nworkgroup sizes: [";
+    interleaveComma(workGroupSize, llvm::dbgs());
+    llvm::dbgs() << "]\ntile sizes: [";
+    interleaveComma(tileSizes, llvm::dbgs());
+    llvm::dbgs() << "]\n";
+  });
 
   OwningRewritePatternList patterns;
   patterns.insert<TileLinalgOpPattern<linalg::GenericOp>,

@@ -1730,6 +1730,12 @@ def HAL_InterfaceBindingOp : HAL_Op<"interface.binding", [
     HAL_DescriptorTypeAttr:$type,
     HAL_MemoryAccessBitfieldAttr:$access
   );
+
+  let extraClassDeclaration = [{
+    /// Returns true if this op has a desciptor (set, binding) pair smaller
+    /// than `that` op.
+    bool operator<(InterfaceBindingOp that);
+  }];
 }
 
 def HAL_InterfaceLoadConstantOp : HAL_PureOp<"interface.load.constant"> {

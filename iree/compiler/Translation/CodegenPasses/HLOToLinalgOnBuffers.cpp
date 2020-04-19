@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//===- XLAToLinalgOnBuffers.cpp - Pass to convert XLA to Linalg on buffers-===//
+//===- HLOToLinalgOnBuffers.cpp - Pass to convert HLO to Linalg on buffers-===//
 //
-// Pass to convert from XLA to linalg on buffers. Currently only handles cases
+// Pass to convert from HLO to linalg on buffers. Currently only handles cases
 // where the dispatch region contains a single xla_hlo op that can be converted
 // to linalg on buffers.
 //
@@ -22,7 +22,9 @@
 
 #include <cstddef>
 
+#include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/IREE/IR/IREEOps.h"
+#include "iree/compiler/Dialect/Shape/IR/ShapeOps.h"
 #include "iree/compiler/Translation/CodegenPasses/Passes.h"
 #include "iree/compiler/Translation/CodegenUtils/CodegenUtils.h"
 #include "llvm/ADT/APInt.h"
@@ -83,82 +85,190 @@ static ArrayAttr getParallelAndReductionIterAttrs(Builder b, unsigned nLoops,
 }
 
 //===----------------------------------------------------------------------===//
-// IREE dialect op conversions.
+// Linalg tensor and buffer conversion utilities.
 //===----------------------------------------------------------------------===//
 
-// TODO(ravishankarm): These conversion patterns are there in a few
-// places. Combine all the patterns into a single pass.
-struct IREELoadInputOpConversion final
-    : public OpConversionPattern<IREE::LoadInputOp> {
-  using OpConversionPattern<IREE::LoadInputOp>::OpConversionPattern;
-  LogicalResult matchAndRewrite(
-      IREE::LoadInputOp op, ArrayRef<Value> operands,
-      ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, op.src());
-    return success();
+/// Returns the memory space for the given descriptor `type`.
+// Note: This function should be kept in consistence with SPIRVTypeConverter's
+// getMemorySpaceForStorageClass(). But it does not make sense to directly use
+// that here.
+static unsigned mapDescriptorTypeToMemorySpace(IREE::HAL::DescriptorType type) {
+  switch (type) {
+    case IREE::HAL::DescriptorType::StorageBuffer:
+    case IREE::HAL::DescriptorType::StorageBufferDynamic:
+      return 0;
+    case IREE::HAL::DescriptorType::UniformBuffer:
+    case IREE::HAL::DescriptorType::UniformBufferDynamic:
+      return 4;
   }
-};
+}
 
-struct IREEStoreOutputOpConversion final
-    : public OpConversionPattern<IREE::StoreOutputOp> {
-  using OpConversionPattern<IREE::StoreOutputOp>::OpConversionPattern;
-  LogicalResult matchAndRewrite(
-      IREE::StoreOutputOp op, ArrayRef<Value> operands,
-      ConversionPatternRewriter &rewriter) const override {
-    if (operands[0] != op.dst()) return failure();
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
+/// Returns a corresponding memref type for the given `tensorType` stored in the
+/// given `descriptorType`.
+static MemRefType getTensorBackingBufferType(
+    TensorType tensorType, IREE::HAL::DescriptorType descriptorType) {
+  // Get the memory space from the HAL interface so we can carry that over via
+  // memref.
+  unsigned memorySpace = mapDescriptorTypeToMemorySpace(descriptorType);
 
-/// Returns a buffer to use for the `result` value of the operation. For now
-/// checks if the result has a single use as the src operand of an
-/// iree.store_output op. This can be generalized to allocate temp buffers
-/// later.
-static Value getBufferForResult(Value result, OpBuilder &builder) {
+  // Get the corresponding memref type from the tensor type.
+  return MemRefType::get(tensorType.getShape(), tensorType.getElementType(),
+                         ArrayRef<AffineMap>(), memorySpace);
+}
+
+/// Returns the interface buffer for the given op `operand`. This assumes the
+/// given `operand` is a tensor loaded from a HAL inteface buffer.
+static Value getBufferForOpOperand(Value operand, OpBuilder &builder) {
+  Operation *def = operand.getDefiningOp();
+
+  // There may exist dynamic shape annotation. Penetrate through.
+  auto tieShapeOp = dyn_cast<Shape::TieShapeOp>(def);
+  if (tieShapeOp) def = tieShapeOp.operand().getDefiningOp();
+
+  // This operand should be defined by a hal.interface.load.tensor op.
+  auto loadOp = dyn_cast<IREE::HAL::InterfaceLoadTensorOp>(def);
+  if (!loadOp || !matchPattern(loadOp.offset(), m_Zero())) return nullptr;
+  Location loc = def->getLoc();
+
+  // Get the corresponding memref type from the tensor type.
+  auto tensorType = operand.getType().cast<TensorType>();
+  auto bindingOp = loadOp.queryBindingOp();
+  assert(bindingOp);
+  auto bufferType = getTensorBackingBufferType(tensorType, bindingOp.type());
+
+  // Create the placeholder op for the backing buffer. Make sure shape
+  // annotation is carried over if exists.
+  auto phOp =
+      builder.create<IREE::PlaceholderOp>(loc, bufferType, "interface buffer");
+  phOp.setAttr("binding", loadOp.binding());
+  Value buffer = phOp;
+  if (tieShapeOp)
+    buffer = builder.create<Shape::TieShapeOp>(loc, buffer, tieShapeOp.shape());
+  return buffer;
+}
+
+/// Returns the interface buffer for the given op `result`. This assumes the
+/// given `result` is a tensor stored to a HAL interface buffer.
+static Value getBufferForOpResult(Value result, OpBuilder &builder) {
   if (!result.hasOneUse()) return nullptr;
-  auto resultMemrefOp =
-      dyn_cast<IREE::StoreOutputOp>(result.use_begin()->getOwner());
-  if (!resultMemrefOp) return nullptr;
-  return resultMemrefOp.dst();
+  Location loc = result.getDefiningOp()->getLoc();
+  Operation *use = result.use_begin()->getOwner();
+
+  // There may exist dynamic shape annotation. Penetrate through.
+  auto tieShapeOp = dyn_cast<Shape::TieShapeOp>(use);
+  if (tieShapeOp) use = tieShapeOp.result().use_begin()->getOwner();
+
+  // This result should be used by a hal.interface.store.tensor op.
+  auto storeOp = dyn_cast<IREE::HAL::InterfaceStoreTensorOp>(use);
+  if (!storeOp || !matchPattern(storeOp.offset(), m_Zero())) return nullptr;
+
+  // Get the corresponding memref type from the tensor type.
+  auto tensorType = result.getType().cast<TensorType>();
+  auto bindingOp = storeOp.queryBindingOp();
+  assert(bindingOp);
+  auto bufferType = getTensorBackingBufferType(tensorType, bindingOp.type());
+
+  // Create the placeholder op for the backing buffer. Make sure shape
+  // annotation is carried over if exists.
+  auto phOp =
+      builder.create<IREE::PlaceholderOp>(loc, bufferType, "interface buffer");
+  phOp.setAttr("binding", storeOp.binding());
+  Value buffer = phOp;
+  if (tieShapeOp)
+    buffer = builder.create<Shape::TieShapeOp>(loc, buffer, tieShapeOp.shape());
+  return buffer;
 }
 
 namespace {
+//===----------------------------------------------------------------------===//
+// Linalg on buffers conversion base class.
+//===----------------------------------------------------------------------===//
 
-/// Base class to convert to linalg on buffers. All derived classes implement an
-/// apply method with the following signature
+/// Base class to convert linalg on tensors to Linalg on buffers.
 ///
+/// This base class handles getting/allocating interface buffers for the Linalg
+/// op inputs and outputs, so that all derived classes can assume the inputs and
+/// outputs are already buffers and perform the main conversion logic.
+//
+/// All derived classes implement an apply method with the following signature:
+///
+/// ```c++
 /// OpTy apply(SrcOpTy op, ArrayRef<Value> args, ArrayRef<Value> results,
 ///            ConversionPatternRewriter& rewriter) const;
+/// ```
 ///
 /// The `op` is the op being converted. `args` contains the buffers to use for
 /// as inputs to the converted op, and `results` contains the buffer to use for
-/// the outputs of the converted op. The method returns a linalg op on buffers
+/// the outputs of the converted op. The method returns a linalg op on buffers.
 template <typename DerivedTy, typename SrcOpTy, typename LinalgOpTy>
 struct ConvertToLinalgBufferOp : public OpConversionPattern<SrcOpTy> {
   using OpConversionPattern<SrcOpTy>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
-      SrcOpTy op, ArrayRef<Value> operands,
+      SrcOpTy srcOp, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
-    SmallVector<Value, 2> resultBuffers;
-    resultBuffers.reserve(op.getOperation()->getNumResults());
-    for (auto result : op.getOperation()->getResults()) {
-      Value resultBuffer = getBufferForResult(result, rewriter);
-      if (!resultBuffer) return failure();
+    Operation *op = srcOp.getOperation();
+
+    // Prepare interface buffers for operands.
+    SmallVector<Value, 4> operandBuffers;
+    operandBuffers.reserve(operands.size());
+    for (auto operand : llvm::enumerate(operands)) {
+      // We have special treatment for constant initializers for reduction.
+      if (isa<ConstantOp>(operand.value().getDefiningOp())) {
+        operandBuffers.push_back(operand.value());
+        continue;
+      }
+
+      Value operandBuffer = getBufferForOpOperand(operand.value(), rewriter);
+      if (!operandBuffer) {
+        return rewriter.notifyMatchFailure(op, [&](Diagnostic &diag) {
+          diag << "failed to create buffer for operand #" << operand.index();
+        });
+      }
+      operandBuffers.push_back(operandBuffer);
+    }
+
+    // Prepare interface buffers for results.
+    SmallVector<Value, 1> resultBuffers;
+    resultBuffers.reserve(op->getNumResults());
+    for (auto result : llvm::enumerate(op->getResults())) {
+      Value resultBuffer = getBufferForOpResult(result.value(), rewriter);
+      if (!resultBuffer) {
+        return rewriter.notifyMatchFailure(op, [&](Diagnostic &diag) {
+          diag << "failed to create buffer for result #" << result.index();
+        });
+      }
       resultBuffers.push_back(resultBuffer);
     }
 
+    // Apply the main conversion logic.
     OpBuilder::InsertionGuard linalgOpGuard(rewriter);
-    LinalgOpTy linalgOp = static_cast<const DerivedTy &>(*this).apply(
-        op, operands, resultBuffers, rewriter);
+    LinalgOpTy dstOp = static_cast<const DerivedTy &>(*this).apply(
+        srcOp, operandBuffers, resultBuffers, rewriter);
 
-    if (!linalgOp || !linalgOp.hasBufferSemantics()) return failure();
+    if (!dstOp || !dstOp.hasBufferSemantics())
+      return rewriter.notifyMatchFailure(
+          op, "failed to apply main conversion logic");
 
-    rewriter.replaceOp(op, linalgOp.getOutputBuffers());
+    // Ops using this Linalg op's results are expecting tensors. Load tensors
+    // from the buffers back to satisfy them.
+    SmallVector<Value, 1> resultTensors;
+    resultTensors.reserve(resultBuffers.size());
+    for (auto buffer : llvm::enumerate(resultBuffers)) {
+      auto resultTensor = rewriter.create<IREE::LoadInputOp>(
+          srcOp.getLoc(), op->getResult(buffer.index()).getType(),
+          buffer.value());
+      resultTensors.push_back(resultTensor);
+    }
+
+    rewriter.replaceOp(srcOp, resultTensors);
     return success();
   }
 };
+
+//===----------------------------------------------------------------------===//
+// xla_hlo.convolution conversion patterns and utility functions.
+//===----------------------------------------------------------------------===//
 
 /// Converts xla_hlo.dot operation to linalg.matmul op
 struct DotOpConversion
@@ -174,10 +284,6 @@ struct DotOpConversion
   }
 };
 }  // namespace
-
-// -----------------------------------------------------------------------------
-// xla_hlo.convolution conversion patterns and utility functions.
-// -----------------------------------------------------------------------------
 
 namespace {
 /// Converts xla_hlo.convolution operation linalg.conv op
@@ -273,9 +379,9 @@ linalg::ConvOp ConvOpConversion::apply(
            : nullptr));
 }
 
-// ----------------------------------------------------------------------------
+//===----------------------------------------------------------------------===//
 // xla_hlo.pad conversion patterns and utility functions.
-// ----------------------------------------------------------------------------
+//===----------------------------------------------------------------------===//
 
 namespace {
 /// Converts xla_hlo.pad operation to linalg.indexed_generic op.
@@ -407,9 +513,9 @@ linalg::IndexedGenericOp PadOpConversion::apply(
   return linalgOp;
 }
 
-// ----------------------------------------------------------------------------
+//===----------------------------------------------------------------------===//
 // xla_hlo.reshape conversion patterns and utility functions.
-// ----------------------------------------------------------------------------
+//===----------------------------------------------------------------------===//
 
 namespace {
 // Convert xla_hlo.reshape operation to linalg.copy op
@@ -499,9 +605,9 @@ linalg::CopyOp ReshapeOpConversion::apply(
                                          results[0]);
 }
 
-// -----------------------------------------------------------------------------
+//===----------------------------------------------------------------------===//
 // xla_hlo.reduce_window conversion patterns and utility functions.
-// -----------------------------------------------------------------------------
+//===----------------------------------------------------------------------===//
 
 namespace {
 struct ReduceWindowOpConversion
@@ -601,9 +707,9 @@ linalg::LinalgOp ReduceWindowOpConversion::apply(
   return poolingOp;
 }
 
-// -----------------------------------------------------------------------------
+//===----------------------------------------------------------------------===//
 // xla_hlo.reduce conversion patterns and utility functions.
-// -----------------------------------------------------------------------------
+//===----------------------------------------------------------------------===//
 
 /// Returns a permutation AffineMap that puts all reduction dimensions to the
 /// last. The order of parallel loops and reduction loops are all sorted. E.g.,
@@ -828,9 +934,10 @@ linalg::IndexedGenericOp ReduceOpConversion::apply(
   return linalgOp;
 }
 
-// -----------------------------------------------------------------------------
-// linalg op on tensors to linalg op on buffers.
-// -----------------------------------------------------------------------------
+//===----------------------------------------------------------------------===//
+// Linalg op on tensors to linalg op on buffers conversion base class.
+//===----------------------------------------------------------------------===//
+
 namespace {
 template <typename LinalgOpTy>
 struct LinalgOpOnTensorConversion
@@ -876,23 +983,76 @@ struct LinalgOpOnTensorConversion
 };
 }  // namespace
 
-// -----------------------------------------------------------------------------
-// Pass specification.
-// -----------------------------------------------------------------------------
+//===----------------------------------------------------------------------===//
+// hal.interface.store.tensor conversion.
+//===----------------------------------------------------------------------===//
 
 namespace {
-struct XLAToLinalgOnBuffersPass
-    : public PassWrapper<XLAToLinalgOnBuffersPass, FunctionPass> {
+/// Erases redundant hal.interface.store.tensor op if possible.
+///
+/// During conversion to Linalg on buffers, we may generate the following IR
+/// sequence:
+///
+/// ``mlir
+/// %buffer = iree.placeholder for "interface buffer" ...
+/// %buffer_shape_tie = shapex.tie_shape %buffer ...
+/// linalg.generic ... %buffer_shape_tie { ... }
+/// %tensor = iree.load_input(%buffer_shape_tie) ...
+/// %tensor_shape_tie = shapex.tie_shape %tensor ...
+/// hal.interface.store.tensor(%tensor_shape_tie, %buffer_shape_tie)
+/// ```
+///
+/// In the above, hal.interface.store.tensor can be erased and it triggers
+/// further simpliciation.
+struct HALInterfaceStoreTensorOpEraser final
+    : public OpRewritePattern<IREE::HAL::InterfaceStoreTensorOp> {
+  using OpRewritePattern<IREE::HAL::InterfaceStoreTensorOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(IREE::HAL::InterfaceStoreTensorOp storeOp,
+                                PatternRewriter &rewriter) const override {
+    Operation *defOp = storeOp.operand().getDefiningOp();
+    // There may exist shape annotation. If so, bypass it.
+    if (auto tieShapeOp = dyn_cast<Shape::TieShapeOp>(defOp)) {
+      defOp = tieShapeOp.operand().getDefiningOp();
+    }
+
+    // To erase, this tensor should be loaded from a buffer having the same
+    // interface binding as the store destination.
+    auto loadOp = dyn_cast<IREE::LoadInputOp>(defOp);
+    if (!loadOp) return failure();
+    defOp = loadOp.src().getDefiningOp();
+    // There may exist shape annotation. If so, bypass it.
+    if (auto tieShapeOp = dyn_cast<Shape::TieShapeOp>(defOp)) {
+      defOp = tieShapeOp.operand().getDefiningOp();
+    }
+    if (auto phOp = dyn_cast<IREE::PlaceholderOp>(defOp)) {
+      if (storeOp.binding() != phOp.getAttrOfType<SymbolRefAttr>("binding")) {
+        return failure();
+      }
+    }
+
+    rewriter.eraseOp(storeOp);
+    return success();
+  }
+};
+}  // namespace
+
+//===----------------------------------------------------------------------===//
+// Pass specification.
+//===----------------------------------------------------------------------===//
+
+namespace {
+struct ConvertHLOToLinalgOnBuffersPass
+    : public PassWrapper<ConvertHLOToLinalgOnBuffersPass, FunctionPass> {
   void runOnFunction() override;
 };
 }  // namespace
 
-void populateHLOToLinalgOnConversionPatterns(
+void populateHLOToLinalgOnBuffersConversionPatterns(
     MLIRContext *context, OwningRewritePatternList &patterns) {
-  patterns.insert<ConvOpConversion, DotOpConversion, PadOpConversion,
-                  ReshapeOpConversion, IREELoadInputOpConversion,
-                  IREEStoreOutputOpConversion,
-                  LinalgOpOnTensorConversion<linalg::GenericOp>>(context);
+  patterns.insert<ConvOpConversion, DotOpConversion,
+                  LinalgOpOnTensorConversion<linalg::GenericOp>,
+                  PadOpConversion, ReshapeOpConversion>(context);
   // Reduce Operation conversions.
   patterns.insert<ReduceOpConversion, ReduceWindowOpConversion,
                   ReduceRegionXLAOpConversion<xla_hlo::AddOp>,
@@ -901,27 +1061,43 @@ void populateHLOToLinalgOnConversionPatterns(
                   ReduceRegionReturnOpConversion>(context);
 }
 
-void XLAToLinalgOnBuffersPass::runOnFunction() {
-  FuncOp funcOp = getFunction();
-  if (!isDispatchFuncImpl(funcOp)) return;
-  OwningRewritePatternList patterns;
-  auto *context = &getContext();
-  populateHLOToLinalgOnConversionPatterns(context, patterns);
+void ConvertHLOToLinalgOnBuffersPass::runOnFunction() {
+  MLIRContext *context = &getContext();
+
+  OwningRewritePatternList conversionPatterns;
+  populateHLOToLinalgOnBuffersConversionPatterns(context, conversionPatterns);
+
   ConversionTarget target(*context);
-  target.addLegalDialect<linalg::LinalgDialect, StandardOpsDialect>();
-  target.addDynamicallyLegalOp<linalg::GenericOp, linalg::IndexedGenericOp>(
-      [](linalg::LinalgOp op) { return op.hasBufferSemantics(); });
-  target.addLegalOp<FuncOp>();
-  if (failed(applyFullConversion(getFunction(), target, patterns)))
+  // Make sure all XLA HLO ops are converted to Linalg ops after this pass.
+  target.addIllegalDialect<xla_hlo::XlaHloDialect>();
+  target.addDynamicallyLegalDialect<linalg::LinalgDialect>(
+      Optional<ConversionTarget::DynamicLegalityCallbackFn>([](Operation *op) {
+        // The generated structured Linalg ops should have buffer semantics.
+        if (auto linalgOp = dyn_cast<linalg::LinalgOp>(op))
+          return linalgOp.hasBufferSemantics();
+        // The other Linalg ops (like linalg.yield) are okay.
+        return true;
+      }));
+  // Let the rest fall through.
+  target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+
+  if (failed(applyFullConversion(getFunction(), target, conversionPatterns))) {
     return signalPassFailure();
+  }
+
+  // Clean up redundant HAL interface load/store ops because of the transition
+  // from Linalg on tensors to Linalg on buffers.
+  OwningRewritePatternList removalPatterns;
+  removalPatterns.insert<HALInterfaceStoreTensorOpEraser>(&getContext());
+  applyPatternsAndFoldGreedily(getFunction(), removalPatterns);
 }
 
 std::unique_ptr<OperationPass<FuncOp>> createHLOToLinalgOnBuffersPass() {
-  return std::make_unique<XLAToLinalgOnBuffersPass>();
+  return std::make_unique<ConvertHLOToLinalgOnBuffersPass>();
 }
 
-static PassRegistration<XLAToLinalgOnBuffersPass> pass(
-    "iree-hlo-to-linalg-on-buffers",
+static PassRegistration<ConvertHLOToLinalgOnBuffersPass> pass(
+    "iree-codegen-hlo-to-linalg-on-buffers",
     "Convert from XLA-HLO ops to Linalg ops on buffers");
 }  // namespace iree_compiler
 }  // namespace mlir

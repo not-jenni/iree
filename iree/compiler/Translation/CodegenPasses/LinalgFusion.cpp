@@ -162,10 +162,9 @@ class HLOConstantConverter : public OpRewritePattern<xla_hlo::ConstOp> {
 
 void IREELinalgFusionPass::runOnFunction() {
   OwningRewritePatternList patterns;
-  Operation *op = getOperation();
   patterns.insert<IREEFuseGenericTensorOps, HLOConstantConverter>(
-      op->getContext());
-  applyPatternsAndFoldGreedily(op->getRegions(), patterns);
+      &getContext());
+  applyPatternsAndFoldGreedily(getOperation(), patterns);
 }
 
 std::unique_ptr<OperationPass<FuncOp>> createLinalgOnTensorsFusionPass() {
@@ -173,6 +172,7 @@ std::unique_ptr<OperationPass<FuncOp>> createLinalgOnTensorsFusionPass() {
 }
 
 static PassRegistration<IREELinalgFusionPass> pass(
-    "iree-linalg-fusion", "Fuse Linalg operations within a dispatch region");
+    "iree-codegen-linalg-fusion",
+    "Fuse Linalg operations within a dispatch region");
 }  // namespace iree_compiler
 }  // namespace mlir

@@ -1417,6 +1417,12 @@ static void printInterfaceBindingOp(OpAsmPrinter &p, InterfaceBindingOp op) {
                                      });
 }
 
+bool InterfaceBindingOp::operator<(InterfaceBindingOp that) {
+  if (this->set().getZExtValue() == that.set().getZExtValue())
+    return this->binding().getZExtValue() < that.binding().getZExtValue();
+  return this->set().getZExtValue() < that.set().getZExtValue();
+}
+
 //===----------------------------------------------------------------------===//
 // hal.interface.load.tensor
 //===----------------------------------------------------------------------===//
