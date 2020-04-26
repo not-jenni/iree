@@ -22,8 +22,10 @@ iree_cc_library(
     "Passes.h"
   SRCS
     "ConvertToGPUPass.cpp"
+    "ConvertToSPIRVPass.cpp"
     "LinalgTileAndFusePass.cpp"
     "LowerToSPIRV.cpp"
+    "SplitDispatchFunctionPass.cpp"
   DEPS
     LLVMSupport
     MLIRAffineOps
@@ -43,7 +45,10 @@ iree_cc_library(
     MLIRStandardToSPIRVTransforms
     MLIRSupport
     MLIRTransforms
+    iree::compiler::Dialect::HAL::IR
     iree::compiler::Dialect::IREE::IR
+    iree::compiler::Dialect::Shape::IR
+    iree::compiler::Dialect::Shape::Transforms
     iree::compiler::Translation::CodegenPasses
     iree::compiler::Translation::CodegenUtils
     tensorflow::mlir_xla

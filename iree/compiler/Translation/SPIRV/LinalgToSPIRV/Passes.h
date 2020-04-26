@@ -20,15 +20,24 @@
 namespace mlir {
 namespace iree_compiler {
 
-///--------------------------------------------------------------------------///
-// Markers on Linalg operations that determine which processor heirarchy to use
-// for partitioning
-///--------------------------------------------------------------------------///
+//===----------------------------------------------------------------------===//
+// Makers
+//===----------------------------------------------------------------------===//
 
+/// Markers on Linalg operations to determine which processor heirarchy to use
+/// for partitioning.
 /// Marker to denote that a linalg operation is to be partitioned to workitems
 inline StringRef getWorkItemMarker() { return "workitem"; }
 
-///--------------------------------------------------------------------------///
+/// Attribute on a module op to denote the scheduling order of entry points.
+/// The attribute value is expected to be an array of entry point name strings.
+inline StringRef getEntryPointScheduleAttrName() {
+  return "vkspv.entry_point_schedule";
+}
+
+//===----------------------------------------------------------------------===//
+// Passes
+//===----------------------------------------------------------------------===//
 
 /// Pass to tile and fuse linalg operations on buffers. The pass takes as
 /// argument the `workgroupSize` that the tiling should use. Note that the
@@ -41,7 +50,22 @@ std::unique_ptr<OperationPass<FuncOp>> createLinalgTileAndFusePass(
 
 /// Pass to add the synchronizations and attributes needed to lower from PLoops
 /// to GPU dialect.
-std::unique_ptr<OperationPass<ModuleOp>> createConvertToGPUPass();
+std::unique_ptr<OperationPass<FuncOp>> createConvertToGPUPass();
+
+/// Pass to perform the final conversion to SPIR-V dialect.
+/// This pass converts remaining interface ops into SPIR-V global variables,
+/// GPU processor ID ops into SPIR-V global variables, loop/standard ops into
+/// corresponding SPIR-V ops.
+std::unique_ptr<OperationPass<ModuleOp>> createConvertToSPIRVPass();
+
+/// Pass to split computation workload to multiple sequential dispatch
+/// functions. This pass operates on Linalg ops and prepares for lowering to
+/// GPU, where we need to tile the workload to workgroups and workitems. If the
+/// workload involves computation A and B, where B is dependent on A and A needs
+/// all workgroups to complete, then we need to split A and B into different
+/// kernels because there is no mechanism to perform cross-workgroup
+/// synchronization within a single kernel.
+std::unique_ptr<OperationPass<ModuleOp>> createSplitDispatchFunctionPass();
 
 }  // namespace iree_compiler
 }  // namespace mlir

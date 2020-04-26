@@ -33,6 +33,7 @@ inline void registerSPRIVTranslation() {
     // LinalgToSPIRV
     createConvertToGPUPass();
     createLinalgTileAndFusePass();
+    createSplitDispatchFunctionPass();
     return true;
   }();
   (void)init_once;
