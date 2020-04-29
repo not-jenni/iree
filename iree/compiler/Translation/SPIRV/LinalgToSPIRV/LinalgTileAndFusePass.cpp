@@ -18,6 +18,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "iree/compiler/Translation/CodegenUtils/CodegenUtils.h"
+#include "iree/compiler/Translation/CodegenUtils/MarkerUtils.h"
 #include "iree/compiler/Translation/SPIRV/LinalgToSPIRV/Passes.h"
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h"
 #include "mlir/Dialect/Linalg/Transforms/LinalgTransforms.h"
@@ -28,8 +29,6 @@
 
 namespace mlir {
 namespace iree_compiler {
-
-static StringRef getWorkGroupMarker() { return "spirv_workgroup"; }
 
 static constexpr unsigned kMaxWorkgroupRank = 3;
 
@@ -58,7 +57,6 @@ static void getDefaultTileSizes(unsigned numDims,
 
 /// Returns the number of "outer" parallel loops specified in the `linalgOp`.
 static unsigned getNumOuterParallelLoops(linalg::LinalgOp linalgOp) {
-  if (linalgOp.getAttr("do_not_tile")) return 0;
   if (auto convOp = dyn_cast<linalg::ConvOp>(linalgOp.getOperation())) {
     Optional<DenseIntElementsAttr> padding = convOp.padding();
     if (padding) return convOp.getNumBatchDimensions();
@@ -91,14 +89,6 @@ static void getTileSizes(unsigned numParallelLoops,
   // 1, then dont tile along that dimension. So overriding 1 to 0.
   for (auto &tileSize : tileSizes)
     if (tileSize == 1) tileSize = 0;
-}
-
-/// Checks if an operation already has an attribute with this marker. If set it
-/// implies this op shouldnt be tiled with the same marker.
-static bool hasMarker(Operation *op) {
-  auto tilingAttr = op->getAttrOfType<StringAttr>(
-      linalg::LinalgTransforms::kLinalgTransformMarker);
-  return tilingAttr != nullptr;
 }
 
 /// Check that all uses of elements of `values` are within the `operation`.
@@ -139,7 +129,7 @@ struct LinalgTilingPattern : public OpRewritePattern<LinalgOp> {
     if (!linalgOp.hasBufferSemantics()) return failure();
     // Currently we are only doing one-level tiling, so a single marker is
     // enough. This might need to move into derived classes.
-    if (hasMarker(linalgOp.getOperation())) return failure();
+    if (hasMarker(linalgOp)) return failure();
 
     if (failed(static_cast<const DerivedClass *>(this)->apply(
             linalgOp, tileSizes, rewriter)))
@@ -247,17 +237,6 @@ void LinalgTileAndFusePass::runOnFunction() {
                   TileAndFuseLinalgOpPattern<linalg::GenericOp>>(context,
                                                                  tileSizes);
   applyPatternsAndFoldGreedily(getOperation(), patterns);
-
-  // Check that there are single loop.parallel operation at the top most level
-  // that will get mapped to thread blocks/workgroups.
-  auto forLoops = block.getOps<loop::ParallelOp>();
-  if (numParallelLoops > 0 &&
-      (!llvm::hasSingleElement(forLoops) ||
-       (*forLoops.begin()).getNumLoops() != numParallelLoops)) {
-    funcOp.emitError(
-        "unable to generate the tiled loop structure to map to workgroups");
-    return signalPassFailure();
-  }
 
   // Update the workgroup size to be consistent with the tile sizes used. Note
   // the tile sizes are ordered from outer most to inner most loops. The
