@@ -15,6 +15,7 @@
 #include "iree/compiler/Dialect/HAL/Target/LLVM/LLVMTarget.h"
 
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
+#include "iree/compiler/Dialect/HAL/Target/LLVM/LLVMIRPasses.h"
 #include "iree/compiler/Dialect/HAL/Target/LegacyUtil.h"
 #include "iree/compiler/Dialect/HAL/Target/TargetRegistry.h"
 #include "iree/compiler/Translation/CodegenPasses/Passes.h"
@@ -24,6 +25,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Mutex.h"
+#include "llvm/Support/TargetSelect.h"
 #include "mlir/Conversion/LinalgToLLVM/LinalgToLLVM.h"
 #include "mlir/Conversion/LoopToStandard/ConvertLoopToStandard.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h"
@@ -40,11 +42,6 @@ namespace mlir {
 namespace iree_compiler {
 namespace IREE {
 namespace HAL {
-
-LLVMTargetOptions getLLVMTargetOptionsFromFlags() {
-  LLVMTargetOptions targetOptions;
-  return targetOptions;
-}
 
 // TODO(ataei): This is written as a stub in LLVM IR. It would be easier to have
 // this using MLIR and lower it to LLVM like the dispatch function
@@ -192,6 +189,20 @@ class LLVMIRTargetBackend final : public TargetBackend {
       createInvocationFunc(funcName, llvmModule.get());
     }
 
+    // LLVMIR opt passes.
+    auto targetMachine = createTargetMachine(options_);
+    if (!targetMachine) {
+      targetOp.emitError("Can't create target machine for targetTriple: " +
+                         options_.targetTriple);
+      return failure();
+    }
+    if (failed(buildLLVMIRPasses(options_, std::move(targetMachine),
+                                 llvmModule.get()))) {
+      targetOp.emitError(
+          "Can't build LLVMIR opt passes for ExecutableOp module");
+      return failure();
+    }
+
     // Serialize LLVM module.
     std::string bufferString;
     llvm::raw_string_ostream ostream(bufferString);
@@ -227,6 +238,9 @@ void registerLLVMTargetBackends(
     std::function<LLVMTargetOptions()> queryOptions) {
   getLLVMTargetOptionsFromFlags();
   static TargetBackendRegistration registration("llvm-ir", [=]() {
+    // Initalize registered targets.
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
     return std::make_unique<LLVMIRTargetBackend>(queryOptions());
   });
 }
