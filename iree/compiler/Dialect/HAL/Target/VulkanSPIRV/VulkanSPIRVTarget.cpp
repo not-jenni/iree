@@ -23,7 +23,6 @@
 #include "iree/compiler/Dialect/Vulkan/IR/VulkanAttributes.h"
 #include "iree/compiler/Dialect/Vulkan/Utils/TargetEnvUtils.h"
 #include "iree/compiler/Translation/CodegenPasses/Passes.h"
-#include "iree/compiler/Translation/CodegenUtils/CodegenUtils.h"
 #include "iree/compiler/Translation/SPIRV/LinalgToSPIRV/LowerToSPIRV.h"
 #include "iree/schemas/spirv_executable_def_generated.h"
 #include "llvm/ADT/STLExtras.h"
@@ -124,8 +123,7 @@ class VulkanSPIRVTargetBackend : public TargetBackend {
 
   void buildTranslationPassPipeline(IREE::HAL::ExecutableTargetOp targetOp,
                                     OpPassManager &passManager) override {
-    passManager.addPass(createHALInterfaceToMemrefPass());
-    addHLOToLinalgToSPIRVPasses(passManager, options_.workgroupSize);
+    buildSPIRVTransformPassPipeline(passManager, options_.workgroupSize);
   }
 
   // Finds the spv.ExecutionMode operation to get the workgroup size from.

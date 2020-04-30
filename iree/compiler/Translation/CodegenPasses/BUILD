@@ -38,12 +38,12 @@ gentbl(
 cc_library(
     name = "CodegenPasses",
     srcs = [
-        "HALInterfaceToMemrefPass.cpp",
         "HLOToLinalgOnBuffers.cpp",
         "HLOToLinalgOnTensors.cpp",
         "LinalgFusion.cpp",
         "LinalgVectorTransform.cpp",
         "Passes.cpp",
+        "ResolveShapeOps.cpp",
     ],
     hdrs = [
         "Passes.h",
@@ -51,8 +51,9 @@ cc_library(
     deps = [
         ":LinalgVectorTransformPatternsIncGen",
         "//iree/compiler/Dialect/HAL/IR",
+        "//iree/compiler/Dialect/HAL/IR:HALDialect",
         "//iree/compiler/Dialect/IREE/IR",
-        "//iree/compiler/Translation/CodegenUtils",
+        "//iree/compiler/Dialect/Shape/IR",
         "@llvm-project//llvm:support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:LinalgOps",
