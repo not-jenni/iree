@@ -12,35 +12,49 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# bazel_to_cmake: DO NOT EDIT
+# TODO: The follwing tablegen_library doesn't convert with bazel_to_cmake
+# see https://github.com/google/iree/issues/1083
+
 iree_add_all_subdirs()
+
+iree_tablegen_library(
+  NAME
+    LinalgVectorTransformPatternsIncGen
+  TD_FILE
+    "LinalgVectorTransformPatterns.td"
+  OUTS
+    -gen-rewriters LinalgVectorTransformPatterns.h.inc
+)
+
+#TODO(GH-1673): Remove this once we can properly model dependencies between
+# TableGen targets.
+add_dependencies(iree_compiler_Translation_CodegenPasses_LinalgVectorTransformPatternsIncGen_target MLIRLinalgTransformPatternsIncGen)
 
 iree_cc_library(
   NAME
-    LLVM
+    CodegenPasses
   HDRS
-    "LLVMTarget.h"
+    "Passes.h"
+    "LinalgVectorTransformPatterns.h.inc"
   SRCS
-    "LLVMTarget.cpp"
+    "HLOToLinalgOnBuffers.cpp"
+    "HLOToLinalgOnTensors.cpp"
+    "LinalgFusion.cpp"
+    "LinalgVectorTransform.cpp"
+    "Passes.cpp"
   DEPS
-    LLVMCore
     LLVMSupport
     MLIRIR
     MLIRLinalgOps
-    MLIRLinalgToLLVM
     MLIRLinalgTransforms
-    MLIRLoopToStandard
     MLIRPass
+    MLIRSPIRV
     MLIRStandardOps
-    MLIRStandardToLLVM
     MLIRSupport
-    MLIRTargetLLVMIR
     MLIRTransforms
-    iree::compiler::Conversion::HLOToLinalg
-    iree::compiler::Dialect::Flow::IR
     iree::compiler::Dialect::HAL::IR
-    iree::compiler::Dialect::HAL::IR::HALDialect
-    iree::compiler::Dialect::HAL::Target
     iree::compiler::Dialect::IREE::IR
-    iree::schemas::llvmir_executable_def_cc_fbs
+    tensorflow::mlir_xla
   PUBLIC
 )

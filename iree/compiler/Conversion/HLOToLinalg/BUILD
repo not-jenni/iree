@@ -12,39 +12,58 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Utilities for working with IREE MLIR types.
+load("//build_tools/bazel:tblgen.bzl", "gentbl")
+
 package(
     default_visibility = ["//visibility:public"],
     licenses = ["notice"],  # Apache 2.0
 )
 
+gentbl(
+    name = "LinalgVectorTransformPatternsIncGen",
+    tbl_outs = [
+        (
+            "-gen-rewriters",
+            "LinalgVectorTransformPatterns.h.inc",
+        ),
+    ],
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "LinalgVectorTransformPatterns.td",
+    td_srcs = [
+        "@llvm-project//mlir:LinalgTransformPatternsTdFiles",
+    ],
+)
+
 cc_library(
-    name = "LLVM",
+    name = "HLOToLinalg",
     srcs = [
-        "LLVMTarget.cpp",
+        "HLOToLinalgOnBuffers.cpp",
+        "HLOToLinalgOnTensors.cpp",
+        "LinalgFusion.cpp",
+        "LinalgVectorTransform.cpp",
+        "Passes.cpp",
+        "ResolveShapeOps.cpp",
     ],
     hdrs = [
-        "LLVMTarget.h",
+        "Passes.h",
     ],
     deps = [
-        "//iree/compiler/Conversion/HLOToLinalg",
-        "//iree/compiler/Dialect/Flow/IR",
+        ":LinalgVectorTransformPatternsIncGen",
         "//iree/compiler/Dialect/HAL/IR",
         "//iree/compiler/Dialect/HAL/IR:HALDialect",
-        "//iree/compiler/Dialect/HAL/Target",
         "//iree/compiler/Dialect/IREE/IR",
-        "//iree/schemas:llvmir_executable_def_cc_fbs",
-        "@llvm-project//llvm:core",
+        "//iree/compiler/Dialect/Shape/IR",
         "@llvm-project//llvm:support",
-        "@llvm-project//mlir:CFGTransforms",
         "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:LLVMTransforms",
         "@llvm-project//mlir:LinalgOps",
-        "@llvm-project//mlir:LinalgToLLVM",
         "@llvm-project//mlir:LinalgTransforms",
         "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:SPIRVDialect",
         "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Support",
-        "@llvm-project//mlir:TargetLLVMIR",
         "@llvm-project//mlir:Transforms",
+        "@org_tensorflow//tensorflow/compiler/mlir/xla:hlo",
+        "@org_tensorflow//tensorflow/compiler/mlir/xla:map_xla_to_scalar_op",
     ],
 )

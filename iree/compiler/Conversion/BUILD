@@ -1,4 +1,4 @@
-# Copyright 2019 Google LLC
+# Copyright 2020 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,26 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-iree_add_all_subdirs()
+package(
+    default_visibility = ["//visibility:public"],
+    licenses = ["notice"],  # Apache 2.0
+)
 
-iree_cc_library(
-  NAME
-    Target
-  HDRS
-    "TargetBackend.h"
-    "TargetRegistry.h"
-  SRCS
-    "TargetBackend.cpp"
-    "TargetRegistry.cpp"
-  DEPS
-    LLVMSupport
-    MLIRIR
-    MLIRPass
-    MLIRSupport
-    MLIRTransforms
-    iree::compiler::Dialect::Flow::IR
-    iree::compiler::Dialect::HAL::IR
-    iree::compiler::Dialect::HAL::Utils
-    iree::compiler::Dialect::IREE::IR
-  PUBLIC
+cc_library(
+    name = "init_translations",
+    hdrs = [
+        "init_translations.h",
+    ],
+    deps = [
+        "//iree/compiler/Conversion/LinalgToSPIRV",
+        "@llvm-project//mlir:Pass",
+    ],
 )

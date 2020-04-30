@@ -17,8 +17,8 @@
 // Based on mlir-opt but without registering passes and dialects we don't care
 // about.
 
-#include "iree/compiler/Translation/CodegenPasses/Passes.h"
-#include "iree/compiler/Translation/SPIRV/init_translations.h"
+#include "iree/compiler/Conversion/HLOToLinalg/Passes.h"
+#include "iree/compiler/Conversion/init_translations.h"
 #include "iree/tools/init_compiler_modules.h"
 #include "iree/tools/init_dialects.h"
 #include "iree/tools/init_passes.h"

@@ -35,21 +35,20 @@ class IREE_PureOp<string mnemonic, list<OpTrait> traits = []> :
 // Executable ABI
 //===----------------------------------------------------------------------===//
 
-def IREE_LoadInputOp : IREE_PureOp<"load_input"> {
-  let arguments = (ins IREE_MemRef:$src);
-  let results = (outs AnyType);
-
-  let assemblyFormat = [{
-    `(` $src `:` type($src) `)` attr-dict `:` type(results)
+def IREE_PlaceholderOp : IREE_Op<"placeholder", [MemoryEffects<[MemAlloc]>]> {
+  let summary = "A placeholder op to feed a value/buffer into computation";
+  let description = [{
+    This op is intended as a way to represent a value or buffer that will be fed
+    into computation. It can host additional attributes related to the value or
+    buffer. This op can be used for the cases where one need to feed in value or
+    buffer to computation in a function but cannot do that via the function
+    argument due to ABI or contract issues.
   }];
-}
 
-def IREE_StoreOutputOp : IREE_Op<"store_output"> {
-  let arguments = (ins AnyType:$src, IREE_MemRef:$dst);
+  let arguments = (ins StrAttr:$purpose);
+  let results = (outs Res<AnyType, "", [MemAlloc]>:$output);
 
-  let assemblyFormat = [{
-    `(` $src `:` type($src) `,` $dst `:` type($dst) `)` attr-dict
-  }];
+  let assemblyFormat = [{ `for` $purpose attr-dict `:` type($output) }];
 }
 
 //===----------------------------------------------------------------------===//

@@ -17,7 +17,7 @@
 // We need this entry function because we want to register PassManager CLI
 // options, which is missing in MLIR's translation main entry function.
 
-#include "iree/compiler/Translation/SPIRV/init_translations.h"
+#include "iree/compiler/Conversion/init_translations.h"
 #include "iree/tools/init_compiler_modules.h"
 #include "iree/tools/init_dialects.h"
 #include "iree/tools/init_targets.h"

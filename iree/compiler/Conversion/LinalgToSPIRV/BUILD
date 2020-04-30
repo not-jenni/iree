@@ -1,4 +1,4 @@
-# Copyright 2020 Google LLC
+# Copyright 2019 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,33 +18,41 @@ package(
 )
 
 cc_library(
-    name = "LLVM",
+    name = "LinalgToSPIRV",
     srcs = [
-        "LLVMTarget.cpp",
+        "ConvertToGPUPass.cpp",
+        "ConvertToSPIRVPass.cpp",
+        "LinalgTileAndFusePass.cpp",
+        "Passes.cpp",
     ],
     hdrs = [
-        "LLVMTarget.h",
+        "Passes.h",
     ],
     deps = [
         "//iree/compiler/Conversion/HLOToLinalg",
-        "//iree/compiler/Dialect/Flow/IR",
         "//iree/compiler/Dialect/HAL/IR",
-        "//iree/compiler/Dialect/HAL/IR:HALDialect",
-        "//iree/compiler/Dialect/HAL/Target",
         "//iree/compiler/Dialect/IREE/IR",
-        "//iree/schemas:llvmir_executable_def_cc_fbs",
-        "@llvm-project//llvm:core",
+        "//iree/compiler/Dialect/Shape/Transforms",
         "@llvm-project//llvm:support",
-        "@llvm-project//mlir:CFGTransforms",
+        "@llvm-project//mlir:Affine",
+        "@llvm-project//mlir:AffineToStandardTransforms",
+        "@llvm-project//mlir:EDSC",
+        "@llvm-project//mlir:GPUDialect",
+        "@llvm-project//mlir:GPUToSPIRVTransforms",
+        "@llvm-project//mlir:GPUTransforms",
         "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:LLVMTransforms",
         "@llvm-project//mlir:LinalgOps",
-        "@llvm-project//mlir:LinalgToLLVM",
         "@llvm-project//mlir:LinalgTransforms",
+        "@llvm-project//mlir:LoopOps",
+        "@llvm-project//mlir:LoopsToGPUPass",
         "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:SPIRVDialect",
+        "@llvm-project//mlir:SPIRVLowering",
         "@llvm-project//mlir:StandardOps",
+        "@llvm-project//mlir:StandardToSPIRVConversions",
         "@llvm-project//mlir:Support",
-        "@llvm-project//mlir:TargetLLVMIR",
         "@llvm-project//mlir:Transforms",
+        "@org_tensorflow//tensorflow/compiler/mlir/xla:hlo",
+        "@org_tensorflow//tensorflow/compiler/mlir/xla:xla_legalize_to_linalg",
     ],
 )
