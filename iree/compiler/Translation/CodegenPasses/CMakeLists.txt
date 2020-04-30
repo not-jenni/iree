@@ -38,7 +38,6 @@ iree_cc_library(
     "Passes.h"
     "LinalgVectorTransformPatterns.h.inc"
   SRCS
-    "HALInterfaceToMemrefPass.cpp"
     "HLOToLinalgOnBuffers.cpp"
     "HLOToLinalgOnTensors.cpp"
     "LinalgFusion.cpp"
@@ -56,7 +55,6 @@ iree_cc_library(
     MLIRTransforms
     iree::compiler::Dialect::HAL::IR
     iree::compiler::Dialect::IREE::IR
-    iree::compiler::Translation::CodegenUtils
     tensorflow::mlir_xla
   PUBLIC
 )

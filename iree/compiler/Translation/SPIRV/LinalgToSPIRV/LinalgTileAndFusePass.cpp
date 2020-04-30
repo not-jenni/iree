@@ -17,21 +17,53 @@
 // Implements a pass to tile and fuse linalg operations on buffers.
 //
 //===----------------------------------------------------------------------===//
-#include "iree/compiler/Translation/CodegenUtils/CodegenUtils.h"
+
 #include "iree/compiler/Translation/SPIRV/LinalgToSPIRV/Passes.h"
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h"
 #include "mlir/Dialect/Linalg/Transforms/LinalgTransforms.h"
+#include "mlir/Dialect/SPIRV/TargetAndABI.h"
 #include "mlir/IR/Function.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/FoldUtils.h"
 
+#define DEBUG_TYPE "iree-linalg-tile-and-fuse-buffer"
+
 namespace mlir {
 namespace iree_compiler {
 
+static constexpr unsigned kMaxWorkgroupRank = 3;
+
 static StringRef getWorkGroupMarker() { return "spirv_workgroup"; }
 
-static constexpr unsigned kMaxWorkgroupRank = 3;
+ArrayRef<int64_t> dropTrailingOnes(ArrayRef<int64_t> vector) {
+  if (vector.empty()) return vector;
+  auto numTrailingOnes = 0;
+  for (unsigned i = vector.size() - 1; i > 0; --i) {
+    if (vector[i] != 1) {
+      break;
+    }
+    numTrailingOnes++;
+  }
+  return vector.drop_back(numTrailingOnes);
+}
+
+/// Updates the workgroup size used for the dispatch region.
+LogicalResult updateWorkGroupSize(Operation *op,
+                                  ArrayRef<int64_t> workGroupSize) {
+  // Need to update both the surrounding FuncOp that has the spv.entry_point_abi
+  // attribute, and the hal.executable.
+  FuncOp funcOp =
+      (isa<FuncOp>(op) ? cast<FuncOp>(op) : op->getParentOfType<FuncOp>());
+  MLIRContext *context = op->getContext();
+  SmallVector<int32_t, 3> workGroupSizeVec(llvm::map_range(
+      workGroupSize,
+      [](int64_t value) { return static_cast<int32_t>(value); }));
+  workGroupSizeVec.resize(3, 1);
+  funcOp.setAttr(spirv::getEntryPointABIAttrName(),
+                 spirv::getEntryPointABIAttr(workGroupSizeVec, context));
+  return success();
+}
 
 /// Returns the tile sizes to use by default based on number of dimension of
 /// parallelism.
@@ -213,7 +245,6 @@ struct TileAndFuseLinalgOpPattern
 void LinalgTileAndFusePass::runOnFunction() {
   MLIRContext *context = &getContext();
   FuncOp funcOp = getFunction();
-  if (!isDispatchFuncImpl(funcOp)) return;
 
   Region &body = funcOp.getBody();
   // Only handle single block functions.
@@ -226,7 +257,7 @@ void LinalgTileAndFusePass::runOnFunction() {
   if (linalgOps.empty()) return;
 
   // Compute the minimum number of outer parallel loops across linalg
-  // operations. This gives the dimensionality of tiling to be used .
+  // operations. This gives the dimensionality of tiling to be used.
   unsigned numParallelLoops = kMaxWorkgroupRank;
   for (linalg::LinalgOp op : linalgOps)
     numParallelLoops = std::min(numParallelLoops, getNumOuterParallelLoops(op));
@@ -234,6 +265,16 @@ void LinalgTileAndFusePass::runOnFunction() {
   // Get the tile sizes to use for the lowering.
   SmallVector<int64_t, 3> tileSizes;
   getTileSizes(numParallelLoops, workGroupSize, tileSizes);
+
+  LLVM_DEBUG({
+    llvm::dbgs() << "--- IREE Linalg tile and fuse configuration ---\n";
+    llvm::dbgs() << "# parallel loops: " << numParallelLoops;
+    llvm::dbgs() << "\nworkgroup sizes: [";
+    interleaveComma(workGroupSize, llvm::dbgs());
+    llvm::dbgs() << "]\ntile sizes: [";
+    interleaveComma(tileSizes, llvm::dbgs());
+    llvm::dbgs() << "]\n";
+  });
 
   OwningRewritePatternList patterns;
   patterns.insert<TileLinalgOpPattern<linalg::ConvOp>,
