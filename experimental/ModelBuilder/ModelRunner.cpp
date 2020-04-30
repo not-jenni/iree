@@ -15,10 +15,16 @@
 #include "experimental/ModelBuilder/ModelRunner.h"
 
 #include "llvm/Support/TargetSelect.h"
+#include "mlir/Conversion/GPUToSPIRV/ConvertGPUToSPIRVPass.h"
+#include "mlir/Conversion/GPUToVulkan/ConvertGPUToVulkanPass.h"
 #include "mlir/Conversion/LinalgToLLVM/LinalgToLLVM.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h"
+#include "mlir/Conversion/StandardToSPIRV/ConvertStandardToSPIRVPass.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
+#include "mlir/Dialect/GPU/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
+#include "mlir/Dialect/SPIRV/Passes.h"
+#include "mlir/Dialect/SPIRV/SPIRVOps.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/PatternMatch.h"
@@ -40,7 +46,78 @@ extern Pass* createLowerMatrixIntrinsicsPass();
 }  // end namespace llvm
 
 void mlir::ModelRunner::compile(CompilationOptions compilationOptions,
-                                const std::string& runtime) {
+                                llvm::ArrayRef<const std::string> runtime) {
+  if (target == Target::CPUTarget) {
+    runCPULoweringPass(compilationOptions);
+  } else {
+    assert(target == Target::GPUTarget);
+    runGPULoweringPass();
+  }
+  // Make sure the execution engine runs LLVM passes for the specified
+  // optimization level.
+  auto tmBuilderOrError = llvm::orc::JITTargetMachineBuilder::detectHost();
+  auto t = tmBuilderOrError->getTargetTriple().getTriple();
+  assert(tmBuilderOrError);
+  auto tmOrError = tmBuilderOrError->createTargetMachine();
+  if (!tmOrError) llvm::errs() << tmOrError.takeError() << "\n";
+  assert(tmOrError);
+  targetMachine = std::move(tmOrError.get());
+  SmallVector<const llvm::PassInfo*, 4> llvmPasses;
+  if (target == Target::CPUTarget) {
+    // TODO(ntv): Looking up the pass by name fails quite surprisingly. Just
+    // build the pass to get its ID to look up the PassInfo.
+    const llvm::PassInfo* lowerMatrixIntrinsics = llvm::Pass::lookupPassInfo(
+        llvm::createLowerMatrixIntrinsicsPass()->getPassID());
+    assert(lowerMatrixIntrinsics);
+    llvmPasses.push_back(lowerMatrixIntrinsics);
+  }
+  auto transformer = mlir::makeLLVMPassesTransformer(
+      llvmPasses, compilationOptions.llvmOptLevel, targetMachine.get(),
+      /*optPassesInsertPos=*/0);
+
+  // Pass in runtime support library when specified.
+  SmallVector<StringRef, 4> libs(runtime.begin(), runtime.end());
+
+  // Obtain the execution engine.
+  auto created = mlir::ExecutionEngine::create(
+      *module, transformer,
+      static_cast<llvm::CodeGenOpt::Level>(compilationOptions.llcOptLevel),
+      libs,
+      /*enableObjectCache=*/true,
+      /*enableGDBNotificationListener=*/false);
+  llvm::handleAllErrors(created.takeError(), [](const llvm::ErrorInfoBase& b) {
+    b.log(llvm::errs());
+    assert(false);
+  });
+  engine = std::move(*created);
+}
+
+void mlir::ModelRunner::runGPULoweringPass() {
+  // Lower into LLVM IR.
+  PassManager manager(module->getContext());
+  manager.addPass(mlir::createGpuKernelOutliningPass());
+  manager.addPass(mlir::createLegalizeStdOpsForSPIRVLoweringPass());
+  manager.addPass(mlir::createConvertGPUToSPIRVPass());
+  OpPassManager& modulePM = manager.nest<spirv::ModuleOp>();
+  modulePM.addPass(spirv::createLowerABIAttributesPass());
+  modulePM.addPass(spirv::createUpdateVersionCapabilityExtensionPass());
+
+  manager.addPass(createConvertGpuLaunchFuncToVulkanLaunchFuncPass());
+  LowerToLLVMOptions llvmOptions = {
+      /*useBarePtrCallConv =*/false,
+      /*emitCWrappers = */ true,
+      /*indexBitwidth =*/kDeriveIndexBitwidthFromDataLayout};
+
+  manager.addPass(createLowerToLLVMPass(llvmOptions));
+  manager.addPass(createConvertVulkanLaunchFuncToVulkanCallsPass());
+  if (failed(manager.run(*module))) {
+    llvm::errs() << "conversion to the LLVM IR dialect failed\n";
+    return;
+  }
+}
+
+void mlir::ModelRunner::runCPULoweringPass(
+    const CompilationOptions& compilationOptions) {
   // Lower vector operations progressively into more elementary
   // vector operations before running the regular compiler passes.
   {
@@ -63,40 +140,4 @@ void mlir::ModelRunner::compile(CompilationOptions compilationOptions,
     llvm::errs() << "conversion to the LLVM IR dialect failed\n";
     return;
   }
-
-  // Make sure the execution engine runs LLVM passes for the specified
-  // optimization level.
-  auto tmBuilderOrError = llvm::orc::JITTargetMachineBuilder::detectHost();
-  auto t = tmBuilderOrError->getTargetTriple().getTriple();
-  assert(tmBuilderOrError);
-  auto tmOrError = tmBuilderOrError->createTargetMachine();
-  if (!tmOrError) llvm::errs() << tmOrError.takeError() << "\n";
-  assert(tmOrError);
-  targetMachine = std::move(tmOrError.get());
-  // TODO(ntv): Looking up the pass by name fails quite surprisingly. Just build
-  // the pass to get its ID to look up the PassInfo.
-  const llvm::PassInfo* lowerMatrixIntrinsics = llvm::Pass::lookupPassInfo(
-      llvm::createLowerMatrixIntrinsicsPass()->getPassID());
-  assert(lowerMatrixIntrinsics);
-  SmallVector<const llvm::PassInfo*, 4> llvmPasses{lowerMatrixIntrinsics};
-  auto transformer = mlir::makeLLVMPassesTransformer(
-      llvmPasses, compilationOptions.llvmOptLevel, targetMachine.get(),
-      /*optPassesInsertPos=*/0);
-
-  // Pass in runtime support library when specified.
-  SmallVector<StringRef, 4> libs;
-  if (!runtime.empty()) libs.push_back(runtime);
-
-  // Obtain the execution engine.
-  auto created = mlir::ExecutionEngine::create(
-      *module, transformer,
-      static_cast<llvm::CodeGenOpt::Level>(compilationOptions.llcOptLevel),
-      libs,
-      /*enableObjectCache=*/true,
-      /*enableGDBNotificationListener=*/false);
-  llvm::handleAllErrors(created.takeError(), [](const llvm::ErrorInfoBase& b) {
-    b.log(llvm::errs());
-    assert(false);
-  });
-  engine = std::move(*created);
 }
