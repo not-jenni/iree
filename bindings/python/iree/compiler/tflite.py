@@ -1,19 +1,11 @@
 # Lint-as: python3
 """TFLite compiler interface."""
 
-# Copyright 2020 Google LLC
+# Copyright 2020 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 # TODO(#4131) python>=3.7: Use postponed type annotations.
 
@@ -22,6 +14,7 @@ import logging
 import tempfile
 from typing import List, Optional, Sequence, Set, Union
 
+from .debugging import TempFileSaver
 from .tools import find_tool, invoke_immediate, invoke_pipeline
 from .core import CompilerOptions, DEFAULT_TESTING_BACKENDS, build_compile_command_line
 
@@ -86,12 +79,13 @@ class ImportOptions(CompilerOptions):
     self.save_temp_iree_input = save_temp_iree_input
 
 
-def build_import_command_line(input_path: str,
+def build_import_command_line(input_path: str, tfs: TempFileSaver,
                               options: ImportOptions) -> List[str]:
   """Builds a command line for invoking the import stage.
 
   Args:
     input_path: The input path.
+    tfs: TempFileSaver.
     options: Import options.
   Returns:
     List of strings of command line.
@@ -104,6 +98,8 @@ def build_import_command_line(input_path: str,
 
   if options.import_only and options.output_file:
     # Import stage directly outputs.
+    output_file = tfs.alloc_optional("tflite-output.mlir",
+                                     export_as=options.output_file)
     cl.append(f"-o={options.output_file}")
 
   # Input arrays.
@@ -120,10 +116,24 @@ def build_import_command_line(input_path: str,
     cl.append("--mlir-print-op-generic")
 
   # Save temps flags.
-  if options.save_temp_tfl_input:
-    cl.append(f"--save-temp-tfl-input={options.save_temp_tfl_input}")
-  if options.save_temp_iree_input:
-    cl.append(f"--save-temp-iree-input={options.save_temp_iree_input}")
+  tfl_input = tfs.alloc_optional("tflite-input.mlir",
+                                 export_as=options.save_temp_tfl_input)
+  if tfl_input:
+    cl.append(f"--save-temp-tfl-input={tfl_input}")
+  iree_input = tfs.alloc_optional("tflite-iree-input.mlir",
+                                  export_as=options.save_temp_iree_input)
+  if iree_input:
+    cl.append(f"--save-temp-iree-input={iree_input}")
+
+  # Crash reproducer (locally qualified).
+  requested_crash_reproducer_path = options.crash_reproducer_path
+  if requested_crash_reproducer_path:
+    requested_crash_reproducer_path = (requested_crash_reproducer_path +
+                                       ".import-tflite")
+  crash_reproducer_path = tfs.alloc_optional(
+      "tflite-reproducer.mlir", export_as=requested_crash_reproducer_path)
+  if crash_reproducer_path:
+    cl.append(f"--pass-pipeline-crash-reproducer={crash_reproducer_path}")
 
   # Extra args.
   cl.extend(options.import_extra_args)
@@ -140,21 +150,22 @@ def compile_file(fb_path: str, **kwargs):
     A bytes-like object with the compiled output or None if output_file=
     was specified.
   """
-  options = ImportOptions(**kwargs)
-  import_cl = build_import_command_line(fb_path, options)
-  if options.import_only:
-    # One stage tool pipeline.
-    result = invoke_immediate(import_cl)
+  with TempFileSaver.implicit() as tfs:
+    options = ImportOptions(**kwargs)
+    import_cl = build_import_command_line(fb_path, tfs, options)
+    if options.import_only:
+      # One stage tool pipeline.
+      result = invoke_immediate(import_cl)
+      if options.output_file:
+        return None
+      return result
+
+    # Full compilation pipeline.
+    compile_cl = build_compile_command_line("-", tfs, options)
+    result = invoke_pipeline([import_cl, compile_cl])
     if options.output_file:
       return None
     return result
-
-  # Full compilation pipeline.
-  compile_cl = build_compile_command_line("-", options)
-  result = invoke_pipeline([import_cl, compile_cl])
-  if options.output_file:
-    return None
-  return result
 
 
 def compile_str(fb_content: bytes, **kwargs):
@@ -167,18 +178,20 @@ def compile_str(fb_content: bytes, **kwargs):
     A bytes-like object with the compiled output or None if output_file=
     was specified.
   """
-  options = ImportOptions(**kwargs)
-  import_cl = build_import_command_line("-", options)
-  if options.import_only:
-    # One stage tool pipeline.
-    result = invoke_immediate(import_cl, immediate_input=fb_content)
+  with TempFileSaver.implicit() as tfs:
+    options = ImportOptions(**kwargs)
+    import_cl = build_import_command_line("-", tfs, options)
+    if options.import_only:
+      # One stage tool pipeline.
+      result = invoke_immediate(import_cl, immediate_input=fb_content)
+      if options.output_file:
+        return None
+      return result
+
+    # Full compilation pipeline.
+    compile_cl = build_compile_command_line("-", tfs, options)
+    result = invoke_pipeline([import_cl, compile_cl],
+                             immediate_input=fb_content)
     if options.output_file:
       return None
     return result
-
-  # Full compilation pipeline.
-  compile_cl = build_compile_command_line("-", options)
-  result = invoke_pipeline([import_cl, compile_cl], immediate_input=fb_content)
-  if options.output_file:
-    return None
-  return result

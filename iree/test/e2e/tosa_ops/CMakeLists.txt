@@ -16,14 +16,18 @@ iree_check_single_backend_test_suite(
   SRCS
     "abs.mlir"
     "add.mlir"
+    "arithmetic_right_shift.mlir"
     "bitwise_and.mlir"
     "bitwise_or.mlir"
     "bitwise_xor.mlir"
     "ceil.mlir"
     "clamp.mlir"
     "const.mlir"
+    "equal.mlir"
     "exp.mlir"
     "floor.mlir"
+    "fully_connected.mlir"
+    "gather.mlir"
     "greater.mlir"
     "greater_equal.mlir"
     "if.mlir"
@@ -36,11 +40,13 @@ iree_check_single_backend_test_suite(
     "mul.mlir"
     "negate.mlir"
     "pad.mlir"
+    "reciprocal.mlir"
     "reduce.mlir"
     "reluN.mlir"
     "reshape.mlir"
     "rsqrt.mlir"
     "select.mlir"
+    "sigmoid.mlir"
     "sub.mlir"
     "table.mlir"
     "tanh.mlir"
@@ -50,6 +56,8 @@ iree_check_single_backend_test_suite(
     "dylib-llvm-aot"
   DRIVER
     "dylib"
+  COMPILER_FLAGS
+    "-iree-input-type=tosa"
 )
 
 iree_check_single_backend_test_suite(
@@ -58,14 +66,18 @@ iree_check_single_backend_test_suite(
   SRCS
     "abs.mlir"
     "add.mlir"
+    "arithmetic_right_shift.mlir"
     "bitwise_and.mlir"
     "bitwise_or.mlir"
     "bitwise_xor.mlir"
     "ceil.mlir"
     "clamp.mlir"
     "const.mlir"
+    "equal.mlir"
     "exp.mlir"
     "floor.mlir"
+    "fully_connected.mlir"
+    "gather.mlir"
     "greater.mlir"
     "greater_equal.mlir"
     "if.mlir"
@@ -78,10 +90,12 @@ iree_check_single_backend_test_suite(
     "mul.mlir"
     "negate.mlir"
     "pad.mlir"
+    "reciprocal.mlir"
     "reluN.mlir"
     "reshape.mlir"
     "rsqrt.mlir"
     "select.mlir"
+    "sigmoid.mlir"
     "sub.mlir"
     "table.mlir"
     "tanh.mlir"
@@ -92,6 +106,7 @@ iree_check_single_backend_test_suite(
   DRIVER
     "vmvx"
   COMPILER_FLAGS
+    "-iree-input-type=tosa"
     "-iree-vm-target-extension=i64"
 )
 
@@ -101,14 +116,17 @@ iree_check_single_backend_test_suite(
   SRCS
     "abs.mlir"
     "add.mlir"
+    "arithmetic_right_shift.mlir"
     "bitwise_and.mlir"
     "bitwise_or.mlir"
     "bitwise_xor.mlir"
     "ceil.mlir"
     "clamp.mlir"
     "const.mlir"
+    "equal.mlir"
     "exp.mlir"
     "floor.mlir"
+    "gather.mlir"
     "greater.mlir"
     "greater_equal.mlir"
     "if.mlir"
@@ -120,10 +138,12 @@ iree_check_single_backend_test_suite(
     "mul.mlir"
     "negate.mlir"
     "pad.mlir"
+    "reciprocal.mlir"
     "reluN.mlir"
     "reshape.mlir"
     "rsqrt.mlir"
     "select.mlir"
+    "sigmoid.mlir"
     "sub.mlir"
     "table.mlir"
     "tanh.mlir"
@@ -133,6 +153,8 @@ iree_check_single_backend_test_suite(
     "vulkan-spirv"
   DRIVER
     "vulkan"
+  COMPILER_FLAGS
+    "-iree-input-type=tosa"
 )
 
 ### BAZEL_TO_CMAKE_PRESERVES_ALL_CONTENT_BELOW_THIS_LINE ###

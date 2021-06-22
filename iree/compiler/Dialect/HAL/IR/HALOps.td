@@ -1,16 +1,8 @@
-// Copyright 2019 Google LLC
+// Copyright 2019 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #ifndef IREE_DIALECT_HAL_OPS
 #define IREE_DIALECT_HAL_OPS
@@ -217,7 +209,7 @@ def HAL_VariableLoadOp : HAL_Op<"variable.load", [
   let verifier = [{ return verifyVariableLoadOp(*this); }];
 }
 
-def FLOW_VariableLoadIndirectOp : HAL_Op<"variable.load.indirect"> {
+def HAL_VariableLoadIndirectOp : HAL_Op<"variable.load.indirect"> {
   let summary = [{loads a value from a global variable}];
   let description = [{
     Returns a copy of the variable value.
@@ -2055,7 +2047,8 @@ def HAL_ExecutableEntryPointOp : HAL_Op<"executable.entry_point", [
     StrAttr:$sym_name,
     HAL_OrdinalAttr:$ordinal,
     FlatSymbolRefAttr:$interface,
-    OptionalAttr<HAL_WorkgroupSizeAttr>:$workgroup_size
+    OptionalAttr<HAL_WorkgroupSizeAttr>:$workgroup_size,
+    OptionalAttr<IndexAttr>:$workgroup_local_memory
   );
 
   let regions = (region VariadicRegion<SizedRegion<1>>:$workgroup_count_region);
@@ -2065,19 +2058,21 @@ def HAL_ExecutableEntryPointOp : HAL_Op<"executable.entry_point", [
       "::llvm::StringRef":$sym_name,
       "::llvm::APInt":$ordinal,
       "::llvm::StringRef":$interface,
-      "::mlir::ArrayAttr":$workgroup_size
+      "::mlir::ArrayAttr":$workgroup_size,
+      "::mlir::IntegerAttr":$workgroup_local_memory
     ), [{
       build($_builder, $_state, sym_name, ordinal, interface,
-            workgroup_size, 0);
+            workgroup_size, workgroup_local_memory, 0);
     }]>,
     OpBuilder<(ins
       "::mlir::StringAttr":$sym_name,
       "::mlir::IntegerAttr":$ordinal,
       "::mlir::FlatSymbolRefAttr":$interface,
-      "::mlir::ArrayAttr":$workgroup_size
+      "::mlir::ArrayAttr":$workgroup_size,
+      "::mlir::IntegerAttr":$workgroup_local_memory
     ), [{
       build($_builder, $_state, sym_name, ordinal, interface,
-            workgroup_size, 0);
+            workgroup_size, workgroup_local_memory, 0);
     }]>
   ];
 

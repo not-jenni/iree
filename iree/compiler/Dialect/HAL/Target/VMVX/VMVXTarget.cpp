@@ -1,16 +1,8 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/HAL/Target/VMVX/VMVXTarget.h"
 
@@ -57,9 +49,6 @@ class VMVXTargetBackend final : public TargetBackend {
     IREE::VMVX::buildVMVXTransformPassPipeline(passManager);
 
     OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
-    // TODO(#614): remove this when the std->vm conversion isn't looking for
-    // iree.module.export.
-    nestedModulePM.addPass(IREE::VM::createMarkPublicSymbolsExportedPass());
 
     // TODO(benvanik): derive these from a vm target triple.
     auto vmOptions = IREE::VM::getTargetOptionsFromFlags();
@@ -104,6 +93,22 @@ class VMVXTargetBackend final : public TargetBackend {
 
   LogicalResult serializeExecutable(IREE::HAL::ExecutableTargetOp targetOp,
                                     OpBuilder &executableBuilder) override {
+    // Add reflection information used at runtime specific to the HAL interface.
+    SymbolTable symbolTable(targetOp.getInnerModule());
+    for (auto entryPointOp :
+         targetOp.getBlock().getOps<ExecutableEntryPointOp>()) {
+      auto funcOp =
+          symbolTable.lookup<IREE::VM::FuncOp>(entryPointOp.getName());
+
+      // Optionally entry points may specify that they require workgroup local
+      // memory. We fetch that value here and plumb it through so the runtime
+      // knows how much memory to reserve and pass in.
+      auto localMemorySizeAttr = entryPointOp.workgroup_local_memoryAttr();
+      if (localMemorySizeAttr) {
+        funcOp.setReflectionAttr("local_memory", localMemorySizeAttr);
+      }
+    }
+
     // Serialize the VM module to bytes and embed it directly.
     SmallVector<char> moduleData;
     {

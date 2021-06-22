@@ -1,29 +1,22 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/HAL/Target/LLVM/LLVMAOTTarget.h"
 
 #include <cstdlib>
 
-#include "iree/compiler/Conversion/LinalgToLLVM/LLVMCodeGenOptions.h"
-#include "iree/compiler/Conversion/LinalgToLLVM/Passes.h"
+#include "iree/compiler/Conversion/Passes.h"
 #include "iree/compiler/Dialect/HAL/Target/LLVM/LLVMIRPasses.h"
 #include "iree/compiler/Dialect/HAL/Target/LLVM/LibraryBuilder.h"
 #include "iree/compiler/Dialect/HAL/Target/LLVM/LinkerTool.h"
+#include "iree/compiler/Dialect/HAL/Target/LLVM/StaticLibraryGenerator.h"
 #include "iree/compiler/Dialect/HAL/Target/TargetRegistry.h"
 #include "iree/compiler/Utils/FlatbufferUtils.h"
 #include "iree/schemas/dylib_executable_def_builder.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -38,6 +31,8 @@ namespace IREE {
 namespace HAL {
 
 namespace {
+
+constexpr char kQueryFunctionName[] = "iree_hal_executable_library_query";
 
 llvm::Optional<FileLineColLoc> findFirstFileLoc(Location baseLoc) {
   if (auto loc = baseLoc.dyn_cast<FusedLoc>()) {
@@ -82,13 +77,13 @@ class LLVMAOTTargetBackend final : public TargetBackend {
   }
 
   void buildTranslationPassPipeline(OpPassManager &passManager) override {
-    auto codeGenOptions = getLLVMCodegenOptionsFromClOptions();
+    passManager.addPass(createLowerExecutableTargetPass());
     // Set target specific options.
     // TODO(ataei): This is temporary here, should move when target specific
     // overrides options grows.
     llvm::Triple triple(options_.targetTriple);
+    LLVMTransformPassPipelineOptions codeGenOptions;
     if (triple.isWasm()) {
-      // WebAssembly does not (yet) support FMA ops natively, so unfuse them.
       codeGenOptions.unfuseFMAOps = true;
     }
     buildLLVMTransformPassPipeline(passManager, codeGenOptions);
@@ -103,10 +98,12 @@ class LLVMAOTTargetBackend final : public TargetBackend {
         llvm::to_vector<8>(moduleOp.getOps<IREE::HAL::ExecutableOp>());
     if (sourceExecutableOps.size() <= 1) return success();
 
-    // Private symbols (i.e. llvm dialect private symbols) get deduped
-    // incorrectly by the link executables pass even though they should be
-    // treated as different symbols. For now just change the names of the
-    // private symbols to avoid conflicts.
+    // Ensure any LLVM symbol names we define are unique prior to linking.
+    //
+    // The link executables pass requires that there be no name conflicts
+    // between symbols with public MLIR Symbol visibility. LLVM dialect symbols
+    // use a different visibility mechanism, defaulting to public for MLIR
+    // Symbol visibility.
     unsigned moduleNumber = 0;
     for (auto sourceExecutableOp : enumerate(sourceExecutableOps)) {
       auto targetOps = llvm::to_vector<4>(
@@ -169,6 +166,12 @@ class LLVMAOTTargetBackend final : public TargetBackend {
     auto libraryName =
         targetOp->getParentOfType<IREE::HAL::ExecutableOp>().getName().str();
 
+    // Validate flags for output mode.
+    if (options_.linkEmbedded && !options_.staticLibraryOutput.empty()) {
+      return targetOp.emitError()
+             << "cannot embed ELF and produce static library simultaneously";
+    }
+
     // Specialize the module to the target triple.
     // The executable will have been cloned into other ExecutableTargetOps for
     // other triples so it's fine to mutate in-place.
@@ -198,13 +201,19 @@ class LLVMAOTTargetBackend final : public TargetBackend {
 
       // -ffreestanding-like behavior.
       func.addFnAttr("no-builtins");
+
+      // Our dispatches are all hot - that's kind of the point.
+      // This may favor more aggressive optimizations.
+      func.addFnAttr("hot");
     }
 
     // Build the IREE HAL executable library metadata. The runtime uses this to
     // find the entry point functions and their information.
-    LibraryBuilder libraryBuilder(
-        llvmModule.get(), LibraryBuilder::Mode::INCLUDE_REFLECTION_ATTRS,
-        LibraryBuilder::Version::V_0);
+    // TODO(benvanik): add a flag for this (adds a few KB/binary).
+    LibraryBuilder::Mode libraryBuilderMode =
+        LibraryBuilder::Mode::INCLUDE_REFLECTION_ATTRS;
+    LibraryBuilder libraryBuilder(llvmModule.get(), libraryBuilderMode,
+                                  LibraryBuilder::Version::V_0);
     switch (options_.sanitizerKind) {
       case SanitizerKind::kNone: {
         libraryBuilder.setSanitizerKind(LibraryBuilder::SanitizerKind::NONE);
@@ -219,13 +228,30 @@ class LLVMAOTTargetBackend final : public TargetBackend {
     }
     for (auto entryPointOp :
          targetOp.getBlock().getOps<ExecutableEntryPointOp>()) {
+      // Find the matching function in the LLVM module.
       auto *llvmFunc = llvmModule->getFunction(entryPointOp.getName());
       llvmFunc->setLinkage(llvm::GlobalValue::LinkageTypes::InternalLinkage);
       llvmFunc->setDSOLocal(true);
-      libraryBuilder.addEntryPoint(entryPointOp.getName(), "", llvmFunc);
+
+      // Optionally entry points may specify that they require workgroup local
+      // memory. We fetch that value here and plumb it through so the runtime
+      // knows how much memory to reserve and pass in.
+      int64_t localMemorySize = entryPointOp.workgroup_local_memory()
+                                    .getValueOr(APInt(64, 0))
+                                    .getSExtValue();
+
+      libraryBuilder.addExport(entryPointOp.getName(), "",
+                               LibraryBuilder::DispatchAttrs{localMemorySize},
+                               llvmFunc);
     }
-    auto *queryLibraryFunc =
-        libraryBuilder.build("iree_hal_executable_library_query");
+
+    auto queryFunctionName = std::string(kQueryFunctionName);
+    if (!options_.staticLibraryOutput.empty()) {
+      // Static library query functions must be unique to support multiple
+      // libraries in the same namespace.
+      queryFunctionName = libraryName + "_library_query";
+    }
+    auto *queryLibraryFunc = libraryBuilder.build(queryFunctionName);
 
     // The query function must be exported for dynamic libraries.
     queryLibraryFunc->setVisibility(
@@ -267,24 +293,54 @@ class LLVMAOTTargetBackend final : public TargetBackend {
              << options_.targetTriple << "'";
     }
 
+    // If we are keeping artifacts then let's also add the bitcode for easier
+    // debugging (vs just the binary object file).
+    if (options_.keepLinkerArtifacts) {
+      auto bitcodeFile = Artifact::createTemporary(libraryName, "bc");
+      auto &os = bitcodeFile.outputFile->os();
+      llvm::WriteBitcodeToFile(*llvmModule, os);
+      os.flush();
+      os.close();
+      bitcodeFile.outputFile->keep();
+    }
+
     // Emit object files.
     SmallVector<Artifact, 4> objectFiles;
     {
       // NOTE: today we just use a single object file, however if we wanted to
       // scale code generation and linking we'd want to generate one per
-      // function (or something like that).
+      // function (or something like that). A single object file is also
+      // instrumental to static library generation (which only supports one
+      // object file per library).
       std::string objectData;
       if (failed(runEmitObjFilePasses(targetMachine.get(), llvmModule.get(),
                                       &objectData))) {
         return targetOp.emitError()
                << "failed to compile LLVM-IR module to an object file";
       }
-      auto objectFile = Artifact::createTemporary(libraryName, "obj");
+      auto objectFile = Artifact::createTemporary(libraryName, "o");
       auto &os = objectFile.outputFile->os();
       os << objectData;
       os.flush();
       os.close();
       objectFiles.push_back(std::move(objectFile));
+    }
+
+    if (!options_.staticLibraryOutput.empty()) {
+      if (objectFiles.size() != 1) {
+        // Static library output only supports single object libraries.
+        return targetOp.emitError() << "generating static libraries from "
+                                       "multiple object files is not supported";
+      }
+
+      // Copy the static object file to the specified output along with
+      // generated header file.
+      const std::string &libraryPath = options_.staticLibraryOutput;
+      const auto library_name = objectFiles[0].path;
+      if (!outputStaticLibrary(libraryName, queryFunctionName, libraryPath,
+                               objectFiles[0].path)) {
+        return targetOp.emitError() << "static library generation failed";
+      }
     }
 
     // Link the generated object files into a dylib.
@@ -299,9 +355,12 @@ class LLVMAOTTargetBackend final : public TargetBackend {
     auto &linkArtifacts = linkArtifactsOr.getValue();
     if (options_.keepLinkerArtifacts) {
       mlir::emitRemark(targetOp.getLoc())
-          << "Linker artifacts for " << targetOp.getName() << " preserved:\n"
+          << "linker artifacts for " << targetOp.getName() << " preserved:\n"
           << "    " << linkArtifacts.libraryFile.path;
       linkArtifacts.keepAllFiles();
+      for (auto &objectFile : objectFiles) {
+        objectFile.outputFile->keep();
+      }
     }
 
     if (options_.linkEmbedded) {
@@ -323,6 +382,16 @@ class LLVMAOTTargetBackend final : public TargetBackend {
           bufferAttr);
       binaryOp.mime_typeAttr(
           executableBuilder.getStringAttr("application/x-elf"));
+    } else if (!options_.staticLibraryOutput.empty()) {
+      // Embed the library name in the executable binary op. This informs the
+      // loader which static library to load for the target binary.
+      std::vector<uint8_t> libraryNameVector(libraryName.begin(),
+                                             libraryName.end());
+      auto executableFormatAttr = std::string("static");
+
+      auto binaryOp = executableBuilder.create<IREE::HAL::ExecutableBinaryOp>(
+          targetOp.getLoc(), targetOp.sym_name(), executableFormatAttr,
+          libraryNameVector);
     } else {
       FlatbufferBuilder builder;
       iree_DyLibExecutableDef_start_as_root(builder);

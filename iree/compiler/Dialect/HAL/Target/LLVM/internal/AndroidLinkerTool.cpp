@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/HAL/Target/LLVM/LinkerTool.h"
 #include "llvm/ADT/Triple.h"
@@ -105,23 +97,6 @@ class AndroidLinkerTool : public LinkerTool {
         .concat(std::to_string(androidVersion))
         .concat("-clang")
         .str();
-  }
-
-  LogicalResult configureModule(
-      llvm::Module *llvmModule,
-      ArrayRef<llvm::Function *> exportedFuncs) override {
-    for (auto &func : *llvmModule) {
-      // Enable frame pointers to ensure that stack unwinding works, e.g. in
-      // Tracy. In principle this could also be achieved by enabling unwind
-      // tables, but we tried that and that didn't work in Tracy (which uses
-      // libbacktrace), while enabling frame pointers worked.
-      // https://github.com/google/iree/issues/3957
-      func.addFnAttr("frame-pointer", "all");
-
-      // -ffreestanding-like behavior.
-      func.addFnAttr("no-builtins");
-    }
-    return success();
   }
 
   Optional<Artifacts> linkDynamicLibrary(

@@ -1,16 +1,8 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/Modules/VMVX/Conversion/HALToVMVX/ConvertHALToVMVX.h"
 
@@ -36,7 +28,7 @@ namespace iree_compiler {
 // Ordered indices of arguments to the entry point function.
 // This is what the VM will receive at runtime from the HAL.
 enum EntryArgOrdinals {
-  kEntryArgScratchpad,
+  kEntryArgLocalMemory,
   kEntryArgConstants,
   kEntryArgBindings,
   kEntryArgWorkgroupX,
@@ -50,7 +42,7 @@ enum EntryArgOrdinals {
   kEntryArgWorkgroupCountZ,
 };
 
-/// Rewrites entry functions to have a vmvx.interface, scratchpad, and an XYZ
+/// Rewrites entry functions to have a vmvx.interface, local memory, and an XYZ
 /// workgroup ID. The runtime will provide these values during invocation.
 ///
 /// Source:
@@ -58,7 +50,7 @@ enum EntryArgOrdinals {
 ///
 /// Target:
 ///   func @entry(
-///       %scratchpad: !vmvx.buffer,
+///       %local_memory: !vmvx.buffer,
 ///       %constants: !vmvx.buffer,
 ///       %bindings: !iree.list<!vmvx.buffer>,
 ///       %workgroup_x: index,
@@ -86,7 +78,7 @@ LogicalResult updateHALToVMVXEntryFuncOp(FuncOp funcOp,
   auto indexType = IndexType::get(funcOp.getContext());
   auto newType = FunctionType::get(funcOp.getContext(),
                                    {
-                                       /*scratchpad=*/memRefI8Type,
+                                       /*local_memory=*/memRefI8Type,
                                        /*constants=*/memRefI32Type,
                                        /*bindings=*/bindingsType,
                                        /*workgroup_x=*/indexType,

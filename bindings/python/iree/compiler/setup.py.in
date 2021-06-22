@@ -1,18 +1,10 @@
 #!/usr/bin/python3
 
-# Copyright 2020 Google LLC
+# Copyright 2020 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 # Build platform specific wheel files for the iree.runtime package.
 # Built artifacts are per-platform and build out of the build tree.
@@ -22,52 +14,8 @@ import os
 import platform
 from setuptools import setup, find_namespace_packages
 
-README = r'''
-# IREE Compiler Python Bindings
-
-## Core compiler
-
-```py
-import iree.compiler
-
-SIMPLE_MUL_ASM = """
-func @simple_mul(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>) -> tensor<4xf32>
-      attributes { iree.module.export } {
-    %0 = "mhlo.multiply"(%arg0, %arg1) {name = "mul.1"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
-    return %0 : tensor<4xf32>
-}
-"""
-
-# Also see compile_file()
-# There are many keyword options available.
-# See iree.compiler.CompilerOptions
-binary = iree.compiler.compile_str(SIMPLE_MUL_ASM, target_backends=["vulkan-spirv"])
-```
-
-
-## TensorFlow compiler
-
-```py
-import tensorflow as tf
-import iree.compiler.tf
-
-class SimpleArithmeticModule(tf.Module):
-
-  @tf.function(input_signature=[
-      tf.TensorSpec([4], tf.float32),
-      tf.TensorSpec([4], tf.float32)
-  ])
-  def simple_mul(self, a, b):
-    return a * b
-
-# Also see compile_saved_model to directly compile an on-disk saved model.
-# There are many keyword options available.
-# See: iree.compiler.tf.ImportOptions
-binary = iree.compiler.tf.compile_module(
-    SimpleArithmeticModule(), target_backends=["vulkan-spirv"])
-```
-
-'''
+with open(os.path.join(os.path.dirname(__file__), "README.md"), "r") as f:
+  README = f.read()
 
 exe_suffix = ".exe" if platform.system() == "Windows" else ""
 
@@ -129,6 +77,11 @@ setup(
     cmdclass={
         'bdist_wheel': bdist_wheel,
         'install': platlib_install,
+    },
+    entry_points={
+        "console_scripts": [
+            "iree-translate = iree.tools.core.scripts.iree_translate.__main__:main",
+        ],
     },
     zip_safe=False,  # This package is fine but not zipping is more versatile.
 )

@@ -1,16 +1,8 @@
-# Copyright 2019 Google LLC
+# Copyright 2019 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 load("//iree/tools:compilation.bzl", "iree_bytecode_module")
 load("//iree:build_defs.oss.bzl", "iree_cmake_extra_content")
@@ -19,6 +11,20 @@ package(
     default_visibility = ["//visibility:public"],
     features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
+)
+
+cc_library(
+    name = "module",
+    srcs = ["module.cc"],
+    hdrs = ["module.h"],
+    deps = [
+        "//iree/base",
+        "//iree/base:cc",
+        "//iree/hal",
+        "//iree/modules/hal",
+        "//iree/vm",
+        "//iree/vm:cc",
+    ],
 )
 
 iree_cmake_extra_content(
@@ -36,7 +42,7 @@ iree_bytecode_module(
     c_identifier = "iree_samples_custom_modules_test_module",
     flags = [
         "-iree-mlir-to-vm-bytecode-module",
-        "-iree-hal-target-backends=dylib-llvm-aot",
+        "-iree-hal-target-backends=vmvx",
     ],
     translate_tool = "//iree/samples/custom_modules/dialect:custom-translate",
 )
@@ -46,7 +52,7 @@ cc_test(
     srcs = ["custom_modules_test.cc"],
     deps = [
         ":custom_modules_test_module_c",
-        ":native_module",
+        ":module",
         "//iree/base",
         "//iree/base:logging",
         "//iree/hal",
@@ -56,19 +62,6 @@ cc_test(
         "//iree/testing:gtest_main",
         "//iree/vm",
         "//iree/vm:bytecode_module",
-        "//iree/vm:cc",
-    ],
-)
-
-cc_library(
-    name = "native_module",
-    srcs = ["native_module.cc"],
-    hdrs = ["native_module.h"],
-    deps = [
-        "//iree/base",
-        "//iree/hal",
-        "//iree/modules/hal",
-        "//iree/vm",
         "//iree/vm:cc",
     ],
 )

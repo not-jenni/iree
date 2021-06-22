@@ -52,8 +52,6 @@ iree_cc_library(
     iree::base::internal
     iree::base::internal::flatcc
     iree::base::internal::synchronization
-    iree::base::logging
-    iree::base::status
     iree::base::tracing
     iree::hal
     iree::schemas::cuda_executable_def_c_fbs
@@ -85,6 +83,7 @@ iree_cc_test(
     "dynamic_symbols_test.cc"
   DEPS
     ::dynamic_symbols
+    iree::base
     iree::testing::gtest
     iree::testing::gtest_main
   LABELS

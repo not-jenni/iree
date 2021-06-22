@@ -21,11 +21,15 @@ iree_cc_library(
     "ROCMTarget.h"
   SRCS
     "ROCMTarget.cpp"
+    "ROCMTargetUtils.cpp"
   DEPS
     LLVMAMDGPUCodeGen
     LLVMCore
+    LLVMIRReader
+    LLVMLinker
     LLVMSupport
     LLVMTarget
+    LLVMipo
     MLIRLLVMIR
     MLIRLLVMToLLVMIRTranslation
     MLIRPass
@@ -35,6 +39,7 @@ iree_cc_library(
     MLIRTargetLLVMIRExport
     iree::base::internal::flatcc
     iree::compiler::Conversion::LinalgToLLVMGPU
+    iree::compiler::Conversion::PassHeaders
     iree::compiler::Dialect::HAL::Target
     iree::compiler::Utils
     iree::schemas::rocm_executable_def_c_fbs

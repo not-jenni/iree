@@ -1,16 +1,8 @@
-# Copyright 2021 Google LLC
+# Copyright 2021 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 iree_py_library(
   NAME
@@ -20,9 +12,20 @@ iree_py_library(
     "frontend.py"
 )
 
+# Only enable the tests if the XLA compiler is built.
+if(${IREE_BUILD_XLA_COMPILER})
 iree_py_test(
   NAME
     frontend_test
   SRCS
     "frontend_test.py"
+)
+endif()
+
+iree_py_install_package(
+  COMPONENT IreePythonPackage-jax
+  PACKAGE_NAME iree_jax
+  MODULE_PATH iree/jax
+  ADDL_PACKAGE_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/README.md
 )

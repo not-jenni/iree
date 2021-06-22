@@ -1,21 +1,14 @@
-// Copyright 2019 Google LLC
+// Copyright 2019 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #ifndef IREE_BINDINGS_PYTHON_IREE_RT_HAL_H_
 #define IREE_BINDINGS_PYTHON_IREE_RT_HAL_H_
 
-#include "absl/container/inlined_vector.h"
+#include <vector>
+
 #include "bindings/python/iree/runtime/binding.h"
 #include "bindings/python/iree/runtime/status_utils.h"
 #include "iree/hal/api.h"
@@ -82,7 +75,7 @@ struct HalShape {
     return s;
   }
 
-  absl::InlinedVector<int32_t, 6> s;
+  std::vector<int32_t> s;
 };
 
 class HalBufferView
@@ -148,18 +141,18 @@ class HalMappedMemory {
   }
 
   py::buffer_info ToBufferInfo() {
-    absl::InlinedVector<int32_t, 6> shape(iree_hal_buffer_view_shape_rank(bv_));
+    std::vector<int32_t> shape(iree_hal_buffer_view_shape_rank(bv_));
     CheckApiStatus(
         iree_hal_buffer_view_shape(bv_, shape.size(), shape.data(), nullptr),
         "Error getting buffer view shape");
     iree_hal_element_type_t element_type =
         iree_hal_buffer_view_element_type(bv_);
     int32_t element_size = iree_hal_element_byte_count(element_type);
-    absl::InlinedVector<py::ssize_t, 6> dims(shape.size());
+    std::vector<py::ssize_t> dims(shape.size());
     for (int i = 0; i < shape.size(); ++i) {
       dims[i] = shape[i];
     }
-    absl::InlinedVector<py::ssize_t, 8> strides(shape.size());
+    std::vector<py::ssize_t> strides(shape.size());
     if (!strides.empty()) {
       strides[shape.size() - 1] = element_size;
       for (int i = shape.size() - 2; i >= 0; --i) {

@@ -1,16 +1,8 @@
-# Copyright 2019 Google LLC
+# Copyright 2019 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 package(
     default_visibility = ["//visibility:public"],
@@ -19,26 +11,15 @@ package(
 )
 
 cc_library(
-    name = "CodeGenOptionUtils",
-    srcs = [
-        "CodeGenOptionUtils.cpp",
-    ],
-    hdrs = [
-        "CodeGenOptionUtils.h",
-    ],
-    deps = [
-        "@llvm-project//llvm:Support",
-    ],
-)
-
-cc_library(
     name = "LinalgToSPIRV",
     srcs = [
+        "CodeGenOptionUtils.cpp",
         "ConcretizeTileAmongWorkgroupsPass.cpp",
         "ConvertToGPUPass.cpp",
         "ConvertToSPIRVPass.cpp",
         "FoldGPUProcessorIDUses.cpp",
         "KernelDispatchUtils.cpp",
+        "LaunchConfig.cpp",
         "Passes.cpp",
         "TileAndVectorizeInOneWorkgroupPass.cpp",
         "Utils.cpp",
@@ -48,16 +29,15 @@ cc_library(
     ],
     hdrs = [
         "KernelDispatchUtils.h",
+        "LaunchConfig.h",
         "MemorySpace.h",
-        "Passes.h",
         "Utils.h",
     ],
     deps = [
-        ":CodeGenOptionUtils",
-        "//iree/compiler/Conversion/CodegenUtils",
+        "//iree/compiler/Conversion:PassHeaders",
         "//iree/compiler/Conversion/Common",
-        "//iree/compiler/Conversion/HLOToLinalg",
-        "//iree/compiler/Conversion/LinalgToVector",
+        "//iree/compiler/Conversion/Transforms",
+        "//iree/compiler/Conversion/Utils",
         "//iree/compiler/Dialect/Flow/IR",
         "//iree/compiler/Dialect/HAL/IR",
         "//iree/compiler/Dialect/HAL/IR:HALDialect",

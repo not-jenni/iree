@@ -1,39 +1,45 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #ifndef IREE_COMPILER_DIALECT_HAL_IR_LOWERINGCONFIG
 #define IREE_COMPILER_DIALECT_HAL_IR_LOWERINGCONFIG
 
 // Putting this in HAL dialect for now.
 include "iree/compiler/Dialect/HAL/IR/HALDialect.td"
 
+// List of pre-existing pipelines for translating executables.
 def CPU_Default
     : I32EnumAttrCase<"CPUDefault", 0>;
 def CPU_Vectorization
     : I32EnumAttrCase<"CPUVectorization", 1>;
+def LLVMGPU_SimpleDistribute
+    : I32EnumAttrCase<"LLVMGPUDistribute", 2>;
+def LLVMGPU_Vectorize
+    : I32EnumAttrCase<"LLVMGPUVectorize", 3>;
 
 // EnumAttrCase for all known lowerings for ops within dispatch region
 // to scalar/native-vector code.
 def DispatchLoweringPassPipelineEnum : I32EnumAttr<
     "DispatchLoweringPassPipeline",
     "identifier for pass pipeline use to lower dispatch region",
-    [CPU_Default, CPU_Vectorization]> {
+    [CPU_Default, CPU_Vectorization, LLVMGPU_SimpleDistribute,
+     LLVMGPU_Vectorize]> {
   let cppNamespace = "::mlir::iree_compiler::IREE::HAL";
 }
 
 def TileSizesListAttr :
     TypedArrayAttrBase<I64ArrayAttr,
                        "list of tile sizes for all levels"> { }
+
+// Attribute that captures information needed for translating the executables.
+def TranslationInfoAttr :
+  StructAttr<"TranslationInfo", HAL_Dialect, [
+    StructFieldAttr<"passPipeline", DispatchLoweringPassPipelineEnum>,
+    StructFieldAttr<"workloadPerWorkgroup",
+        DefaultValuedAttr<I64ArrayAttr, "{}">>,
+  ]>;
 
 // Attribute that carries information needed to perform
 // tiling/vectorization, etc.

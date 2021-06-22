@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 //===- KernelDispatchUtils.cpp - Utilities for generating dispatch info ---===//
 //
@@ -23,10 +15,10 @@
 
 #include "iree/compiler/Conversion/LinalgToSPIRV/KernelDispatchUtils.h"
 
-#include "iree/compiler/Conversion/CodegenUtils/FunctionUtils.h"
-#include "iree/compiler/Conversion/Common/LaunchConfig.h"
-#include "iree/compiler/Conversion/LinalgToSPIRV/Passes.h"
+#include "iree/compiler/Conversion/LinalgToSPIRV/LaunchConfig.h"
 #include "iree/compiler/Conversion/LinalgToSPIRV/Utils.h"
+#include "iree/compiler/Conversion/Passes.h"
+#include "iree/compiler/Conversion/Utils/Utils.h"
 #include "iree/compiler/Dialect/IREE/IR/IREEOps.h"
 #include "iree/compiler/Dialect/Shape/IR/ShapeOps.h"
 #include "llvm/Support/Debug.h"
@@ -110,13 +102,16 @@ static std::tuple<SmallVector<ShapedType>, SmallVector<ShapedType>>
 getInputOutputTypes(linalg::LinalgOp op) {
   SmallVector<ShapedType> inputTypes(op.getNumInputs()),
       outputTypes(op.getNumOutputs());
-  for (auto operand : enumerate(op.getInputOpOperands())) {
+  auto inputOperands = op.getInputOperands();
+  for (auto operand : enumerate(inputOperands)) {
+    assert(!op.isScalar(operand.value()));
     inputTypes[operand.index()] =
-        getUntiledType(operand.value().get()).dyn_cast<ShapedType>();
+        getUntiledType(operand.value()->get()).dyn_cast<ShapedType>();
   }
-  for (auto operand : enumerate(op.getOutputOpOperands())) {
+  auto outputOperands = op.getOutputOperands();
+  for (auto operand : enumerate(outputOperands)) {
     outputTypes[operand.index()] =
-        getUntiledType(operand.value().get()).dyn_cast<ShapedType>();
+        getUntiledType(operand.value()->get()).dyn_cast<ShapedType>();
   }
   return std::make_tuple(std::move(inputTypes), std::move(outputTypes));
 }
@@ -388,7 +383,8 @@ LogicalResult getGenericOpLaunchConfig(linalg::LinalgOp linalgOp,
   config.workgroupSize[0] = subgroupSize;
   config.workgroupSize[1] = 1;
   config.workgroupSize[2] = 1;
-  ShapedType outputShape = linalgOp.getOutputShapedType(0);
+  ShapedType outputShape =
+      linalgOp.getOutputOperand(0)->get().getType().cast<ShapedType>();
 
   SmallVector<int64_t, 4> candidateTileSizes;
   // When Vectororization is not enabled we skil the second level of tiling and
@@ -440,7 +436,6 @@ LogicalResult getGenericOpLaunchConfig(linalg::LinalgOp linalgOp,
   }
 
 GET_GENERIC_OP_LAUNCH_CONFIG(linalg::GenericOp)
-GET_GENERIC_OP_LAUNCH_CONFIG(linalg::IndexedGenericOp)
 
 #undef GET_GENERIC_OP_LAUNCH_CONFIG
 
@@ -753,8 +748,7 @@ Optional<LaunchConfig> initGPULaunchConfig(
     DISPATCH(linalg::PoolingNHWCSumFOp)
   }
 
-  // Any generic/indexed_generic operations found are made the root if no other
-  // op is the root
+  // Any generic operations found are made the root if no other op is the root
   if (!rootOperation) {
     for (linalg::LinalgOp linalgOp : reverse(linalgOps)) {
       size_t numLoops = getNumOuterParallelLoops(linalgOp);
@@ -766,7 +760,6 @@ Optional<LaunchConfig> initGPULaunchConfig(
       }
 
       DISPATCH(linalg::GenericOp)
-      DISPATCH(linalg::IndexedGenericOp)
     }
   }
 
@@ -879,7 +872,7 @@ getOpNativeVectorSize<vector::TransferWriteOp>(vector::TransferWriteOp op) {
   return nativeSize;
 }
 
-Optional<SmallVector<int64_t, 4>> getNativeVectorSize(Operation *op) {
+Optional<SmallVector<int64_t, 4>> getSPIRVNativeVectorSize(Operation *op) {
 #define DISPATCH(opname)                            \
   if (isa<opname>(op)) {                            \
     return getOpNativeVectorSize(cast<opname>(op)); \

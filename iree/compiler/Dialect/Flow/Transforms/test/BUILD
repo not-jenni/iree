@@ -1,16 +1,8 @@
-# Copyright 2019 Google LLC
+# Copyright 2019 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 load("//iree:lit_test.bzl", "iree_lit_test_suite")
 load("//build_tools/bazel:enforce_glob.bzl", "enforce_glob")
@@ -25,6 +17,8 @@ iree_lit_test_suite(
     name = "lit",
     srcs = enforce_glob(
         [
+            "conv1x1_to_matmul.mlir",
+            "conv2d_to_img2col.mlir",
             "convert_to_flow_tensor_ops.mlir",
             "deduplicate_executables.mlir",
             "dispatch_linalg_on_tensors.mlir",
@@ -33,15 +27,14 @@ iree_lit_test_suite(
             "expand_variable_dynamic_dims.mlir",
             "export_benchmark_funcs.mlir",
             "form_streams.mlir",
-            "hlo_to_hlo_preprocessing.mlir",
-            "hlo_to_hlo_preprocessing_canoncalize_dot_general.mlir",
-            "hlo_to_hlo_preprocessing_extract_pad_from_conv.mlir",
             "hoist_unstreamable_ops.mlir",
             "inject_dispatch_tracing.mlir",
-            "legalize_input_types.mlir",
             "outline_dispatch_regions.mlir",
             "outline_large_constants.mlir",
-            "pre_partitioning_conversion.mlir",
+            "pad_linalg_ops.mlir",
+            "pad_tensor_to_tensor.mlir",
+            "promote_i1_to_i8.mlir",
+            "promote_tensor_loads.mlir",
             "strip_and_splat_constant_variables.mlir",
             "transformation.mlir",
         ],

@@ -1,18 +1,11 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "iree/compiler/Conversion/LinalgToSPIRV/Passes.h"
+#include "iree/compiler/Conversion/PassDetail.h"
+#include "iree/compiler/Conversion/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/SCF.h"
@@ -257,10 +250,11 @@ class VectorContractToCoopMatmul final
   const CooperativeMatrixAnalysis &cooperativeMatrixAnalysis;
 };
 
-struct VectorToCooperativeMatrixPass final
-    : public PassWrapper<VectorToCooperativeMatrixPass, FunctionPass> {
-  void runOnFunction() override {
-    FuncOp funcOp = getFunction();
+struct LinalgToSPIRVVectorToCooperativeMatrixPass final
+    : public LinalgToSPIRVVectorToCooperativeMatrixBase<
+          LinalgToSPIRVVectorToCooperativeMatrixPass> {
+  void runOnOperation() override {
+    FuncOp funcOp = getOperation();
     auto targetAttr = spirv::lookupTargetEnv(funcOp);
     SPIRVTypeConverter typeConverter(targetAttr);
 
@@ -306,15 +300,10 @@ struct VectorToCooperativeMatrixPass final
 
 }  // namespace
 
-std::unique_ptr<FunctionPass> createConvertVectorToCooperativeMatrixPass() {
-  return std::make_unique<VectorToCooperativeMatrixPass>();
+std::unique_ptr<OperationPass<FuncOp>>
+createLinalgToSPIRVVectorToCooperativeMatrixPass() {
+  return std::make_unique<LinalgToSPIRVVectorToCooperativeMatrixPass>();
 }
-
-static PassRegistration<VectorToCooperativeMatrixPass> pass(
-    "iree-spirv-vector-to-cooperative-matrix",
-    "Convert vector load/store/arithmetic ops to cooperative matrix ops when "
-    "possible",
-    [] { return std::make_unique<VectorToCooperativeMatrixPass>(); });
 
 }  // namespace iree_compiler
 }  // namespace mlir

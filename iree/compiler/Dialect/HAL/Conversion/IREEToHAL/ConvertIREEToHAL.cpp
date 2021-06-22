@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/HAL/Conversion/IREEToHAL/ConvertIREEToHAL.h"
 
@@ -76,16 +68,60 @@ class DynamicShapeConstantOpConversion
   }
 };
 
+template <typename T>
+class GenericConvertTypesConversion : public OpConversionPattern<T> {
+ public:
+  using OpConversionPattern<T>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+      T op, llvm::ArrayRef<Value> newOperands,
+      ConversionPatternRewriter &rewriter) const override {
+    SmallVector<Type> newTypes;
+    bool anyChanged = false;
+    for (auto oldNew : llvm::zip(op->getOperands(), newOperands)) {
+      auto oldValue = std::get<0>(oldNew);
+      auto newValue = std::get<1>(oldNew);
+      if (oldValue.getType() != newValue.getType()) {
+        anyChanged = true;
+        break;
+      }
+    }
+    for (auto oldType : op.getOperation()->getResultTypes()) {
+      auto newType = this->getTypeConverter()->convertType(oldType);
+      if (oldType != newType) anyChanged = true;
+      newTypes.push_back(newType);
+    }
+    if (!anyChanged) return failure();
+    rewriter.replaceOpWithNewOp<T>(op, newTypes, newOperands, op->getAttrs());
+    return success();
+  }
+};
+
 }  // namespace
 
-// Appends all patterns for lowering IREE ops to HAL buffer ops.
-void populateIREEToHALPatterns(MLIRContext *context,
+void populateIREEToHALPatterns(MLIRContext *context, ConversionTarget &target,
+                               TypeConverter &typeConverter,
                                OwningRewritePatternList &patterns) {
-  patterns.insert<DynamicShapeConstantOpConversion>(context);
-}
-
-void setupIREEToHALLegality(MLIRContext *context, ConversionTarget &target) {
   target.addIllegalOp<IREE::DynamicShapeConstantOp>();
+  patterns.insert<DynamicShapeConstantOpConversion>(context);
+
+  typeConverter.addConversion([&](IREE::ListType type) {
+    auto elementType = typeConverter.convertType(type.getElementType());
+    return IREE::ListType::get(elementType);
+  });
+
+  target.addDynamicallyLegalOp<IREE::ListCreateOp>([&](IREE::ListCreateOp op) {
+    return typeConverter.isLegal(op.getType());
+  });
+  target.addDynamicallyLegalOp<IREE::ListGetOp>(
+      [&](IREE::ListGetOp op) { return typeConverter.isLegal(op.getType()); });
+  target.addDynamicallyLegalOp<IREE::ListSetOp>([&](IREE::ListSetOp op) {
+    return typeConverter.isLegal(op.value().getType());
+  });
+  patterns.insert<GenericConvertTypesConversion<IREE::ListCreateOp>,
+                  GenericConvertTypesConversion<IREE::ListGetOp>,
+                  GenericConvertTypesConversion<IREE::ListSetOp>>(typeConverter,
+                                                                  context);
 }
 
 }  // namespace iree_compiler

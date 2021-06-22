@@ -1,16 +1,8 @@
-# Copyright 2021 Google LLC
+# Copyright 2021 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 iree_add_all_subdirs()
 
@@ -22,9 +14,8 @@ iree_cc_test(
   SRCS
     "module_test.cc"
   DEPS
-    absl::strings
+    iree::base::cc
     iree::base::logging
-    iree::base::status
     iree::testing::gtest
     iree::testing::gtest_main
     iree::vm::cc
@@ -33,8 +24,9 @@ iree_cc_test(
     ::arithmetic_ops
     ::arithmetic_ops_f32
     ::arithmetic_ops_i64
-    ::assignment_ops
+    # ::assignment_ops
     ::assignment_ops_i64
+    ::call_ops
     ::comparison_ops
     ::comparison_ops_f32
     ::comparison_ops_i64
@@ -43,6 +35,8 @@ iree_cc_test(
     ::conversion_ops_i64
     ::global_ops
     ::list_ops
+    ::list_variant_ops
+    ::ref_ops
     ::shift_ops
     ::shift_ops_i64
 )
@@ -74,14 +68,15 @@ iree_c_module(
     "arithmetic_ops_i64.h"
 )
 
-iree_c_module(
-  NAME
-    assignment_ops
-  SRC
-    "../assignment_ops.mlir"
-  H_FILE_OUTPUT
-    "assignment_ops.h"
-)
+# TODO(simon-camp): Reenable this test once the 'vm.select.ref' op is supported.
+# iree_c_module(
+#   NAME
+#     assignment_ops
+#   SRC
+#     "../assignment_ops.mlir"
+#   H_FILE_OUTPUT
+#     "assignment_ops.h"
+# )
 
 iree_c_module(
   NAME
@@ -90,6 +85,15 @@ iree_c_module(
     "../assignment_ops_i64.mlir"
   H_FILE_OUTPUT
     "assignment_ops_i64.h"
+)
+
+iree_c_module(
+  NAME
+    call_ops
+  SRC
+    "../call_ops.mlir"
+  H_FILE_OUTPUT
+    "call_ops.h"
 )
 
 iree_c_module(
@@ -162,6 +166,24 @@ iree_c_module(
     "../list_ops.mlir"
   H_FILE_OUTPUT
     "list_ops.h"
+)
+
+iree_c_module(
+  NAME
+    list_variant_ops
+  SRC
+    "../list_variant_ops.mlir"
+  H_FILE_OUTPUT
+    "list_variant_ops.h"
+)
+
+iree_c_module(
+  NAME
+    ref_ops
+  SRC
+    "../ref_ops.mlir"
+  H_FILE_OUTPUT
+    "ref_ops.h"
 )
 
 iree_c_module(

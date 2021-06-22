@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #ifndef IREE_COMPILER_DIALECT_HAL_TARGET_LLVM_LLVMTARGETOPTIONS_H_
 #define IREE_COMPILER_DIALECT_HAL_TARGET_LLVM_LLVMTARGETOPTIONS_H_
@@ -49,6 +41,13 @@ struct LLVMTargetOptions {
   // Sanitizer Kind for CPU Kernels
   SanitizerKind sanitizerKind = SanitizerKind::kNone;
 
+  // Tool to use for linking (like lld). Acts as a prefix to the command line
+  // and can contain additional arguments.
+  std::string linkerPath;
+
+  // Tool to use for linking embedded ELFs specifically. Must be lld.
+  std::string embeddedLinkerPath;
+
   // Build for the IREE embedded platform-agnostic ELF loader.
   bool linkEmbedded = false;
 
@@ -59,6 +58,13 @@ struct LLVMTargetOptions {
 
   // True to keep linker artifacts for debugging.
   bool keepLinkerArtifacts = false;
+
+  // Build for IREE static library loading using this output path for
+  // a "{staticLibraryOutput}.o" object file and "{staticLibraryOutput}.h"
+  // header file.
+  //
+  // This option is incompatible with the linkEmbedded option.
+  std::string staticLibraryOutput;
 };
 
 // Returns LLVMTargetOptions struct intialized with the iree-llvm-* flags.

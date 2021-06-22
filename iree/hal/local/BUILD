@@ -1,58 +1,18 @@
-# Copyright 2020 Google LLC
+# Copyright 2020 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 # Default implementations for HAL types that use the host resources.
 # These are generally just wrappers around host heap memory and host threads.
+
+load("//iree:build_defs.oss.bzl", "iree_cmake_extra_content")
 
 package(
     default_visibility = ["//visibility:public"],
     features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
-)
-
-# TODO(benvanik): replace iree/base/arena.h with this one. We still want the
-# old-style arena for pure stack use; we may be able to do that with a change
-# to block pool that allows for on-stack initialization (iree_stack_arena_t
-# that has storage for one block inside itself and then dynamically allocates
-# new ones if needed). That way we have only one arena implementation and can
-# easily use the iree_allocator_t interface without worry.
-cc_library(
-    name = "arena",
-    srcs = ["arena.c"],
-    hdrs = ["arena.h"],
-    deps = [
-        "//iree/base",
-        "//iree/base:core_headers",
-        "//iree/base/internal:atomic_slist",
-        "//iree/base/internal:synchronization",
-    ],
-)
-
-# TODO(benvanik): move into base/? may be useful for other backends or for other
-# parts of the system (like modules handling IO/RPC).
-cc_library(
-    name = "event_pool",
-    srcs = ["event_pool.c"],
-    hdrs = ["event_pool.h"],
-    deps = [
-        "//iree/base",
-        "//iree/base:core_headers",
-        "//iree/base:tracing",
-        "//iree/base/internal",
-        "//iree/base/internal:synchronization",
-        "//iree/base/internal:wait_handle",
-    ],
 )
 
 cc_library(
@@ -69,6 +29,7 @@ cc_test(
         "//iree/base",
         "//iree/base:tracing",
         "//iree/base/internal:flags",
+        "//iree/hal",
         "//iree/hal/local/loaders:embedded_library_loader",
         "//iree/testing:benchmark",
     ],
@@ -133,16 +94,43 @@ cc_library(
         "sync_semaphore.h",
     ],
     deps = [
-        ":arena",
         ":local",
+        "//iree/base",
+        "//iree/base:core_headers",
+        "//iree/base:tracing",
+        "//iree/base/internal",
+        "//iree/base/internal:arena",
+        "//iree/base/internal:synchronization",
+        "//iree/hal",
+    ],
+)
+
+#===------------------------------------------------------------------------===#
+# Thread dependent packages
+#===------------------------------------------------------------------------===#
+
+iree_cmake_extra_content(
+    content = """
+if(NOT ${IREE_ENABLE_THREADING})
+  return()
+endif()
+""",
+    inline = True,
+)
+
+# TODO(benvanik): move into base/? may be useful for other backends or for other
+# parts of the system (like modules handling IO/RPC).
+cc_library(
+    name = "event_pool",
+    srcs = ["event_pool.c"],
+    hdrs = ["event_pool.h"],
+    deps = [
         "//iree/base",
         "//iree/base:core_headers",
         "//iree/base:tracing",
         "//iree/base/internal",
         "//iree/base/internal:synchronization",
         "//iree/base/internal:wait_handle",
-        "//iree/hal",
-        "//iree/task",
     ],
 )
 
@@ -167,13 +155,14 @@ cc_library(
         "task_semaphore.h",
     ],
     deps = [
-        ":arena",
         ":event_pool",
+        ":executable_library",
         ":local",
         "//iree/base",
         "//iree/base:core_headers",
         "//iree/base:tracing",
         "//iree/base/internal",
+        "//iree/base/internal:arena",
         "//iree/base/internal:synchronization",
         "//iree/base/internal:wait_handle",
         "//iree/hal",

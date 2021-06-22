@@ -1,30 +1,16 @@
-// Copyright 2019 Google LLC
+// Copyright 2019 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "bindings/python/iree/runtime/vm.h"
 
-#include "absl/strings/str_cat.h"
-#include "absl/strings/str_join.h"
-#include "absl/types/optional.h"
-#include "bindings/python/iree/runtime/function_abi.h"
 #include "bindings/python/iree/runtime/status_utils.h"
 #include "iree/base/api.h"
-#include "iree/base/status.h"
+#include "iree/base/status_cc.h"
 #include "iree/hal/api.h"
-#include "iree/modules/hal/hal_module.h"
-#include "iree/modules/strings/strings_module.h"
-#include "iree/modules/tensorlist/native_module.h"
+#include "iree/modules/hal/module.h"
 #include "iree/vm/api.h"
 #include "pybind11/numpy.h"
 
@@ -38,21 +24,6 @@ VmModule CreateHalModule(HalDevice* device) {
   CheckApiStatus(iree_hal_module_create(device->raw_ptr(),
                                         iree_allocator_system(), &module),
                  "Error creating hal module");
-  return VmModule::CreateRetained(module);
-}
-
-VmModule CreateStringsModule() {
-  iree_vm_module_t* module;
-  CheckApiStatus(iree_strings_module_create(iree_allocator_system(), &module),
-                 "Error creating trings module");
-  return VmModule::CreateRetained(module);
-}
-
-VmModule CreateTensorListModule() {
-  iree_vm_module_t* module;
-  CheckApiStatus(
-      iree_tensorlist_module_create(iree_allocator_system(), &module),
-      "Error creating tensorlist module");
   return VmModule::CreateRetained(module);
 }
 
@@ -103,7 +74,7 @@ VmInstance VmInstance::Create() {
 //------------------------------------------------------------------------------
 
 VmContext VmContext::Create(VmInstance* instance,
-                            absl::optional<std::vector<VmModule*>> modules) {
+                            std::optional<std::vector<VmModule*>> modules) {
   iree_vm_context_t* context;
   if (!modules) {
     // Simple create with open allowed modules.
@@ -112,7 +83,7 @@ VmContext VmContext::Create(VmInstance* instance,
     CheckApiStatus(status, "Error creating vm context");
   } else {
     // Closed set of modules.
-    absl::InlinedVector<iree_vm_module_t*, 8> module_handles;
+    std::vector<iree_vm_module_t*> module_handles;
     module_handles.resize(modules->size());
     for (size_t i = 0, e = module_handles.size(); i < e; ++i) {
       module_handles[i] = (*modules)[i]->raw_ptr();
@@ -128,7 +99,7 @@ VmContext VmContext::Create(VmInstance* instance,
 }
 
 void VmContext::RegisterModules(std::vector<VmModule*> modules) {
-  absl::InlinedVector<iree_vm_module_t*, 8> module_handles;
+  std::vector<iree_vm_module_t*> module_handles;
   module_handles.resize(modules.size());
   for (size_t i = 0, e = module_handles.size(); i < e; ++i) {
     module_handles[i] = modules[i]->raw_ptr();
@@ -136,36 +107,6 @@ void VmContext::RegisterModules(std::vector<VmModule*> modules) {
   auto status = iree_vm_context_register_modules(raw_ptr(), &module_handles[0],
                                                  module_handles.size());
   CheckApiStatus(status, "Error registering modules");
-}
-
-std::unique_ptr<FunctionAbi> VmContext::CreateFunctionAbi(
-    HalDevice& device, std::shared_ptr<HostTypeFactory> host_type_factory,
-    iree_vm_function_t f) {
-  // Resolve attrs.
-  absl::InlinedVector<std::pair<iree_string_view_t, iree_string_view_t>, 4>
-      attrs;
-  for (int i = 0;; ++i) {
-    attrs.push_back({});
-    auto status = iree_vm_get_function_reflection_attr(
-        f, i, &attrs.back().first, &attrs.back().second);
-    if (iree_status_is_not_found(status)) {
-      iree_status_ignore(status);
-      attrs.pop_back();
-      break;
-    }
-    CheckApiStatus(status, "Error getting reflection attr");
-  }
-  auto attr_lookup =
-      [&attrs](absl::string_view key) -> absl::optional<absl::string_view> {
-    for (const auto& attr : attrs) {
-      absl::string_view found_key(attr.first.data, attr.first.size);
-      absl::string_view found_value(attr.second.data, attr.second.size);
-      if (found_key == key) return found_value;
-    }
-    return absl::nullopt;
-  };
-
-  return FunctionAbi::Create(device, std::move(host_type_factory), attr_lookup);
 }
 
 void VmContext::Invoke(iree_vm_function_t f, VmVariantList& inputs,
@@ -205,14 +146,14 @@ VmModule VmModule::FromFlatbufferBlob(py::buffer flatbuffer_blob) {
   return VmModule::CreateRetained(module);
 }
 
-absl::optional<iree_vm_function_t> VmModule::LookupFunction(
+std::optional<iree_vm_function_t> VmModule::LookupFunction(
     const std::string& name, iree_vm_function_linkage_t linkage) {
   iree_vm_function_t f;
   auto status = iree_vm_module_lookup_function_by_name(
       raw_ptr(), linkage, {name.data(), name.size()}, &f);
   if (iree_status_is_not_found(status)) {
     iree_status_ignore(status);
-    return absl::nullopt;
+    return std::nullopt;
   }
   CheckApiStatus(status, "Error looking up function");
   return f;
@@ -244,7 +185,7 @@ void VmVariantList::PushList(VmVariantList& other) {
 
 void VmVariantList::PushBufferView(HalDevice& device,
                                    py::object py_buffer_object,
-                                   iree_hal_element_type_e element_type) {
+                                   iree_hal_element_type_t element_type) {
   // Request a view of the buffer (use the raw python C API to avoid some
   // allocation and copying at the pybind level).
   Py_buffer py_view;
@@ -417,6 +358,12 @@ py::object VmVariantList::GetAsNdarray(int index) {
     case IREE_HAL_ELEMENT_TYPE_FLOAT_64:
       dtype_code = "d";
       break;
+    case IREE_HAL_ELEMENT_TYPE_VALUE(IREE_HAL_NUMERICAL_TYPE_INTEGER_SIGNED, 1):
+      // Due to layering issues it is not uncommon to get i1 buffer views
+      // and we just silently promote them to i8 since that is what they are.
+      // Really i1 should not exist at this boundary.
+      dtype_code = "b";
+      break;
     default:
       throw RaiseValueError("Unsupported VM Buffer -> numpy dtype mapping");
   }
@@ -442,6 +389,20 @@ py::object VmVariantList::GetAsNdarray(int index) {
 
 namespace {
 
+static std::string ToHexString(const uint8_t* data, size_t length) {
+  static constexpr char kHexChars[] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                                       '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+  std::string s(length * 2, ' ');
+  for (size_t i = 0; i < length; ++i) {
+    s[2 * i + 0] = kHexChars[(data[i] & 0xF0) >> 4];
+    s[2 * i + 1] = kHexChars[(data[i] & 0x0F) >> 0];
+  }
+  return s;
+}
+static std::string ToHexString(uint32_t value) {
+  return ToHexString((const uint8_t*)&value, sizeof(value));
+}
+
 void AppendListContents(std::string& out, iree_vm_list_t* list,
                         std::unordered_set<iree_vm_list_t*>& visited) {
   for (iree_host_size_t i = 0, e = iree_vm_list_size(list); i < e; ++i) {
@@ -455,24 +416,27 @@ void AppendListContents(std::string& out, iree_vm_list_t* list,
     if (i > 0) out.append(", ");
 
     if (iree_vm_variant_is_value(variant)) {
-      absl::StrAppend(&out, variant.i32);
+      out += std::to_string(variant.i32);
     } else if (iree_vm_variant_is_ref(variant)) {
       // Pretty print a subset of ABI impacting known types.
       if (iree_hal_buffer_isa(variant.ref)) {
         auto* hal_buffer = iree_hal_buffer_deref(variant.ref);
         assert(hal_buffer);
-        absl::StrAppend(&out, "HalBuffer(",
-                        iree_hal_buffer_byte_length(hal_buffer), ")");
+        out += std::string("HalBuffer(") +
+               std::to_string(iree_hal_buffer_byte_length(hal_buffer)) + ")";
       } else if (iree_hal_buffer_view_isa(variant.ref)) {
         auto hal_bv = iree_hal_buffer_view_deref(variant.ref);
-        absl::StrAppend(&out, "HalBufferView(");
-        absl::InlinedVector<int32_t, 5> shape(
-            iree_hal_buffer_view_shape_rank(hal_bv));
+        out += "HalBufferView(";
+        std::vector<int32_t> shape(iree_hal_buffer_view_shape_rank(hal_bv));
         iree_hal_buffer_view_shape(hal_bv, shape.size(), shape.data(), nullptr);
-        absl::StrAppend(&out, absl::StrJoin(shape, "x"), ":0x",
-                        absl::Hex(static_cast<uint32_t>(
-                            iree_hal_buffer_view_element_type(hal_bv))),
-                        ")");
+        for (size_t i = 0; i < shape.size(); ++i) {
+          if (i > 0) out += 'x';
+          out += std::to_string(shape[i]);
+        }
+        out += ":0x" +
+               ToHexString(static_cast<uint32_t>(
+                   iree_hal_buffer_view_element_type(hal_bv))) +
+               ")";
       } else if (iree_vm_list_isa(variant.ref)) {
         out.append("List[");
         iree_vm_list_t* sub_list = iree_vm_list_deref(variant.ref);
@@ -483,7 +447,7 @@ void AppendListContents(std::string& out, iree_vm_list_t* list,
         }
         out.append("]");
       } else {
-        absl::StrAppend(&out, "Unknown(", variant.type.ref_type, ")");
+        out += "Unknown(" + std::to_string(variant.type.ref_type) + ")";
       }
     } else {
       out.append("None");
@@ -497,8 +461,8 @@ std::string VmVariantList::DebugString() const {
   // The variant list API requires mutability, so we const cast to it internally
   // so we can maintain a const DebugString() for callers.
   auto mutable_this = const_cast<VmVariantList*>(this);
-  std::string s;
-  absl::StrAppend(&s, "<VmVariantList(", size(), "): [");
+  std::string s =
+      std::string("<VmVariantList(") + std::to_string(size()) + "): [";
   iree_vm_list_t* list = mutable_this->raw_ptr();
   std::unordered_set<iree_vm_list_t*> visited;
   visited.insert(list);
@@ -510,13 +474,9 @@ std::string VmVariantList::DebugString() const {
 void SetupVmBindings(pybind11::module m) {
   IREE_CHECK_OK(iree_vm_register_builtin_types());
   IREE_CHECK_OK(iree_hal_module_register_types());
-  IREE_CHECK_OK(iree_tensorlist_module_register_types());
-  IREE_CHECK_OK(iree_strings_module_register_types());
 
   // Built-in module creation.
   m.def("create_hal_module", &CreateHalModule);
-  m.def("create_strings_module", &CreateStringsModule);
-  m.def("create_tensorlist_module", &CreateTensorListModule);
 
   py::enum_<enum iree_vm_function_linkage_e>(m, "Linkage")
       .value("INTERNAL", IREE_VM_FUNCTION_LINKAGE_INTERNAL)
@@ -564,11 +524,9 @@ void SetupVmBindings(pybind11::module m) {
 
   py::class_<VmContext>(m, "VmContext")
       .def(py::init(&VmContext::Create), py::arg("instance"),
-           py::arg("modules") = absl::optional<std::vector<VmModule*>>())
+           py::arg("modules") = std::optional<std::vector<VmModule*>>())
       .def("register_modules", &VmContext::RegisterModules)
       .def_property_readonly("context_id", &VmContext::context_id)
-      .def("create_function_abi", &VmContext::CreateFunctionAbi,
-           py::arg("device"), py::arg("host_type_factory"), py::arg("f"))
       .def("invoke", &VmContext::Invoke);
 
   py::class_<VmModule>(m, "VmModule")

@@ -12,38 +12,6 @@ iree_add_all_subdirs()
 
 iree_cc_library(
   NAME
-    arena
-  HDRS
-    "arena.h"
-  SRCS
-    "arena.c"
-  DEPS
-    iree::base
-    iree::base::core_headers
-    iree::base::internal::atomic_slist
-    iree::base::internal::synchronization
-  PUBLIC
-)
-
-iree_cc_library(
-  NAME
-    event_pool
-  HDRS
-    "event_pool.h"
-  SRCS
-    "event_pool.c"
-  DEPS
-    iree::base
-    iree::base::core_headers
-    iree::base::internal
-    iree::base::internal::synchronization
-    iree::base::internal::wait_handle
-    iree::base::tracing
-  PUBLIC
-)
-
-iree_cc_library(
-  NAME
     executable_library
   HDRS
     "executable_library.h"
@@ -61,6 +29,7 @@ iree_cc_test(
     iree::base
     iree::base::internal::flags
     iree::base::tracing
+    iree::hal
     iree::hal::local::loaders::embedded_library_loader
     iree::testing::benchmark
 )
@@ -121,16 +90,35 @@ iree_cc_library(
     "sync_event.c"
     "sync_semaphore.c"
   DEPS
-    ::arena
     ::local
+    iree::base
+    iree::base::core_headers
+    iree::base::internal
+    iree::base::internal::arena
+    iree::base::internal::synchronization
+    iree::base::tracing
+    iree::hal
+  PUBLIC
+)
+
+if(NOT ${IREE_ENABLE_THREADING})
+  return()
+endif()
+
+iree_cc_library(
+  NAME
+    event_pool
+  HDRS
+    "event_pool.h"
+  SRCS
+    "event_pool.c"
+  DEPS
     iree::base
     iree::base::core_headers
     iree::base::internal
     iree::base::internal::synchronization
     iree::base::internal::wait_handle
     iree::base::tracing
-    iree::hal
-    iree::task
   PUBLIC
 )
 
@@ -154,12 +142,13 @@ iree_cc_library(
     "task_queue_state.c"
     "task_semaphore.c"
   DEPS
-    ::arena
     ::event_pool
+    ::executable_library
     ::local
     iree::base
     iree::base::core_headers
     iree::base::internal
+    iree::base::internal::arena
     iree::base::internal::synchronization
     iree::base::internal::wait_handle
     iree::base::tracing

@@ -1,21 +1,25 @@
-# Copyright 2020 Google LLC
+# Copyright 2020 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+load("//iree:build_defs.oss.bzl", "iree_cmake_extra_content")
 
 package(
     default_visibility = ["//visibility:public"],
     features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
+)
+
+iree_cmake_extra_content(
+    content = """
+# Task-based executor requires threading support.
+if(NOT ${IREE_ENABLE_THREADING})
+  return()
+endif()
+""",
+    inline = True,
 )
 
 cc_library(
@@ -44,6 +48,7 @@ cc_library(
         "task.c",
         "task_impl.h",
         "topology.c",
+        "topology_cpuinfo.c",
         "worker.c",
         "worker.h",
     ],
@@ -57,6 +62,7 @@ cc_library(
         "submission.h",
         "task.h",
         "topology.h",
+        "topology_cpuinfo.h",
         "tuning.h",
     ],
     deps = [
@@ -79,7 +85,7 @@ cc_test(
     deps = [
         ":task",
         "//iree/base",
-        "//iree/base:core_headers",
+        "//iree/base:tracing",
         "//iree/base/internal:prng",
         "//iree/task/testing:test_util",
         "//iree/testing:gtest",
@@ -160,6 +166,17 @@ cc_test(
 cc_test(
     name = "topology_test",
     srcs = ["topology_test.cc"],
+    deps = [
+        ":task",
+        "//iree/base",
+        "//iree/testing:gtest",
+        "//iree/testing:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "topology_cpuinfo_test",
+    srcs = ["topology_cpuinfo_test.cc"],
     tags = [
         "noasan",  # TODO(benvanik): Does not work on machines with large numbers of cores.
     ],
@@ -168,6 +185,5 @@ cc_test(
         "//iree/base",
         "//iree/testing:gtest",
         "//iree/testing:gtest_main",
-        "@cpuinfo",
     ],
 )

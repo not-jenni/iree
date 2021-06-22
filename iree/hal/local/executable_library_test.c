@@ -1,20 +1,13 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/hal/local/executable_library.h"
 
-#include <assert.h>
+#include <stdbool.h>
+#include <string.h>
 
 #include "iree/base/api.h"
 #include "iree/hal/local/executable_library_demo.h"
@@ -50,7 +43,7 @@ int main(int argc, char** argv) {
       "expecting the library to have the same or older version as us");
   IREE_ASSERT(strcmp(header->name, "demo_library") == 0,
               "library name can be used to rendezvous in a registry");
-  IREE_ASSERT_GT(library.v0->entry_point_count, 0,
+  IREE_ASSERT_GT(library.v0->exports.count, 0,
                  "expected at least one entry point");
 
   // Push constants are an array of 4-byte values that are much more efficient
@@ -78,7 +71,7 @@ int main(int argc, char** argv) {
 
   // Resolve the entry point by ordinal.
   const iree_hal_executable_dispatch_v0_t entry_fn_ptr =
-      library.v0->entry_points[0];
+      library.v0->exports.ptrs[0];
 
   // Dispatch each workgroup with the same state.
   iree_hal_executable_dispatch_state_v0_t dispatch_state = {
@@ -89,14 +82,16 @@ int main(int argc, char** argv) {
       .binding_count = IREE_ARRAYSIZE(binding_ptrs),
       .binding_ptrs = binding_ptrs,
       .binding_lengths = binding_lengths,
-      .imports = NULL,  // not yet implemented
+      .import_thunk = NULL,  // not yet implemented
+      .imports = NULL,       // not yet implemented
   };
   for (uint32_t z = 0; z < dispatch_state.workgroup_count.z; ++z) {
     for (uint32_t y = 0; y < dispatch_state.workgroup_count.y; ++y) {
       for (uint32_t x = 0; x < dispatch_state.workgroup_count.x; ++x) {
         // Invoke the workgroup (x, y, z).
         iree_hal_vec3_t workgroup_id = {{x, y, z}};
-        int ret = entry_fn_ptr(&dispatch_state, &workgroup_id);
+        int ret = entry_fn_ptr(&dispatch_state, &workgroup_id,
+                               /*local_memory=*/NULL);
         IREE_ASSERT_EQ(
             ret, 0,
             "if we have bounds checking enabled the executable will signal "

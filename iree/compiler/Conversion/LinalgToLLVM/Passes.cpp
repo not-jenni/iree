@@ -1,20 +1,12 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "iree/compiler/Conversion/Common/Passes.h"
+#include "iree/compiler/Conversion/Passes.h"
 
-#include "iree/compiler/Conversion/LinalgToLLVM/Passes.h"
+#include "iree/compiler/Conversion/PassDetail.h"
 #include "iree/compiler/Dialect/Shape/Transforms/Passes.h"
 #include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
 #include "mlir/Dialect/Linalg/Passes.h"
@@ -25,6 +17,11 @@
 namespace mlir {
 namespace iree_compiler {
 
+static llvm::cl::opt<bool> clUseTensorPadTileAndVectorize(
+    "iree-codegen-linalg-to-llvm-use-tensor-to-vectors",
+    llvm::cl::desc("If enabled will use tensor -> vector transformation pass"),
+    llvm::cl::init(false));
+
 static Value cpuAllocationFunction(OpBuilder &builder, Location loc,
                                    ArrayRef<int64_t> staticShape,
                                    Type elementType,
@@ -34,77 +31,76 @@ static Value cpuAllocationFunction(OpBuilder &builder, Location loc,
 }
 
 void addCPUVectorizationPassPipeline(OpPassManager &passManager,
-                                     LLVMCodegenOptions options) {
-  OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
-  nestedModulePM.addPass(createCanonicalizerPass());
+                                     bool lowerToVectors) {
+  passManager.addPass(createCanonicalizerPass());
 
   // TODO(ataei): This causes segmentation fault on Android. Fix it and
   // re-enable.
-  // nestedModulePM.addNestedPass<FuncOp>(createPadLinalgWorkgroupTilesPass());
+  // passManager.addNestedPass<FuncOp>(createPadLinalgWorkgroupTilesPass());
 
-  // TODO(ataei): We want to enable when tensor -> vector pass is fully
-  // supported which requires first moving vector-tiling before this step.
-  if (options.useLinalgOnTensorsToVectors) {
-    nestedModulePM.addNestedPass<FuncOp>(createLinalgVectorizePass());
+  if (clUseTensorPadTileAndVectorize) {
+    // Tile and vectorize linalg ops on tensors.
+    passManager.addNestedPass<FuncOp>(
+        createLinalgToLLVMTilePadAndVectorizeWorkgroupsPass());
+    passManager.addNestedPass<FuncOp>(createCSEPass());
+    passManager.addNestedPass<FuncOp>(createCanonicalizerPass());
   }
+
   // Use stack allocation on CPU side.
-  addLinalgBufferizePasses(nestedModulePM, cpuAllocationFunction);
+  addLinalgBufferizePasses(passManager, cpuAllocationFunction);
+  passManager.addNestedPass<FuncOp>(createCSEPass());
+  passManager.addNestedPass<FuncOp>(createCanonicalizerPass());
 
-  // Tile and vectorize linalg ops.
-  nestedModulePM.addNestedPass<FuncOp>(createCanonicalizerPass());
-  nestedModulePM.addNestedPass<FuncOp>(
-      createLinalgTileAndVectorizeWorkgroupsPass());
-  nestedModulePM.addNestedPass<FuncOp>(createCanonicalizerPass());
-  nestedModulePM.addNestedPass<FuncOp>(createForOpCanonicalizationPass());
+  if (!clUseTensorPadTileAndVectorize) {
+    // Tile and vectorize linalg ops on buffers.
+    passManager.addNestedPass<FuncOp>(
+        createLinalgToLLVMWorkgroupsVectorizationPass(lowerToVectors));
+    passManager.addNestedPass<FuncOp>(createCSEPass());
+    passManager.addNestedPass<FuncOp>(createCanonicalizerPass());
+  }
 
-  nestedModulePM.addNestedPass<FuncOp>(createPlanConvLoopOrderPass());
+  passManager.addNestedPass<FuncOp>(createForOpCanonicalizationPass());
+
+  passManager.addNestedPass<FuncOp>(createLinalgToLLVMPlanConvLoopOrderPass());
 }
 
-void addCPUDefaultPassPipeline(OpPassManager &passManager,
-                               LLVMCodegenOptions options) {
-  OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
-  nestedModulePM.addPass(createCanonicalizerPass());
+void addCPUDefaultPassPipeline(OpPassManager &passManager) {
+  passManager.addPass(createCanonicalizerPass());
   // Use stack allocation on CPU side.
-  addLinalgBufferizePasses(nestedModulePM, cpuAllocationFunction);
-  nestedModulePM.addNestedPass<FuncOp>(createPlanConvLoopOrderPass());
+  addLinalgBufferizePasses(passManager, cpuAllocationFunction);
+  passManager.addNestedPass<FuncOp>(createLinalgToLLVMPlanConvLoopOrderPass());
 }
 
-void addLowerToLLVMPasses(OpPassManager &passManager,
-                          LLVMCodegenOptions options) {
-  OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
+static void addLowerToLLVMPasses(
+    OpPassManager &passManager,
+    const LLVMTransformPassPipelineOptions &options) {
   // Linalg -> SCF
-  nestedModulePM.addNestedPass<FuncOp>(createConvertLinalgToLoopsPass());
-  nestedModulePM.addNestedPass<FuncOp>(createCanonicalizerPass());
-  nestedModulePM.addNestedPass<FuncOp>(createCSEPass());
+  passManager.addNestedPass<FuncOp>(createConvertLinalgToLoopsPass());
+  passManager.addNestedPass<FuncOp>(createCanonicalizerPass());
+  passManager.addNestedPass<FuncOp>(createCSEPass());
 
   // SCF -> STD
-  nestedModulePM.addNestedPass<FuncOp>(createLowerToCFGPass());
-  nestedModulePM.addNestedPass<FuncOp>(createCanonicalizerPass());
-  nestedModulePM.addNestedPass<FuncOp>(createCSEPass());
+  passManager.addNestedPass<FuncOp>(createLowerToCFGPass());
+  passManager.addNestedPass<FuncOp>(createCanonicalizerPass());
+  passManager.addNestedPass<FuncOp>(createCSEPass());
 
   // Handled tensor-type constants.
-  nestedModulePM.addPass(createTensorConstantBufferizePass());
-  nestedModulePM.addPass(createFoldTensorExtractOpPass());
+  passManager.addPass(createTensorConstantBufferizePass());
+  passManager.addPass(createFoldTensorExtractOpPass());
 
   // (HAL, IREE, Linalg, STD) -> LLVM
-  nestedModulePM.addPass(createConvertToLLVMPass(options));
+  passManager.addPass(createConvertToLLVMPass());
 
-  nestedModulePM.addPass(createCanonicalizerPass());
-  nestedModulePM.addPass(createCSEPass());
+  passManager.addPass(createCanonicalizerPass());
+  passManager.addPass(createCSEPass());
 }
 
-void buildLLVMTransformPassPipeline(OpPassManager &passManager,
-                                    LLVMCodegenOptions options) {
-  passManager.addPass(createLowerExecutableTargetPass(options));
+void buildLLVMTransformPassPipeline(
+    OpPassManager &passManager,
+    const LLVMTransformPassPipelineOptions &options) {
+  OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
+  addLowerToLLVMPasses(nestedModulePM, options);
 }
-
-static PassPipelineRegistration<> linalgLLVMVPipeline(
-    "iree-codegen-linalg-to-llvm-pipeline",
-    "Runs the progressive lowering pipeline from Linalg to LLVM",
-    [](OpPassManager &passManager) {
-      buildLLVMTransformPassPipeline(passManager,
-                                     getLLVMCodegenOptionsFromClOptions());
-    });
 
 }  // namespace iree_compiler
 }  // namespace mlir

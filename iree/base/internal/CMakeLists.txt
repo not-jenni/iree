@@ -20,6 +20,7 @@ iree_cc_library(
     "math.h"
   SRCS
     "atomics_clang.h"
+    "atomics_disabled.h"
     "atomics_gcc.h"
     "atomics_msvc.h"
   DEPS
@@ -48,6 +49,22 @@ iree_cc_test(
     ::internal
     iree::testing::gtest
     iree::testing::gtest_main
+)
+
+iree_cc_library(
+  NAME
+    arena
+  HDRS
+    "arena.h"
+  SRCS
+    "arena.c"
+  DEPS
+    ::atomic_slist
+    ::synchronization
+    iree::base
+    iree::base::core_headers
+    iree::base::tracing
+  PUBLIC
 )
 
 iree_cc_library(
@@ -113,6 +130,8 @@ iree_cc_test(
     "file_io_test.cc"
   DEPS
     ::file_io
+    iree::base::cc
+    iree::base::logging
     iree::testing::gtest
     iree::testing::gtest_main
 )
@@ -164,7 +183,7 @@ iree_cc_binary(
     "flags_demo.c"
   DEPS
     ::flags
-    iree::base::core_headers
+    iree::base
 )
 
 iree_lit_test_suite(
@@ -225,6 +244,7 @@ iree_cc_test(
   DEPS
     ::fpu_state
     benchmark
+    iree::base
     iree::testing::benchmark_main
 )
 
@@ -277,18 +297,9 @@ iree_cc_test(
 
 iree_cc_library(
   NAME
-    status_internal
+    span
   HDRS
-    "status.h"
-    "statusor.h"
-  SRCS
-    "status.cc"
-    "statusor.cc"
-  DEPS
-    absl::utility
-    iree::base
-    iree::base::core_headers
-    iree::base::logging
+    "span.h"
   PUBLIC
 )
 
@@ -340,6 +351,10 @@ iree_cc_test(
     iree::testing::gtest_main
 )
 
+if(NOT ${IREE_ENABLE_THREADING})
+  return()
+endif()
+
 iree_cc_library(
   NAME
     threading
@@ -367,8 +382,10 @@ iree_cc_test(
     "threading_impl.h"
     "threading_test.cc"
   DEPS
+    ::internal
     ::synchronization
     ::threading
+    iree::base::cc
     iree::testing::gtest
     iree::testing::gtest_main
 )

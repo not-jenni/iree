@@ -74,12 +74,12 @@ iree_cc_library(
     ::dynamic_symbols
     Vulkan::Headers
     iree::base
+    iree::base::cc
     iree::base::core_headers
     iree::base::internal
     iree::base::internal::flatcc
     iree::base::internal::synchronization
     iree::base::logging
-    iree::base::status
     iree::base::tracing
     iree::hal
     iree::hal::vulkan::util::arena
@@ -102,9 +102,10 @@ iree_cc_library(
     "vulkan_headers.h"
   DEPS
     Vulkan::Headers
+    iree::base
+    iree::base::cc
     iree::base::core_headers
     iree::base::internal::dynamic_library
-    iree::base::status
     iree::base::tracing
     iree::hal::vulkan::util::ref_ptr
   PUBLIC
@@ -117,6 +118,7 @@ iree_cc_test(
     "dynamic_symbols_test.cc"
   DEPS
     ::dynamic_symbols
+    iree::base
     iree::testing::gtest
     iree::testing::gtest_main
   LABELS

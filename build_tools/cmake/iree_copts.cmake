@@ -1,30 +1,8 @@
-# Copyright 2019 Google LLC
+# Copyright 2019 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-#-------------------------------------------------------------------------------
-# Abseil configuration
-#-------------------------------------------------------------------------------
-
-include(AbseilConfigureCopts)
-
-# By default Abseil strips string literals on mobile platforms, which means
-# we cannot run IREE binaries via command-line with proper options. Turn off
-# the stripping.
-# TODO(#3814): remove ABSL flags.
-if(ANDROID)
-  add_definitions(-DABSL_FLAGS_STRIP_NAMES=0)
-endif()
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #-------------------------------------------------------------------------------
 # C/C++ options as used within IREE
@@ -297,7 +275,7 @@ if(CMAKE_CXX_FLAGS AND "${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
   string(REPLACE "/GR" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 endif()
 
-if(NOT ANDROID)
+if(NOT ANDROID AND ${IREE_ENABLE_THREADING})
   iree_select_compiler_opts(_IREE_PTHREADS_LINKOPTS
     CLANG_OR_GCC
       "-lpthread"
@@ -314,16 +292,24 @@ if(ANDROID)
   )
 endif()
 
+if(NOT ${CMAKE_SYSTEM_NAME} STREQUAL "Generic")
+# If building for a known OS, link against libdl for dynamic library support.
+# Generic systems may not support dynamic libraries.
+  iree_select_compiler_opts(_IREE_DL_LINKOPTS
+  CLANG_OR_GCC
+    "-ldl"
+  )
+endif()
+
 iree_select_compiler_opts(IREE_DEFAULT_LINKOPTS
-  ALL
-    # TODO(benvanik): remove the ABSL usage here; we aren't abseil.
-    "${ABSL_DEFAULT_LINKOPTS}"
   CLANG_OR_GCC
     # Required by all modern software, effectively:
-    "-ldl"
     "-lm"
+    ${_IREE_DL_LINKOPTS}
     ${_IREE_PTHREADS_LINKOPTS}
     ${_IREE_LOGGING_LINKOPTS}
+  MSVC
+    "-natvis:${CMAKE_SOURCE_DIR}/iree/iree.natvis"
 )
 
 # Add to LINKOPTS on a binary to configure it for X/Wayland/Windows/etc
@@ -333,9 +319,6 @@ if(${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
 else()
   set(IREE_TARGET_GUI_LINKOPTS "")
 endif()
-
-# TODO(benvanik): remove the ABSL usage here; we aren't abseil.
-set(IREE_TEST_COPTS "${ABSL_TEST_COPTS}")
 
 #-------------------------------------------------------------------------------
 # Size-optimized build flags
@@ -446,12 +429,8 @@ set(LLVM_ENABLE_IDE ON CACHE BOOL "" FORCE)
 set(LLVM_TARGETS_TO_BUILD "WebAssembly;X86;ARM;AArch64;RISCV;NVPTX;AMDGPU"
     CACHE STRING "" FORCE)
 
-set(LLVM_ENABLE_PROJECTS "mlir" CACHE STRING "" FORCE)
+set(LLVM_ENABLE_PROJECTS "mlir;lld" CACHE STRING "" FORCE)
 set(LLVM_ENABLE_BINDINGS OFF CACHE BOOL "" FORCE)
-
-if(IREE_USE_LINKER)
-  set(LLVM_USE_LINKER ${IREE_USE_LINKER} CACHE STRING "" FORCE)
-endif()
 
 set(MLIR_TABLEGEN_EXE mlir-tblgen)
 # iree-tblgen is not defined using the add_tablegen mechanism as other TableGen

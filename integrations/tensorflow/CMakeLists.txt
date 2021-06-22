@@ -1,16 +1,8 @@
-# Copyright 2020 Google LLC
+# Copyright 2020 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 # TensorFlow builds through bazel, and IREE maintains all of its TensorFlow
 # dependent code under this directory tree. The CMake support is limited to
@@ -73,7 +65,11 @@ if(${IREE_BUILD_PYTHON_BINDINGS})
 endif()
 
 if(${IREE_BUILD_TESTS} AND ${IREE_BUILD_PYTHON_BINDINGS})
-  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/e2e/")
-  include(iree_e2e_cartesian_product_test_suite)
-  add_subdirectory(e2e)
+  if(${IREE_ENABLE_NEW_INTEGRATION_TESTS})
+    add_subdirectory(test)
+  else()
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/e2e/")
+    include(iree_e2e_cartesian_product_test_suite)
+    add_subdirectory(e2e)
+  endif()
 endif()

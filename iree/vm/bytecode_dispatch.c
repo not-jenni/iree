@@ -1,23 +1,18 @@
-// Copyright 2019 Google LLC
+// Copyright 2019 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
+#include "iree/base/api.h"
 #include "iree/base/internal/math.h"
-#include "iree/base/tracing.h"
 #include "iree/vm/api.h"
 #include "iree/vm/bytecode_dispatch_util.h"
+#include "iree/vm/bytecode_module_impl.h"
 #include "iree/vm/ops.h"
 
 //===----------------------------------------------------------------------===//
@@ -261,7 +256,8 @@ static iree_status_t iree_vm_bytecode_external_leave(
         p += sizeof(int64_t);
       } break;
       case IREE_VM_CCONV_TYPE_REF: {
-        iree_vm_ref_move(
+        iree_vm_ref_retain_or_move(
+            src_reg & IREE_REF_REGISTER_MOVE_BIT,
             &callee_registers->ref[src_reg & callee_registers->ref_mask],
             (iree_vm_ref_t*)p);
         p += sizeof(iree_vm_ref_t);
@@ -1235,12 +1231,16 @@ iree_status_t iree_vm_bytecode_dispatch(
         // Select LHS.
         IREE_RETURN_IF_ERROR(iree_vm_ref_retain_or_move_checked(
             true_value_is_move, true_value, type_def->ref_type, result));
-        if (false_value_is_move) iree_vm_ref_release(false_value);
+        if (false_value_is_move && false_value != result) {
+          iree_vm_ref_release(false_value);
+        }
       } else {
         // Select RHS.
         IREE_RETURN_IF_ERROR(iree_vm_ref_retain_or_move_checked(
             false_value_is_move, false_value, type_def->ref_type, result));
-        if (true_value_is_move) iree_vm_ref_release(true_value);
+        if (true_value_is_move && true_value != result) {
+          iree_vm_ref_release(true_value);
+        }
       }
     });
 
@@ -1340,7 +1340,7 @@ iree_status_t iree_vm_bytecode_dispatch(
       bool rhs_is_move;
       iree_vm_ref_t* rhs = VM_DecOperandRegRef("rhs", &rhs_is_move);
       int32_t* result = VM_DecResultRegI32("result");
-      *result = iree_vm_ref_equal(lhs, rhs);
+      *result = vm_cmp_eq_ref(lhs, rhs);
       if (lhs_is_move) iree_vm_ref_release(lhs);
       if (rhs_is_move) iree_vm_ref_release(rhs);
     });
@@ -1350,7 +1350,7 @@ iree_status_t iree_vm_bytecode_dispatch(
       bool rhs_is_move;
       iree_vm_ref_t* rhs = VM_DecOperandRegRef("rhs", &rhs_is_move);
       int32_t* result = VM_DecResultRegI32("result");
-      *result = !iree_vm_ref_equal(lhs, rhs);
+      *result = vm_cmp_ne_ref(lhs, rhs);
       if (lhs_is_move) iree_vm_ref_release(lhs);
       if (rhs_is_move) iree_vm_ref_release(rhs);
     });
@@ -1358,7 +1358,7 @@ iree_status_t iree_vm_bytecode_dispatch(
       bool operand_is_move;
       iree_vm_ref_t* operand = VM_DecOperandRegRef("operand", &operand_is_move);
       int32_t* result = VM_DecResultRegI32("result");
-      *result = operand->ptr != NULL ? 1 : 0;
+      *result = vm_cmp_nz_ref(operand);
       if (operand_is_move) iree_vm_ref_release(operand);
     });
 

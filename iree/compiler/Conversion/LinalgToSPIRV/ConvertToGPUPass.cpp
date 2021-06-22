@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 //===- ConvertToGPUPass.cpp -----------------------------------------------===//
 //
@@ -21,13 +13,14 @@
 #include <array>
 #include <numeric>
 
-#include "iree/compiler/Conversion/CodegenUtils/FunctionUtils.h"
-#include "iree/compiler/Conversion/CodegenUtils/MarkerUtils.h"
-#include "iree/compiler/Conversion/Common/Transforms.h"
 #include "iree/compiler/Conversion/LinalgToSPIRV/KernelDispatchUtils.h"
 #include "iree/compiler/Conversion/LinalgToSPIRV/MemorySpace.h"
-#include "iree/compiler/Conversion/LinalgToSPIRV/Passes.h"
 #include "iree/compiler/Conversion/LinalgToSPIRV/Utils.h"
+#include "iree/compiler/Conversion/PassDetail.h"
+#include "iree/compiler/Conversion/Passes.h"
+#include "iree/compiler/Conversion/Transforms/Transforms.h"
+#include "iree/compiler/Conversion/Utils/MarkerUtils.h"
+#include "iree/compiler/Conversion/Utils/Utils.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/Shape/IR/ShapeDialect.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
@@ -448,12 +441,11 @@ static Optional<int64_t> getLinearizedCopySize(linalg::CopyOp copyOp) {
 
 namespace {
 /// Pass to convert from tiled and fused linalg ops into gpu.func.
-struct ConvertToGPUPass
-    : public PassWrapper<ConvertToGPUPass,
-                         OperationPass<IREE::HAL::ExecutableTargetOp>> {
+struct LinalgToSPIRVConvertToGPUPass
+    : public LinalgToSPIRVConvertToGPUBase<LinalgToSPIRVConvertToGPUPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<AffineDialect, gpu::GPUDialect, scf::SCFDialect,
-                    ShapeDialect>();
+    registry.insert<AffineDialect, gpu::GPUDialect, memref::MemRefDialect,
+                    scf::SCFDialect, ShapeDialect>();
   }
   void runOnOperation() override;
 };
@@ -652,7 +644,7 @@ void populateTileAndDistributeLinalgCopyPatterns(
   patterns.insert<TileAndDistributeCopyOp>(context);
 }
 
-void ConvertToGPUPass::runOnOperation() {
+void LinalgToSPIRVConvertToGPUPass::runOnOperation() {
   MLIRContext *context = &getContext();
   ConversionTarget target(*context);
   // After this pass Linalg and scf.parallel ops should be gone.
@@ -661,7 +653,7 @@ void ConvertToGPUPass::runOnOperation() {
   // Reshape ops are treated legal since they just change the way the underlying
   // buffer is viewed. These are legalized downstream. They become no ops when
   // lowering to SPIR-V since the SPIR-V code uses linearized arrays.
-  target.addLegalOp<linalg::ReshapeOp>();
+  target.addLegalOp<linalg::CollapseShapeOp, linalg::ExpandShapeOp>();
   // Let the rest fall through.
   target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
@@ -670,7 +662,6 @@ void ConvertToGPUPass::runOnOperation() {
   patterns.insert<MapLinalgOpToGlobalInvocationId<linalg::CopyOp>,
                   MapLinalgOpToGlobalInvocationId<linalg::FillOp>,
                   MapLinalgOpToGlobalInvocationId<linalg::GenericOp>,
-                  MapLinalgOpToGlobalInvocationId<linalg::IndexedGenericOp>,
                   SerializeAndDistributeCopy>(context);
   FrozenRewritePatternSet frozenPatterns(std::move(patterns));
 
@@ -687,13 +678,9 @@ void ConvertToGPUPass::runOnOperation() {
 }
 
 std::unique_ptr<OperationPass<IREE::HAL::ExecutableTargetOp>>
-createConvertToGPUPass() {
-  return std::make_unique<ConvertToGPUPass>();
+createLinalgToSPIRVConvertToGPUPass() {
+  return std::make_unique<LinalgToSPIRVConvertToGPUPass>();
 }
-
-static PassRegistration<ConvertToGPUPass> pass(
-    "iree-codegen-convert-to-gpu", "Map tiled linalg and loop ops to GPU",
-    [] { return std::make_unique<ConvertToGPUPass>(); });
 
 }  // namespace iree_compiler
 }  // namespace mlir

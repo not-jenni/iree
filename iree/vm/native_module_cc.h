@@ -1,16 +1,8 @@
-// Copyright 2019 Google LLC
+// Copyright 2019 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #ifndef IREE_VM_NATIVE_MODULE_CC_H_
 #define IREE_VM_NATIVE_MODULE_CC_H_
@@ -18,12 +10,11 @@
 #include <cstring>
 #include <memory>
 
-#include "absl/strings/str_cat.h"
-#include "absl/types/span.h"
 #include "iree/base/api.h"
-#include "iree/base/status.h"
+#include "iree/base/internal/span.h"
+#include "iree/base/status_cc.h"
 #include "iree/vm/module.h"
-#include "iree/vm/module_abi_packing.h"  // IWYU pragma: export
+#include "iree/vm/native_module_packing.h"  // IWYU pragma: export
 #include "iree/vm/stack.h"
 
 #ifndef __cplusplus
@@ -41,7 +32,7 @@ namespace vm {
 // Functions are defined on the State type as member functions returning either
 // Status or StatusOr. Arguments are passed as primitive types (int32_t),
 // wrapped ref objects (vm::ref<my_type_t>&), or some nesting of std::array,
-// std::tuple, and absl::Span to match fixed-length arrays of the same type,
+// std::tuple, and std::span to match fixed-length arrays of the same type,
 // tuples of mixed types, or dynamic arrays (variadic arguments). Results may be
 // returned as either their type or an std::tuple/std::array of types.
 //
@@ -70,13 +61,13 @@ namespace vm {
 //   // Ownership transfers to the caller.
 //   iree_vm_module_t* create_my_module(iree_allocator_t allocator) {
 //     return std::make_unique<MyModule>("my_module", allocator,
-//         absl::MakeConstSpan(kCustomModuleFunctions)).release()->interface();
+//         std::span{kCustomModuleFunctions}).release()->interface();
 //   }
 template <typename State>
 class NativeModule {
  public:
   NativeModule(const char* name, iree_allocator_t allocator,
-               absl::Span<const NativeFunction<State>> dispatch_table)
+               iree::span<const NativeFunction<State>> dispatch_table)
       : name_(name), allocator_(allocator), dispatch_table_(dispatch_table) {
     IREE_CHECK_OK(iree_vm_module_initialize(&interface_, this));
     interface_.destroy = NativeModule::ModuleDestroy;
@@ -250,7 +241,7 @@ class NativeModule {
   const iree_allocator_t allocator_;
   iree_vm_module_t interface_;
 
-  const absl::Span<const NativeFunction<State>> dispatch_table_;
+  const iree::span<const NativeFunction<State>> dispatch_table_;
 };
 
 }  // namespace vm

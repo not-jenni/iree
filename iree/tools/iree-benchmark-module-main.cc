@@ -1,29 +1,31 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include <array>
+#include <cstdio>
+#include <iostream>
+#include <iterator>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "benchmark/benchmark.h"
+#include "iree/base/api.h"
 #include "iree/base/internal/file_io.h"
 #include "iree/base/internal/flags.h"
-#include "iree/base/status.h"
+#include "iree/base/status_cc.h"
 #include "iree/base/tracing.h"
+#include "iree/hal/api.h"
 #include "iree/hal/drivers/init.h"
-#include "iree/modules/hal/hal_module.h"
+#include "iree/modules/hal/module.h"
 #include "iree/tools/utils/vm_util.h"
 #include "iree/vm/api.h"
 #include "iree/vm/bytecode_module.h"
+#include "iree/vm/ref_cc.h"
 
 IREE_FLAG(string, module_file, "-",
           "File containing the module to load that contains the entry "
@@ -187,8 +189,12 @@ class IREEBenchmark {
 
     // Create IREE's device and module.
     IREE_RETURN_IF_ERROR(iree::CreateDevice(FLAG_driver, &device_));
-    IREE_RETURN_IF_ERROR(CreateHalModule(device_, &hal_module_));
-    IREE_RETURN_IF_ERROR(LoadBytecodeModule(module_data_, &input_module_));
+    IREE_RETURN_IF_ERROR(
+        iree_hal_module_create(device_, iree_allocator_system(), &hal_module_));
+    IREE_RETURN_IF_ERROR(iree_vm_bytecode_module_create(
+        iree_make_const_byte_span((void*)module_data_.data(),
+                                  module_data_.size()),
+        iree_allocator_null(), iree_allocator_system(), &input_module_));
 
     // Order matters. The input module will likely be dependent on the hal
     // module.
@@ -210,8 +216,11 @@ class IREEBenchmark {
         iree_string_view_t{function_name.data(), function_name.size()},
         &function));
 
-    IREE_CHECK_OK(ParseToVariantList(iree_hal_device_allocator(device_),
-                                     FLAG_function_inputs, &inputs_));
+    IREE_CHECK_OK(ParseToVariantList(
+        iree_hal_device_allocator(device_),
+        iree::span<const std::string>{FLAG_function_inputs.data(),
+                                      FLAG_function_inputs.size()},
+        &inputs_));
     RegisterModuleBenchmarks(function_name, context_, function, inputs_.get());
     return iree_ok_status();
   }

@@ -1,16 +1,8 @@
-// Copyright 2019 Google LLC
+// Copyright 2019 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/base/string_view.h"
 
@@ -218,6 +210,15 @@ IREE_API_EXPORT intptr_t iree_string_view_split(iree_string_view_t value,
     out_rhs->size = value.size - offset - 1;
   }
   return offset;
+}
+
+IREE_API_EXPORT void iree_string_view_replace_char(iree_string_view_t value,
+                                                   char old_char,
+                                                   char new_char) {
+  char* p = (char*)value.data;
+  for (iree_host_size_t i = 0; i < value.size; ++i) {
+    if (p[i] == old_char) p[i] = new_char;
+  }
 }
 
 static bool iree_string_view_match_pattern_impl(iree_string_view_t value,

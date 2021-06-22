@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/Flow/IR/FlowDialect.h"
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
@@ -205,9 +197,8 @@ static bool isInFusionGroup(Operation *op, unsigned targetGroup) {
 ///   across workgroups.
 /// - Dispatchable ops : These are ops that are not root operations, but still
 ///   perform some "meaningful" computation. Typically, fused element-wise
-///   operations, represented as linalg.generic/linalg.indexed_generic. These
-///   could be fused with root operations using tile + fuse, or could be in
-///   their own dispatch regions.
+///   operations, represented as linalg.generic. These could be fused with root
+///   operations using tile + fuse, or could be in their own dispatch regions.
 /// - Always fused dispatchable ops : These are ops that are chosen to always be
 ///   fused into dispatch regions that use their values, since when bufferized
 ///   they can be converted into being no-copy/aliasing operations. Examples of
@@ -269,7 +260,9 @@ static bool isDispatchableOp(Operation *op) {
 }
 
 static bool isAlwaysFusedIntoDispatchOp(Operation *op) {
-  return isDispatchableOp(op) && isa<linalg::TensorReshapeOp, SubTensorOp>(op);
+  return isDispatchableOp(op) &&
+         (isa<linalg::TensorCollapseShapeOp, SubTensorOp>(op) ||
+          isa<linalg::TensorExpandShapeOp, SubTensorOp>(op));
 }
 
 //===----------------------------------------------------------------------===//
@@ -367,7 +360,7 @@ static void pullInProducersInSameGroup(
         OpResult opResult = en.value().cast<OpResult>();
         auto maybeFusionInfo = linalg::fuseProducerOfTensor(
             rewriter, clonedOpToFuse->getResult(opResult.getResultNumber()),
-            tiledOp.getShapedOpOperand(en.index()));
+            *tiledOp.getInputAndOutputOperands()[en.index()]);
         if (!maybeFusionInfo.hasValue()) {
           DEBUG_WITH_TYPE(DEBUG_TYPE, llvm::dbgs()
                                           << "failed to fuse with tensor\n");
@@ -385,8 +378,8 @@ static void pullInProducersInSameGroup(
       // producer's operands and pull them in if they are marked to be fused
       // into the current group.
       if (fusedProducer) {
-        SmallVector<Value, 4> producerOperands =
-            cast<linalg::LinalgOp>(clonedOpToFuse).getShapedOperands();
+        SmallVector<Value> producerOperands =
+            cast<linalg::LinalgOp>(clonedOpToFuse).getInputAndOutputOperands();
         pullInProducersInSameGroup(rewriter, dispatchOp, fusedProducer,
                                    producerOperands, tiledLoops, groupNum);
       }
@@ -504,14 +497,6 @@ static void getUsedValuesDefinedAboveAfterCloningOps(
       valuesDefinedAbove.insert(outsideValue);
       continue;
     }
-    // Only clone if operation either has no operands, or the operation is in
-    // same basic block as the dispatch op. This could really be relaxed, but
-    // this is conservative for now.
-    if (definingOp->getNumOperands() != 0 &&
-        definingOp->getBlock() != dispatchOp->getBlock()) {
-      valuesDefinedAbove.insert(outsideValue);
-      continue;
-    }
     clonedOps.push_back(definingOp);
     worklist.append(definingOp->operand_begin(), definingOp->operand_end());
   }
@@ -557,7 +542,8 @@ static void tryToTieOperandsAndResults(
       return loadOp.source().cast<BlockArgument>();
     } else if (auto linalgOp = dyn_cast_or_null<linalg::LinalgOp>(tieOp)) {
       unsigned resultIndex = storeOp.value().cast<OpResult>().getResultNumber();
-      auto loadOp = linalgOp.getOutputTensors()[resultIndex]
+      auto loadOp = linalgOp.getOutputTensorOperands()[resultIndex]
+                        ->get()
                         .getDefiningOp<IREE::Flow::DispatchTensorLoadOp>();
       if (!loadOp) return nullptr;
       return loadOp.source().cast<BlockArgument>();
@@ -726,6 +712,12 @@ static Optional<SmallVector<SmallVector<Value, 4>, 1>> computeOutputShape(
   return outputShapes;
 }
 
+static bool hasOnlyDimUses(Operation *op) {
+  return llvm::all_of(op->getUsers(), [&](Operation *user) {
+    return isa<memref::DimOp>(user);
+  });
+}
+
 //===----------------------------------------------------------------------===//
 // Patterns that create the dispatch region.
 //===----------------------------------------------------------------------===//
@@ -747,6 +739,11 @@ struct TileAndDistributeOnTensorsPattern
     if (!linalgOp || !linalgOp.hasTensorSemantics()) return failure();
     IntegerAttr rootOpAttr = op->getAttrOfType<IntegerAttr>(kRootOpAttr);
     if (!rootOpAttr) return failure();
+
+    // TODO(ravishankarm): It is getting strange to track when to apply this
+    // pattern and when not to. Need to revisit this, with dynamic shape cases
+    // in mind.
+    if (hasOnlyDimUses(linalgOp)) return failure();
 
     // Compute workgroup count to use for the dispatch op. These are the ranges
     // of the outermost parallel loops that can be distributed.
@@ -798,11 +795,12 @@ struct TileAndDistributeOnTensorsPattern
       return failure();
     }
     // Keep track of the tiledOpOperands for fusion.
-    SmallVector<Value, 4> shapedOperands(clonedLinalgOp.getShapedOperands());
+    SmallVector<Value> tiledOperands =
+        clonedLinalgOp.getInputAndOutputOperands();
     rewriter.replaceOp(clonedLinalgOp, tiledLinalgOp.tensorResults);
 
     pullInProducersInSameGroup(rewriter, dispatchOp, tiledLinalgOp.op,
-                               shapedOperands, tiledLinalgOp.loops,
+                               tiledOperands, tiledLinalgOp.loops,
                                rootOpAttr.getInt());
 
     tiledLinalgOp.op.getOperation()->removeAttr(kRootOpAttr);
@@ -890,7 +888,7 @@ struct MakeDispatchWorkgroupsOp : public RewritePattern {
 
   LogicalResult matchAndRewrite(Operation *op,
                                 PatternRewriter &rewriter) const override {
-    if (!isDispatchableOp(op)) return failure();
+    if (!isDispatchableOp(op) || hasOnlyDimUses(op)) return failure();
 
     // If this is a dispatchable op that is to be fused into dispatch ops, and
     // all its uses are dispatchable ops, don't do anything.
@@ -955,10 +953,11 @@ struct MakeDispatchWorkgroupsOp : public RewritePattern {
     // together with it.
     if (auto rootOpAttr = op->getAttrOfType<IntegerAttr>(kRootOpAttr)) {
       linalg::LinalgOp clonedLinalgOp = cast<linalg::LinalgOp>(en.second);
-      SmallVector<Value, 4> shapedOperands(clonedLinalgOp.getShapedOperands());
+      SmallVector<Value> tiledOperands =
+          clonedLinalgOp.getInputAndOutputOperands();
 
       pullInProducersInSameGroup(
-          rewriter, dispatchOp, clonedLinalgOp, shapedOperands,
+          rewriter, dispatchOp, clonedLinalgOp, tiledOperands,
           /*tiledLoops=*/ArrayRef<Operation *>(), rootOpAttr.getInt());
       clonedLinalgOp->removeAttr(kRootOpAttr);
     }
@@ -1009,7 +1008,7 @@ static unsigned makeElementwiseOpsRootOps(FuncOp funcOp, unsigned numRoots) {
       unsigned newGroup = numRoots++;
       op->setAttr(kRootOpAttr, builder.getI64IntegerAttr(newGroup));
 
-      for (OpOperand *operand : linalgOp.getOutputTensorsOpOperands()) {
+      for (OpOperand *operand : linalgOp.getOutputTensorOperands()) {
         auto producer = operand->get().getDefiningOp<linalg::LinalgOp>();
         if (!producer) continue;
         if (producer.getNumLoops() != producer.getNumParallelLoops()) continue;
@@ -1041,7 +1040,7 @@ static unsigned decideFusableLinalgOps(FuncOp funcOp) {
       unsigned newGroup = numRootOps++;
       op->setAttr(kRootOpAttr, builder.getI64IntegerAttr(newGroup));
 
-      for (OpOperand *operand : linalgOp.getOutputTensorsOpOperands()) {
+      for (OpOperand *operand : linalgOp.getOutputTensorOperands()) {
         auto producer = operand->get().getDefiningOp<linalg::LinalgOp>();
         if (!producer) continue;
         if (producer.getNumLoops() != producer.getNumParallelLoops()) continue;
@@ -1070,9 +1069,9 @@ static unsigned decideFusableLinalgOps(FuncOp funcOp) {
         if (!consumer ||
             consumer.getNumLoops() != consumer.getNumParallelLoops())
           continue;
-        AffineMap consumerIndexingMap =
-            consumer.getInputIndexingMap(use.getOperandNumber());
-        AffineMap producerIndexingMap = linalgOp.getOutputIndexingMap(0);
+        AffineMap consumerIndexingMap = consumer.getTiedIndexingMap(&use);
+        AffineMap producerIndexingMap =
+            linalgOp.getTiedIndexingMap(linalgOp.getOutputOperand(0));
         if (!consumerIndexingMap.isIdentity() ||
             producerIndexingMap.getResults() !=
                 consumerIndexingMap.getResults()) {
@@ -1119,7 +1118,9 @@ void DispatchLinalgOnTensorsPass::runOnOperation() {
         return procInfo;
       },
       {linalg::DistributionMethod::Cyclic, linalg::DistributionMethod::Cyclic,
-       linalg::DistributionMethod::Cyclic}};
+       linalg::DistributionMethod::Cyclic},
+      DenseMap<StringRef,
+               std::function<linalg::ProcInfo(OpBuilder &, Location)>>()};
 
   auto tileSizeFn = [&](OpBuilder &builder,
                         Operation *op) -> SmallVector<Value, 4> {
@@ -1178,7 +1179,6 @@ void DispatchLinalgOnTensorsPass::runOnOperation() {
   // If elementwise operations are not tiled and distributed, the wont be marked
   // as root ops previously. Mark them so here to allow fusion of `fill` etc.
   numRoots = makeElementwiseOpsRootOps<linalg::GenericOp>(funcOp, numRoots);
-  makeElementwiseOpsRootOps<linalg::IndexedGenericOp>(funcOp, numRoots);
 
   DEBUG_WITH_TYPE(DEBUG_TYPE, {
     llvm::dbgs()

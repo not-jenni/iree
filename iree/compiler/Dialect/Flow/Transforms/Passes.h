@@ -1,16 +1,8 @@
-// Copyright 2019 Google LLC
+// Copyright 2019 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #ifndef IREE_COMPILER_DIALECT_FLOW_TRANSFORMS_PASSES_H_
 #define IREE_COMPILER_DIALECT_FLOW_TRANSFORMS_PASSES_H_
@@ -31,16 +23,6 @@ namespace Flow {
 // Pipelines
 //===----------------------------------------------------------------------===//
 
-// Adds a set of passes to the given pass manager that perform input dialect
-// legalization required by the Flow dialect.
-//
-// NOTE: this will eventually be moved out to an associated import tool - it
-// currently relies on linking in all of the input dialects (mhlo, etc) and
-// instead those should be taken care of prior to coming into the compiler.
-void buildInputTransformPassPipeline(OpPassManager &passManager);
-
-void registerInputTransformPassPipeline();
-
 // Adds a set of passes to the given pass manager that run the required flow
 // transforms in the canonical order.
 //
@@ -48,8 +30,8 @@ void registerInputTransformPassPipeline();
 // the passes themselves to ensure that expected pass ordering is observed.
 //
 // The expected usage is:
-//   <run conversion from TF/HLO/etc to flow>
-//   buildInputTransformPassPipeline
+//   Input legalization by one of:
+//     - Directly passing supported flow plus core ops
 //   buildFlowTransformPassPipeline
 //   <run conversion from flow to sequencer/hal/vm/etc>
 void buildFlowTransformPassPipeline(OpPassManager &passManager);
@@ -60,26 +42,35 @@ void registerFlowTransformPassPipeline();
 // Input canonicalization and legalization
 //===----------------------------------------------------------------------===//
 
+/// Creates a pass to convert linalg convolution ops with 1x1 kernels into
+/// linalg.matmul
+std::unique_ptr<OperationPass<FuncOp>> createConvertConv2D1x1ToMatmulPass();
+
+/// Creates a pass to convert linalg convolution ops into linalg.matmul ops
+/// using im2col tranformation.
+std::unique_ptr<OperationPass<FuncOp>> createConvertConv2DToImg2ColPass();
+
+/// Pass to convert a linalg.pad_tensor operation into a linalg.fill +
+/// subtensor_insert. This allows lowering the operation into a single kernel.
+std::unique_ptr<Pass> createPadTensorToSubTensorInsertPass();
+
+/// Creates a pass to fuse Linalg operations on tensors.
+std::unique_ptr<Pass> createFusionOfTensorOpsPass();
+
 // Convert operations to equivalent flow.tensor.* ops. This is run after
 // dispatch region creation to catch operations that were left outside of
 // dispatch regions and could be represented as flow.tensor.* ops.
 std::unique_ptr<OperationPass<FuncOp>> createConvertToFlowTensorOpsPass();
 
-// Legalizes the input types to those supported by the flow dialect.
-// This will fail if types that cannot be supported at all are present, however
-// conditionally supported types (based on availability, etc) may still be
-// allowed to pass through successfully.
-std::unique_ptr<OperationPass<ModuleOp>> createLegalizeInputTypesPass();
+// Promote I1 tensor constants to I8 tensors to match later operations.
+std::unique_ptr<OperationPass<FuncOp>> createPromoteI1ToI8Pass();
 
-/// Creates XLA-HLO preprocessing transformation pass. In this pass we should
-/// have all mhlo -> mhlo transformations that are shared between all
-/// backends.
-std::unique_ptr<OperationPass<FuncOp>> createHLOToHLOPreprocessingPass();
-
-// Runs pre-partitioning conversion passes to convert to the flow dialect.
-// This converts some input ops directly to flow ops when doing so has a
-// benefit. Other ops are left unmodified and will be outlined later on.
-std::unique_ptr<OperationPass<FuncOp>> createPrePartitioningConversionPass();
+// Converts standard ops which match to flow.tensor.load (typically causing a
+// read-back).
+// Note that there are typically very specific phase ordering issues with
+// performing such a conversion, so even though it is of fine granularity,
+// this is maintained separately.
+std::unique_ptr<OperationPass<FuncOp>> createPromoteTensorLoadsPass();
 
 // Expands dynamic !shapex.ranked_shape dimensions in variables.
 std::unique_ptr<OperationPass<ModuleOp>> createExpandVariableDynamicDimsPass();
@@ -100,6 +91,14 @@ std::unique_ptr<OperationPass<FuncOp>> createInjectDispatchTracingPass();
 
 // Exports all functions and dispatch executables as `() -> ()` benchmark funcs.
 std::unique_ptr<OperationPass<ModuleOp>> createExportBenchmarkFuncsPass();
+
+//===----------------------------------------------------------------------===//
+// Linalg transforms
+//===----------------------------------------------------------------------===//
+
+/// A pass to pad linalg ops to the next integer multiple of `paddingSize`.
+std::unique_ptr<OperationPass<FuncOp>> createPadLinalgOpsToIntegerMultiplePass(
+    int paddingSize = 4);
 
 //===----------------------------------------------------------------------===//
 // Optimizations

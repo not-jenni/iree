@@ -1,16 +1,8 @@
-# Copyright 2019 Google LLC
+# Copyright 2019 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 load("//build_tools/bazel:tblgen.bzl", "gentbl_cc_library")
 load("//iree:build_defs.oss.bzl", "iree_cmake_extra_content")
@@ -22,7 +14,7 @@ package(
 )
 
 gentbl_cc_library(
-    name = "Passes_inc_gen",
+    name = "PassesIncGen",
     tbl_outs = [
         (
             ["-gen-pass-decls"],
@@ -39,6 +31,8 @@ gentbl_cc_library(
 cc_library(
     name = "Transforms",
     srcs = [
+        "ConvertConv2D1x1ToMatmulPass.cpp",
+        "ConvertConv2DToImg2ColPass.cpp",
         "ConvertToFlowTensorOps.cpp",
         "DeduplicateExecutables.cpp",
         "DestructiveUpdateUtils.cpp",
@@ -46,62 +40,49 @@ cc_library(
         "ExpandVariableDynamicDims.cpp",
         "ExportBenchmarkFuncs.cpp",
         "FormStreams.cpp",
-        "HLOToHLOPreprocessing.cpp",
+        "FusionOfTensorOps.cpp",
         "HoistUnstreamableOps.cpp",
         "InjectDispatchTracing.cpp",
-        "LegalizeInputTypes.cpp",
         "OutlineDispatchRegions.cpp",
         "OutlineLargeConstants.cpp",
+        "PadLinalgOps.cpp",
+        "PadTensorToSubTensorInsert.cpp",
         "PassDetail.h",
         "Passes.cpp",
-        "PrePostPartitioningConversion.cpp",
+        "PromoteI1ToI8Pass.cpp",
+        "PromoteTensorLoads.cpp",
         "StripAndSplatConstantVariables.cpp",
+        "TypeConverter.cpp",
     ],
     hdrs = [
         "DestructiveUpdateUtils.h",
         "Passes.h",
         "Passes.h.inc",
+        "TypeConverter.h",
     ],
     deps = [
-        ":Passes_inc_gen",
-        "//iree/compiler/Conversion/HLOToLinalg:HLOToLinalgOnTensors",
-        "//iree/compiler/Conversion/LinalgToLinalg",
-        "//iree/compiler/Dialect/Flow/Conversion",
-        "//iree/compiler/Dialect/Flow/Conversion/HLOToFlow",
-        "//iree/compiler/Dialect/Flow/Conversion/StandardToFlow",
+        ":PassesIncGen",
         "//iree/compiler/Dialect/Flow/IR",
         "//iree/compiler/Dialect/HAL/IR",
         "//iree/compiler/Dialect/IREE/IR",
-        "//iree/compiler/Dialect/Shape/Conversion",
         "//iree/compiler/Dialect/Shape/IR",
         "//iree/compiler/Dialect/Shape/Transforms",
         "//iree/compiler/Dialect/Shape/Utils:TypeConversion",
         "//iree/compiler/Utils",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:Affine",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:LinalgOps",
         "@llvm-project//mlir:LinalgTransforms",
         "@llvm-project//mlir:MemRefDialect",
+        "@llvm-project//mlir:MemRefTransforms",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:SCFDialect",
-        "@llvm-project//mlir:SCFToStandard",
-        "@llvm-project//mlir:Shape",
-        "@llvm-project//mlir:ShapeTransforms",
         "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Support",
         "@llvm-project//mlir:TensorDialect",
-        "@llvm-project//mlir:TosaToLinalg",
-        "@llvm-project//mlir:TosaToSCF",
-        "@llvm-project//mlir:TosaToStandard",
         "@llvm-project//mlir:TransformUtils",
         "@llvm-project//mlir:Transforms",
-        "@mlir-hlo//:chlo_legalize_to_hlo",
-        "@mlir-hlo//:hlo",
-        "@mlir-hlo//:legalize_control_flow",
-        "@mlir-hlo//:legalize_gather_to_torch_index_select",
-        "@mlir-hlo//:materialize_broadcasts",
-        "@mlir-hlo//:mhlo_to_mhlo_lowering_patterns",
-        "@mlir-hlo//:unfuse_batch_norm",
     ],
 )
 

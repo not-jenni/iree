@@ -1,16 +1,8 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
 #ifndef IREE_COMPILER_DIALECT_HAL_TARGET_LLVM_LIBRARYBUILDER_H_
@@ -35,7 +27,7 @@ namespace HAL {
 //
 // Usage:
 //  LibraryBuilder builder(&module);
-//  builder.addEntryPoint("hello", "", &helloFunc);
+//  builder.addExport("hello", "", DispatchAttrs{}, &helloFunc);
 //  ...
 //  auto *queryFunc = builder.build("_query_library_foo");
 //  // call queryFunc, export it, etc
@@ -75,6 +67,18 @@ class LibraryBuilder {
     UNDEFINED = 4u,
   };
 
+  // IREE_HAL_WORKGROUP_LOCAL_MEMORY_PAGE_SIZE
+  static const int64_t kWorkgroupLocalMemoryPageSize = 4096;
+
+  // iree_hal_executable_dispatch_attrs_v0_t
+  struct DispatchAttrs {
+    // Required workgroup local memory size, in bytes.
+    int64_t localMemorySize = 0;
+
+    // True if all values are default and the attributes may be omitted.
+    constexpr bool isDefault() const { return localMemorySize == 0; }
+  };
+
   LibraryBuilder(llvm::Module *module, Mode mode,
                  Version version = Version::V_0)
       : module(module), mode(mode), version(version) {}
@@ -95,8 +99,9 @@ class LibraryBuilder {
   // Defines a new entry point on the library implemented by |func|.
   // |name| will be used as the library export and an optional |tag| will be
   // attached.
-  void addEntryPoint(StringRef name, StringRef tag, llvm::Function *func) {
-    entryPoints.push_back({name.str(), tag.str(), func});
+  void addExport(StringRef name, StringRef tag, DispatchAttrs attrs,
+                 llvm::Function *func) {
+    exports.push_back({name.str(), tag.str(), attrs, func});
   }
 
   // Builds a `iree_hal_executable_library_query_fn_t` with the given
@@ -112,6 +117,8 @@ class LibraryBuilder {
  private:
   // Builds and returns an iree_hal_executable_library_v0_t global constant.
   llvm::Constant *buildLibraryV0(std::string libraryName);
+  llvm::Constant *buildLibraryV0ImportTable(std::string libraryName);
+  llvm::Constant *buildLibraryV0ExportTable(std::string libraryName);
 
   llvm::Module *module = nullptr;
   Mode mode = Mode::INCLUDE_REFLECTION_ATTRS;
@@ -119,12 +126,13 @@ class LibraryBuilder {
   Features features = Features::NONE;
   SanitizerKind sanitizerKind = SanitizerKind::NONE;
 
-  struct EntryPoint {
+  struct Dispatch {
     std::string name;
     std::string tag;
+    DispatchAttrs attrs;
     llvm::Function *func;
   };
-  std::vector<EntryPoint> entryPoints;
+  std::vector<Dispatch> exports;
 };
 
 }  // namespace HAL

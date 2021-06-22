@@ -1,16 +1,8 @@
-# Copyright 2019 Google LLC
+# Copyright 2019 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 # Implementations for iree/base/.
 # These are not part of the IREE API. Though they may be used by external
@@ -18,6 +10,7 @@
 
 load("//build_tools/bazel:iree_flatcc.bzl", "iree_flatbuffer_c_library")
 load("//build_tools/bazel:run_binary_test.bzl", "run_binary_test")
+load("//iree:build_defs.oss.bzl", "iree_cmake_extra_content")
 load("//iree:lit_test.bzl", "iree_lit_test_suite")
 
 package(
@@ -36,6 +29,7 @@ cc_library(
     name = "internal",
     srcs = [
         "atomics_clang.h",
+        "atomics_disabled.h",
         "atomics_gcc.h",
         "atomics_msvc.h",
     ],
@@ -74,6 +68,19 @@ cc_test(
 #===------------------------------------------------------------------------===#
 # Utilities
 #===------------------------------------------------------------------------===#
+
+cc_library(
+    name = "arena",
+    srcs = ["arena.c"],
+    hdrs = ["arena.h"],
+    deps = [
+        ":atomic_slist",
+        ":synchronization",
+        "//iree/base",
+        "//iree/base:core_headers",
+        "//iree/base:tracing",
+    ],
+)
 
 cc_library(
     name = "atomic_slist",
@@ -129,6 +136,8 @@ cc_test(
     srcs = ["file_io_test.cc"],
     deps = [
         ":file_io",
+        "//iree/base:cc",
+        "//iree/base:logging",
         "//iree/testing:gtest",
         "//iree/testing:gtest_main",
     ],
@@ -174,7 +183,7 @@ cc_binary(
     srcs = ["flags_demo.c"],
     deps = [
         ":flags",
-        "//iree/base:core_headers",
+        "//iree/base",
     ],
 )
 
@@ -224,6 +233,7 @@ cc_test(
     srcs = ["fpu_state_benchmark.cc"],
     deps = [
         ":fpu_state",
+        "//iree/base",
         "//iree/testing:benchmark_main",
         "@com_google_benchmark//:benchmark",
     ],
@@ -272,21 +282,8 @@ cc_test(
 )
 
 cc_library(
-    name = "status_internal",
-    srcs = [
-        "status.cc",
-        "statusor.cc",
-    ],
-    hdrs = [
-        "status.h",
-        "statusor.h",
-    ],
-    deps = [
-        "//iree/base",
-        "//iree/base:core_headers",
-        "//iree/base:logging",
-        "@com_google_absl//absl/utility",
-    ],
+    name = "span",
+    hdrs = ["span.h"],
 )
 
 cc_library(
@@ -333,6 +330,19 @@ cc_test(
     ],
 )
 
+#===------------------------------------------------------------------------===#
+# Utilities with thread dependencies
+#===------------------------------------------------------------------------===#
+
+iree_cmake_extra_content(
+    content = """
+if(NOT ${IREE_ENABLE_THREADING})
+  return()
+endif()
+""",
+    inline = True,
+)
+
 cc_library(
     name = "threading",
     srcs = [
@@ -360,8 +370,10 @@ cc_test(
         "threading_test.cc",
     ],
     deps = [
+        ":internal",
         ":synchronization",
         ":threading",
+        "//iree/base:cc",
         "//iree/testing:gtest",
         "//iree/testing:gtest_main",
     ],

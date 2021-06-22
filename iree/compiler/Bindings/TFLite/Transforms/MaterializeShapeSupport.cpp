@@ -1,16 +1,8 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/Flow/IR/FlowDialect.h"
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
@@ -57,7 +49,7 @@ class MaterializeShapeSupportPass
     auto moduleOp = getOperation();
     auto moduleBuilder = OpBuilder::atBlockBegin(moduleOp.getBody());
     for (auto funcOp : llvm::to_vector<4>(moduleOp.getOps<FuncOp>())) {
-      if (!funcOp->getAttr("iree.module.export")) {
+      if (!funcOp.isPublic()) {
         continue;
       }
       if (failed(materializeShapeSupport(funcOp, moduleBuilder))) {
@@ -184,7 +176,6 @@ class MaterializeShapeSupportPass
     calcFuncOp.setName(namePrefix.str() + "_calculate_shapes");
     calcFuncOp.setPrivate();
     // TODO(benvanik): find a better way to strip these attributes.
-    calcFuncOp->removeAttr("iree.module.export");
     calcFuncOp->removeAttr("iree.abi.stub");
     calcFuncOp->removeAttr("iree.reflection");
     auto &entryBlock = calcFuncOp.front();
@@ -342,7 +333,6 @@ class MaterializeShapeSupportPass
                                               moduleBuilder.getIndexType()),
                                       },
                                       /*outputs=*/TypeRange{}));
-    queryFuncOp->setAttr("iree.module.export", moduleBuilder.getUnitAttr());
     queryFuncOp->setAttr("iree.abi.stub", moduleBuilder.getUnitAttr());
     auto *entryBlock = queryFuncOp.addEntryBlock();
     auto entryBuilder = OpBuilder::atBlockBegin(entryBlock);
@@ -380,7 +370,6 @@ class MaterializeShapeSupportPass
                                               moduleBuilder.getIndexType()),
                                       },
                                       /*outputs=*/TypeRange{}));
-    resizeFuncOp->setAttr("iree.module.export", moduleBuilder.getUnitAttr());
     resizeFuncOp->setAttr("iree.abi.stub", moduleBuilder.getUnitAttr());
     auto *entryBlock = resizeFuncOp.addEntryBlock();
     auto entryBuilder = OpBuilder::atBlockBegin(entryBlock);
@@ -421,7 +410,6 @@ class MaterializeShapeSupportPass
                                               moduleBuilder.getIndexType()),
                                       },
                                       /*outputs=*/TypeRange{}));
-    queryFuncOp->setAttr("iree.module.export", moduleBuilder.getUnitAttr());
     queryFuncOp->setAttr("iree.abi.stub", moduleBuilder.getUnitAttr());
     auto *entryBlock = queryFuncOp.addEntryBlock();
     auto entryBuilder = OpBuilder::atBlockBegin(entryBlock);

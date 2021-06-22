@@ -1,16 +1,8 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 //===- LoweringConfig.h - Declares configuration for lowering Linalg ops --===//
 //
@@ -23,17 +15,58 @@
 #ifndef IREE_COMPILER_CONVERSION_COMMON_LOWERINGCONFIG_H_
 #define IREE_COMPILER_CONVERSION_COMMON_LOWERINGCONFIG_H_
 
+#include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 
 // clang-format off
-#include "iree/compiler/Dialect/HAL/IR/LoweringConfig.h.inc"
 #include "iree/compiler/Dialect/HAL/IR/LoweringConfigEnums.h.inc"
+#include "iree/compiler/Dialect/HAL/IR/LoweringConfig.h.inc"
 // clang-format on
 
 namespace mlir {
 namespace iree_compiler {
+
+namespace IREE {
+namespace HAL {
+
+inline bool operator==(const TranslationInfo &lhs, const TranslationInfo &rhs) {
+  return lhs.passPipeline() == rhs.passPipeline() &&
+         lhs.workloadPerWorkgroup() == rhs.workloadPerWorkgroup();
+}
+
+inline bool operator!=(const TranslationInfo &lhs, const TranslationInfo &rhs) {
+  return !(lhs == rhs);
+}
+
+}  // namespace HAL
+}  // namespace IREE
+
+//===----------------------------------------------------------------------===//
+// Helpers for getting/setting information needed to lower an executable. These
+// are information that are stored as attributes on the
+// `hal.executable.entry_point`
+//===----------------------------------------------------------------------===//
+
+/// Builder method for IREE::HAL::TranslationInfoAttr.
+IREE::HAL::TranslationInfo buildTranslationInfo(
+    IREE::HAL::DispatchLoweringPassPipeline passPipeline,
+    ArrayRef<int64_t> workloadPerWorkgroup, MLIRContext *context);
+
+/// Gets the translate executable info attribute value associated with
+/// `entryPointOp`.
+IREE::HAL::TranslationInfo getTranslationInfo(
+    IREE::HAL::ExecutableEntryPointOp entryPointOp);
+
+/// Set the translate executable info with the entry point op. Returns a failure
+/// if these have already been set for the `entryPointOp` and are incompatible
+/// with what is being set.
+// TODO(ravishankarm, benvanik): Eventually all the information needed for the
+// lowering will be consolidated into a single attribute with richer
+// information.
+LogicalResult setTranslationInfo(IREE::HAL::ExecutableEntryPointOp entryPointOp,
+                                 IREE::HAL::TranslationInfo translationInfo);
 
 //===----------------------------------------------------------------------===//
 // Helpers for getting/setting the `hal.lowering.*` attributes that drive the
@@ -70,9 +103,9 @@ using TileSizesListType = SmallVector<SmallVector<int64_t, 4>, 1>;
 using TileSizesListTypeRef = ArrayRef<SmallVector<int64_t, 4>>;
 
 /// Construct a lowering configuration.
-IREE::HAL::LoweringConfig getConfigAttr(TileSizesListTypeRef tileSizes,
-                                        ArrayRef<int64_t> nativeVectorSize,
-                                        MLIRContext *context);
+IREE::HAL::LoweringConfig buildConfigAttr(TileSizesListTypeRef tileSizes,
+                                          ArrayRef<int64_t> nativeVectorSize,
+                                          MLIRContext *context);
 
 /// Get the tile sizes for all levels.
 TileSizesListType getTileSizes(IREE::HAL::LoweringConfig config);

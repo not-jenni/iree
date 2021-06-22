@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #ifndef IREE_HAL_LOCAL_EXECUTABLE_LIBRARY_H_
 #define IREE_HAL_LOCAL_EXECUTABLE_LIBRARY_H_
@@ -21,6 +13,7 @@
 // this was a schema: backwards-incompatible changes require version bumps or
 // the ability to feature-detect at runtime.
 
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -45,7 +38,7 @@
 //===----------------------------------------------------------------------===//
 
 // Defines a bitfield of features that the library requires or supports.
-enum iree_hal_executable_library_feature_e {
+enum iree_hal_executable_library_feature_bits_t {
   IREE_HAL_EXECUTABLE_LIBRARY_FEATURE_NONE = 0u,
   // TODO(benvanik): declare features for debugging/coverage/printf/etc.
   // These will control which symbols are injected into the library at runtime.
@@ -56,38 +49,41 @@ typedef uint32_t iree_hal_executable_library_features_t;
 // Loaders can use this declaration to check as to whether the library is
 // compatible with the hosting environment for cases where the sanitizer
 // requires host support.
-enum iree_hal_executable_library_sanitizer_kind_e {
-  IREE_HAL_EXECUTABLE_LIBRARY_SANITIZER_NONE = 0u,
+typedef enum iree_hal_executable_library_sanitizer_kind_e {
+  IREE_HAL_EXECUTABLE_LIBRARY_SANITIZER_NONE = 0,
   // Indicates the library is compiled to use AddressSanitizer:
   // https://clang.llvm.org/docs/AddressSanitizer.html
   // Equivalent compiler flag: -fsanitize=address
-  IREE_HAL_EXECUTABLE_LIBRARY_SANITIZER_ADDRESS = 1u,
+  IREE_HAL_EXECUTABLE_LIBRARY_SANITIZER_ADDRESS = 1,
   // Indicates the library is compiled to use MemorySanitizer:
   // https://clang.llvm.org/docs/MemorySanitizer.html
   // Equivalent compiler flag: -fsanitize=memory
-  IREE_HAL_EXECUTABLE_LIBRARY_SANITIZER_MEMORY = 2u,
+  IREE_HAL_EXECUTABLE_LIBRARY_SANITIZER_MEMORY = 2,
   // Indicates the library is compiled to use ThreadSanitizer:
   // https://clang.llvm.org/docs/ThreadSanitizer.html
   // Equivalent compiler flag: -fsanitize=thread
-  IREE_HAL_EXECUTABLE_LIBRARY_SANITIZER_THREAD = 3u,
+  IREE_HAL_EXECUTABLE_LIBRARY_SANITIZER_THREAD = 3,
   // Indicates the library is compiled to use UndefinedBehaviorSanitizer:
   // https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html
   // Equivalent compiler flag: -fsanitize=undefined
-  IREE_HAL_EXECUTABLE_LIBRARY_SANITIZER_UNDEFINED = 4u,
-};
-typedef uint32_t iree_hal_executable_library_sanitizer_kind_t;
+  IREE_HAL_EXECUTABLE_LIBRARY_SANITIZER_UNDEFINED = 4,
+
+  IREE_HAL_EXECUTABLE_LIBRARY_SANITIZER_MAX_ENUM = INT32_MAX,
+} iree_hal_executable_library_sanitizer_kind_t;
 
 //===----------------------------------------------------------------------===//
 // Versioning and interface querying
 //===----------------------------------------------------------------------===//
 
 // Known valid version values.
-enum iree_hal_executable_library_version_e {
+typedef enum iree_hal_executable_library_version_e {
   // iree_hal_executable_library_v0_t is used as the API communication
   // structure.
-  IREE_HAL_EXECUTABLE_LIBRARY_VERSION_0 = 0u,
-};
-typedef uint32_t iree_hal_executable_library_version_t;
+  IREE_HAL_EXECUTABLE_LIBRARY_VERSION_0 = 0,
+
+  IREE_HAL_EXECUTABLE_LIBRARY_VERSION_MAX_ENUM = INT32_MAX,
+} iree_hal_executable_library_version_t;
+static_assert(sizeof(iree_hal_executable_library_version_t) == 4, "uint32_t");
 
 // The latest version of the library API; can be used to populate the
 // iree_hal_executable_library_header_t::version when building libraries.
@@ -96,14 +92,17 @@ typedef uint32_t iree_hal_executable_library_version_t;
 
 // A header present at the top of all versions of the library API used by the
 // runtime to ensure version compatibility.
-typedef struct {
+typedef struct iree_hal_executable_library_header_t {
   // Version of the API this library was built with, which was likely the value
   // of IREE_HAL_EXECUTABLE_LIBRARY_LATEST_VERSION.
   iree_hal_executable_library_version_t version;
+
   // Name used for logging/diagnostics.
   const char* name;
+
   // Bitfield of features required/supported by this executable.
   iree_hal_executable_library_features_t features;
+
   // Which sanitizer the library is compiled to use, if any.
   // Libraries meant for use with a particular sanitizer will are only usable
   // with hosting code that is using the same sanitizer.
@@ -126,13 +125,76 @@ typedef const iree_hal_executable_library_header_t** (
 // IREE_HAL_EXECUTABLE_LIBRARY_VERSION_0
 //===----------------------------------------------------------------------===//
 
-// TBD: do not use this yet.
-typedef struct {
-  size_t import_count;
-  void* import_fns;
+// Function signature of imported functions for use in the executable.
+// Each call takes opaque parameters as defined by the imported function.
+// Both the compiler and the runtime must agree on the parameter format
+// (including struct alignment and packing) and doing so is outside the scope
+// of this API. In general one should only pass precisely what they need
+// (pointers directly into buffers being manipulated, arguments, etc) and not
+// try to replicate the dispatch structure (workgroup information and bindings)
+// so that the imported functions can be versioned independently from this
+// specification.
+//
+// Returns 0 on success and non-zero on failure. Failures will cause device loss
+// and should only be used to communicate serious issues that should abort all
+// execution within the current device. Buffer overflows are a good example of
+// a useful failure though the HAL does not mandate that all overflows are
+// caught and only that they are not harmful - clamping byte ranges and never
+// returning a failure is sufficient.
+typedef int (*iree_hal_executable_import_v0_t)(void* import_params);
+
+// A thunk function used to call an import.
+// All imports must be called through this function by passing the import
+// function pointer as the first argument followed by the arguments of the
+// import function itself.
+typedef int (*iree_hal_executable_import_thunk_v0_t)(
+    iree_hal_executable_import_v0_t fn_ptr, void* import_params);
+
+// Declares imports available to the executable library at runtime.
+// To enable linker isolation, ABI shimming, and import multi-versioning we use
+// this import table exclusively and do not allow platform-level linking. If it
+// were allowed the deployment situation gets significantly more complex as the
+// libraries containing the imported symbols will differ on all platforms, will
+// have the platform-dependent ABI (Windows, MacOS, etc), and may not be
+// available at all (bare-metal).
+//
+// Static libraries may choose to still dynamically link against external
+// symbols without using this table as in that scenario much of the above
+// concerns do not apply: all code is being linked together into the same binary
+// and symbol availability is known during build-time linking. Static linking
+// also enables LTO to strip any import not used by any executables in contrast
+// to the dynamic style elsewhere.
+//
+// Represented as a struct-of-arrays for more efficient packing and more
+// locality during lookup. Each subarray - when not omitted and NULL - is
+// indexed by import ordinal and has up to |count| entries.
+typedef struct iree_hal_executable_import_table_v0_t {
+  // Total number of imports in the table.
+  uint32_t count;
+
+  // Import symbol name encoding the name and whether it is weak.
+  // Example: `mylib_some_fn_v2?`
+  //   `mylib_...`:
+  //     Prefix indicating the owner of the function; symbols have a global
+  //     namespace and this is used to reduce collisions.
+  //   `some_fn...`:
+  //     Name of the function used to link to the imports available in the
+  //     hosting executable.
+  //   `..._v2`:
+  //     Function-specified version number used to allow multiple versions to
+  //     to be imported. For backward compatibility one could import both
+  //     `some_fn_v1?` and `some_fn_v2?` and use whichever is available.
+  //     Note that this is just a convention for the suffix and can be anything.
+  //   `?`:
+  //     Indicates when an import is optional. If the import of the specified
+  //     version is not found the table entry will be NULL. When omitted if the
+  //     import is unavailable loading will fail.
+  //
+  // The symbol table is sorted ascending alphabetical (by strcmp).
+  const char* const* symbols;
 } iree_hal_executable_import_table_v0_t;
 
-typedef union {
+typedef union iree_hal_vec3_t {
   struct {
     uint32_t x;
     uint32_t y;
@@ -142,7 +204,7 @@ typedef union {
 } iree_hal_vec3_t;
 
 // Read-only per-dispatch state passed to each workgroup in a dispatch.
-typedef struct {
+typedef struct iree_hal_executable_dispatch_state_v0_t {
   // Total workgroup count for the dispatch. This is sourced from either the
   // original dispatch call (for iree_hal_command_buffer_dispatch) or the
   // indirection buffer (for iree_hal_command_buffer_dispatch_indirect).
@@ -165,13 +227,23 @@ typedef struct {
   // The length of each binding in bytes, 1:1 with |binding_ptrs|.
   const size_t* binding_lengths;
 
+  // Thunk function for calling imports. All calls must be made through this.
+  iree_hal_executable_import_thunk_v0_t import_thunk;
   // Optional imported functions available for use within the executable.
-  const iree_hal_executable_import_table_v0_t* imports;
+  // Contains one entry per imported function. If an import was marked as weak
+  // then the corresponding entry may be NULL.
+  const iree_hal_executable_import_v0_t* imports;
 } iree_hal_executable_dispatch_state_v0_t;
 
 // Function signature of exported executable entry points.
 // The same |dispatch_state| is passed to all workgroups in a dispatch while
-// |workgroup_id| will vary for each workgroup.
+// |workgroup_id| and |local_memory| will vary for each workgroup.
+//
+// If a non-zero value was specified for |local_memory_page| then scratch memory
+// will be available for use by the invocation of at least the size specified.
+// This memory is transient and exclusive to the workgroup. The provided pointer
+// may be NULL if no workgroup local memory was requested and otherwise will
+// point to memory of the size specified.
 //
 // Returns 0 on success and non-zero on failure. Failures will cause device loss
 // and should only be used to communicate serious issues that should abort all
@@ -181,39 +253,73 @@ typedef struct {
 // returning a failure is sufficient.
 typedef int (*iree_hal_executable_dispatch_v0_t)(
     const iree_hal_executable_dispatch_state_v0_t* dispatch_state,
-    const iree_hal_vec3_t* workgroup_id);
+    const iree_hal_vec3_t* workgroup_id, void* local_memory);
+
+// Bytes per page of workgroup local memory.
+// This is chosen to match the common page size of devices.
+#define IREE_HAL_WORKGROUP_LOCAL_MEMORY_PAGE_SIZE 4096
+
+// Attributes for exported dispatch functions defining how they are to be
+// executed. 0 defaults are well-specified and the entire attributes table may
+// be omitted if no dispatch functions require these fields.
+typedef struct iree_hal_executable_dispatch_attrs_v0_t {
+  // Number of IREE_HAL_WORKGROUP_LOCAL_MEMORY_PAGE_SIZE byte pages (or 0)
+  // indicating how much workgroup local memory is required for the dispatch.
+  // This is the size of the buffer referenced by the `local_memory` argument.
+  uint16_t local_memory_pages;
+  // Must be 0. May be used in the future for flags controlling the dispatch
+  // behavior/synchronization requirements.
+  uint16_t reserved;
+} iree_hal_executable_dispatch_attrs_v0_t;
+static_assert(sizeof(iree_hal_executable_dispatch_attrs_v0_t) == 4, "uint32_t");
+
+// A table of exported functions arranged as a struct-of-arrays for more
+// efficient packing and faster lookup. Each subarray - when not omitted and
+// NULL - is indexed by export ordinal and has up to |count| entries.
+typedef struct iree_hal_executable_export_table_v0_t {
+  // Total number of exports in the table.
+  uint32_t count;
+
+  // Function pointers for each exported entry point.
+  const iree_hal_executable_dispatch_v0_t* ptrs;
+
+  // Optional table of attributes 1:1 with ptrs.
+  // Omitting the table entirely means that no exports need workgroup local
+  // memory (or whatever else we pack into the attributes).
+  const iree_hal_executable_dispatch_attrs_v0_t* attrs;
+
+  // Optional table of export function entry point names 1:1 with ptrs.
+  // These names are only used for tracing/debugging and can be omitted to save
+  // binary size.
+  const char* const* names;
+
+  // Optional table of entry point tags 1:1 with ptrs.
+  // Used to describe the entry point in a human-readable format useful for
+  // verbose logging. The string values, when present, may be attached to
+  // tracing/debugging events related to the entry point.
+  const char* const* tags;
+} iree_hal_executable_export_table_v0_t;
 
 // Structure used for v0 library interfaces.
 // The entire structure is designed to be read-only and able to live embedded in
 // the binary .rdata section.
 //
-// Implementations may still choose to heap allocate this structure and modify
-// at runtime so long as they observe the thread-safety guarantees. For example,
-// a JIT may default all entry_points to JIT thunk functions and then swap them
-// out for the translated function pointers.
-typedef struct {
-  // Version/metadata header. Will have a version of
-  // IREE_HAL_EXECUTABLE_LIBRARY_VERSION_0.
+// The information held within the structure is not cached by the runtime.
+// Implementations may choose to heap allocate this structure and modify its
+// members at runtime so long as they observe the thread-safety guarantees.
+// For example, a JIT may default all exports to JIT thunk functions and then
+// atomically swap them out for the translated function pointers as they are
+// available.
+typedef struct iree_hal_executable_library_v0_t {
+  // Version/metadata header.
+  // Will have a version of IREE_HAL_EXECUTABLE_LIBRARY_VERSION_0.
   const iree_hal_executable_library_header_t* header;
 
-  // The total number of entry points available in the library. Bounds all of
-  // the tables below.
-  uint32_t entry_point_count;
-  // Table of export function entry points matching the ordinals defined during
-  // library generation. The runtime will use this table to map the ordinals to
-  // function pointers for execution.
-  const iree_hal_executable_dispatch_v0_t* entry_points;
-  // Optional table of export function entry point names 1:1 with entry_points.
-  // These names are only used for tracing/debugging and can be omitted to save
-  // binary size.
-  const char* const* entry_point_names;
-  // Optional table of entry point tags that describe the entry point in a
-  // human-readable format useful for verbose logging. The string values, when
-  // present, may be attached to tracing/debugging events related to the entry
-  // point.
-  const char* const* entry_point_tags;
+  // Table of imported functions available to functions in the executable.
+  iree_hal_executable_import_table_v0_t imports;
 
-  // TODO(benvanik): optional import declarations.
+  // Table of exported functions from the executable.
+  iree_hal_executable_export_table_v0_t exports;
 } iree_hal_executable_library_v0_t;
 
 #endif  // IREE_HAL_LOCAL_EXECUTABLE_LIBRARY_H_

@@ -1,28 +1,19 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "absl/strings/match.h"
-#include "absl/strings/str_replace.h"
 #include "iree/base/logging.h"
-#include "iree/base/status.h"
+#include "iree/base/status_cc.h"
 #include "iree/testing/gtest.h"
 #include "iree/vm/api.h"
 #include "iree/vm/test/emitc/arithmetic_ops.h"
 #include "iree/vm/test/emitc/arithmetic_ops_f32.h"
 #include "iree/vm/test/emitc/arithmetic_ops_i64.h"
-#include "iree/vm/test/emitc/assignment_ops.h"
+// #include "iree/vm/test/emitc/assignment_ops.h"
 #include "iree/vm/test/emitc/assignment_ops_i64.h"
+#include "iree/vm/test/emitc/call_ops.h"
 #include "iree/vm/test/emitc/comparison_ops.h"
 #include "iree/vm/test/emitc/comparison_ops_f32.h"
 #include "iree/vm/test/emitc/comparison_ops_i64.h"
@@ -31,6 +22,8 @@
 #include "iree/vm/test/emitc/conversion_ops_i64.h"
 #include "iree/vm/test/emitc/global_ops.h"
 #include "iree/vm/test/emitc/list_ops.h"
+#include "iree/vm/test/emitc/list_variant_ops.h"
+#include "iree/vm/test/emitc/ref_ops.h"
 #include "iree/vm/test/emitc/shift_ops.h"
 #include "iree/vm/test/emitc/shift_ops_i64.h"
 
@@ -52,7 +45,11 @@ struct ModuleDescription {
 
 std::ostream& operator<<(std::ostream& os, const TestParams& params) {
   std::string qualified_name = params.module_name + "." + params.local_name;
-  return os << absl::StrReplaceAll(qualified_name, {{":", "_"}, {".", "_"}});
+  auto name_sv =
+      iree_make_string_view(qualified_name.data(), qualified_name.size());
+  iree_string_view_replace_char(name_sv, ':', '_');
+  iree_string_view_replace_char(name_sv, '.', '_');
+  return os << qualified_name;
 }
 
 std::vector<TestParams> GetModuleTestParams() {
@@ -63,8 +60,9 @@ std::vector<TestParams> GetModuleTestParams() {
       {arithmetic_ops_descriptor_, arithmetic_ops_create},
       {arithmetic_ops_f32_descriptor_, arithmetic_ops_f32_create},
       {arithmetic_ops_i64_descriptor_, arithmetic_ops_i64_create},
-      {assignment_ops_descriptor_, assignment_ops_create},
+      // {assignment_ops_descriptor_, assignment_ops_create},
       {assignment_ops_i64_descriptor_, assignment_ops_i64_create},
+      {call_ops_descriptor_, call_ops_create},
       {comparison_ops_descriptor_, comparison_ops_create},
       {comparison_ops_f32_descriptor_, comparison_ops_f32_create},
       {comparison_ops_i64_descriptor_, comparison_ops_i64_create},
@@ -73,6 +71,8 @@ std::vector<TestParams> GetModuleTestParams() {
       {conversion_ops_i64_descriptor_, conversion_ops_i64_create},
       {global_ops_descriptor_, global_ops_create},
       {list_ops_descriptor_, list_ops_create},
+      {list_variant_ops_descriptor_, list_variant_ops_create},
+      {ref_ops_descriptor_, ref_ops_create},
       {shift_ops_descriptor_, shift_ops_create},
       {shift_ops_i64_descriptor_, shift_ops_i64_create}};
 
@@ -105,8 +105,7 @@ class VMCModuleTest : public ::testing::Test,
 
     iree_vm_module_t* module_ = nullptr;
     IREE_CHECK_OK(
-        test_params.create_function(iree_allocator_system(), &module_))
-        << "Module failed to load";
+        test_params.create_function(iree_allocator_system(), &module_));
 
     std::vector<iree_vm_module_t*> modules = {module_};
     IREE_CHECK_OK(iree_vm_context_create_with_modules(
@@ -127,8 +126,7 @@ class VMCModuleTest : public ::testing::Test,
     IREE_CHECK_OK(iree_vm_context_resolve_function(
         context_,
         iree_string_view_t{qualified_name.data(), qualified_name.size()},
-        &function))
-        << "Exported function '" << local_name << "' not found";
+        &function));
 
     return iree_vm_invoke(context_, function,
                           /*policy=*/nullptr, /*inputs=*/nullptr,
@@ -141,7 +139,7 @@ class VMCModuleTest : public ::testing::Test,
 
 TEST_P(VMCModuleTest, Check) {
   const auto& test_params = GetParam();
-  bool expect_failure = absl::StartsWith(test_params.local_name, "fail_");
+  bool expect_failure = test_params.local_name.find("fail_") == 0;
 
   iree::Status result =
       RunFunction(test_params.module_name, test_params.local_name);

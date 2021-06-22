@@ -1,23 +1,13 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #ifndef IREE_TOOLS_INIT_COMPILER_MODULES_H_
 #define IREE_TOOLS_INIT_COMPILER_MODULES_H_
 
 #include "iree/compiler/Dialect/Modules/Check/IR/CheckDialect.h"
-#include "iree/compiler/Dialect/Modules/Strings/IR/Dialect.h"
-#include "iree/compiler/Dialect/Modules/TensorList/IR/TensorListDialect.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -25,9 +15,7 @@ namespace iree_compiler {
 // Add all the IREE compiler module dialects to the provided registry.
 inline void registerIreeCompilerModuleDialects(DialectRegistry &registry) {
   // clang-format off
-  registry.insert<IREE::Check::CheckDialect,
-                  IREE::Strings::StringsDialect,
-                  IREE::TensorList::TensorListDialect>();
+  registry.insert<IREE::Check::CheckDialect>();
   // clang-format on
 }
 

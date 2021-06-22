@@ -1,17 +1,9 @@
 # Lint as: python3
-# Copyright 2019 Google LLC
+# Copyright 2019 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 """Utilities for compiling 'tf.Module's"""
 
 # TODO(#4131) python>=3.7: Use postponed type annotations.
@@ -117,11 +109,22 @@ def _incrementally_compile_tf_module(
       backend_info.backend_id,
       needs_temp_saved_model_dir=True,
   ) if artifacts_dir else {})
-  immediate_result = iree.compiler.tf.compile_module(
-      module,
-      target_backends=backend_info.compiler_targets,
-      exported_names=exported_names,
-      **output_kwargs)
+
+  # TODO: Revisit how artifacts_dir is plummed through and figure out how to
+  # get a meaningful invocation name directly. This isn't really load
+  # bearing - just adds a bit of usability so long as we have multiple
+  # methods of saving temp files.
+  if artifacts_dir:
+    invocation_id = (
+        f"{os.path.basename(artifacts_dir)}__{backend_info.backend_id}")
+  else:
+    invocation_id = None
+  with iree.compiler.TempFileSaver(invocation_id=invocation_id):
+    immediate_result = iree.compiler.tf.compile_module(
+        module,
+        target_backends=backend_info.compiler_targets,
+        exported_names=exported_names,
+        **output_kwargs)
 
   output_file = output_kwargs.get("output_file")
   if output_file:
@@ -892,7 +895,7 @@ class BackendInfo:
       "iree_vulkan": {
           "compiled_module_class": IreeCompiledModule,
           "driver": "vulkan",
-          "compiler_targets": ["vulkan-*"]
+          "compiler_targets": ["vulkan-spirv"]
       },
       "iree_llvmaot": {
           "compiled_module_class": IreeCompiledModule,

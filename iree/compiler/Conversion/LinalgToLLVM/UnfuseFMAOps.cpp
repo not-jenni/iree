@@ -1,17 +1,11 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include "iree/compiler/Conversion/PassDetail.h"
+#include "iree/compiler/Conversion/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/Pass.h"
@@ -42,11 +36,12 @@ class UnfusedFMAOpsPassConversion : public OpRewritePattern<LLVM::FMAOp> {
 }  // namespace
 
 namespace {
-struct UnfusedFMAOpsPass : PassWrapper<UnfusedFMAOpsPass, FunctionPass> {
+struct LinalgToLLVMUnfuseFMAOpsPass
+    : LinalgToLLVMUnfuseFMAOpsBase<LinalgToLLVMUnfuseFMAOpsPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<LLVM::LLVMDialect>();
   }
-  void runOnFunction() override;
+  void runOnOperation() override;
 };
 }  // namespace
 
@@ -55,7 +50,7 @@ void populateUnfusedFMAOpsPassPatterns(MLIRContext *context,
   patterns.insert<UnfusedFMAOpsPassConversion>(context);
 }
 
-void UnfusedFMAOpsPass::runOnFunction() {
+void LinalgToLLVMUnfuseFMAOpsPass::runOnOperation() {
   auto funcOp = getOperation();
   auto context = funcOp.getContext();
   OwningRewritePatternList patterns(&getContext());
@@ -63,14 +58,9 @@ void UnfusedFMAOpsPass::runOnFunction() {
   (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
 }
 
-std::unique_ptr<FunctionPass> createUnfusedFMAOpsPass() {
-  return std::make_unique<UnfusedFMAOpsPass>();
+std::unique_ptr<OperationPass<FuncOp>> createLinalgToLLVMUnfuseFMAOpsPass() {
+  return std::make_unique<LinalgToLLVMUnfuseFMAOpsPass>();
 }
-
-static PassRegistration<UnfusedFMAOpsPass> pass(
-    "iree-codegen-linalg-to-llvm-unfuse-fma-pass",
-    "Convert llvm.fma into unfused mulf and addf ops",
-    [] { return std::make_unique<UnfusedFMAOpsPass>(); });
 
 }  // namespace iree_compiler
 }  // namespace mlir

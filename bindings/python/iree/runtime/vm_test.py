@@ -1,17 +1,9 @@
 # Lint as: python3
-# Copyright 2019 Google LLC
+# Copyright 2019 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 # pylint: disable=unused-variable
 
@@ -25,11 +17,12 @@ import numpy as np
 def create_add_scalar_module():
   binary = iree.compiler.compile_str(
       """
-      func @add_scalar(%arg0: i32, %arg1: i32) -> i32 attributes { iree.module.export } {
+      func @add_scalar(%arg0: i32, %arg1: i32) -> i32 {
         %0 = addi %arg0, %arg1 : i32
         return %0 : i32
       }
       """,
+      input_type="mhlo",
       target_backends=iree.compiler.core.DEFAULT_TESTING_BACKENDS,
   )
   m = iree.runtime.VmModule.from_flatbuffer(binary)
@@ -39,12 +32,12 @@ def create_add_scalar_module():
 def create_simple_static_mul_module():
   binary = iree.compiler.compile_str(
       """
-      func @simple_mul(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>) -> tensor<4xf32>
-            attributes { iree.module.export } {
+      func @simple_mul(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>) -> tensor<4xf32> {
           %0 = "mhlo.multiply"(%arg0, %arg1) {name = "mul.1"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
           return %0 : tensor<4xf32>
       }
       """,
+      input_type="mhlo",
       target_backends=iree.compiler.core.DEFAULT_TESTING_BACKENDS,
   )
   m = iree.runtime.VmModule.from_flatbuffer(binary)
@@ -56,12 +49,12 @@ def create_simple_dynamic_abs_module():
   target_backends = iree.compiler.DEFAULT_TESTING_BACKENDS
   binary = iree.compiler.compile_str(
       """
-      func @simple_mul(%arg0: tensor<?x?xf32>) -> tensor<?x?xf32>
-            attributes { iree.module.export } {
+      func @simple_mul(%arg0: tensor<?x?xf32>) -> tensor<?x?xf32> {
           %0 = "mhlo.abs"(%arg0) : (tensor<?x?xf32>) -> tensor<?x?xf32>
           return %0 : tensor<?x?xf32>
       }
       """,
+      input_type="mhlo",
       target_backends=target_backends,
   )
   m = iree.runtime.VmModule.from_flatbuffer(binary)
@@ -79,7 +72,6 @@ class VmTest(absltest.TestCase):
         iree.compiler.core.DEFAULT_TESTING_DRIVER)
     cls.device = cls.driver.create_default_device()
     cls.hal_module = iree.runtime.create_hal_module(cls.device)
-    cls.htf = iree.runtime.HostTypeFactory.get_numpy()
 
   def test_variant_list(self):
     l = iree.runtime.VmVariantList(5)

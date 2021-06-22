@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 //===- TileAndVectorizeInOneWorkgroup.cpp ---------------------------------===//
 //
@@ -19,16 +11,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "iree/compiler/Conversion/CodegenUtils/FunctionUtils.h"
-#include "iree/compiler/Conversion/CodegenUtils/MarkerUtils.h"
-#include "iree/compiler/Conversion/CodegenUtils/TransformUtils.h"
-#include "iree/compiler/Conversion/Common/Transforms.h"
-#include "iree/compiler/Conversion/LinalgToSPIRV/CodeGenOptionUtils.h"
 #include "iree/compiler/Conversion/LinalgToSPIRV/KernelDispatchUtils.h"
 #include "iree/compiler/Conversion/LinalgToSPIRV/MemorySpace.h"
-#include "iree/compiler/Conversion/LinalgToSPIRV/Passes.h"
 #include "iree/compiler/Conversion/LinalgToSPIRV/Utils.h"
-#include "iree/compiler/Conversion/LinalgToVector/Passes.h"
+#include "iree/compiler/Conversion/PassDetail.h"
+#include "iree/compiler/Conversion/Passes.h"
+#include "iree/compiler/Conversion/Transforms/Transforms.h"
+#include "iree/compiler/Conversion/Utils/MarkerUtils.h"
+#include "iree/compiler/Conversion/Utils/Utils.h"
 #include "iree/compiler/Dialect/HAL/IR/HALDialect.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/Shape/IR/ShapeDialect.h"
@@ -40,6 +30,7 @@
 #include "mlir/Dialect/Linalg/Transforms/Hoisting.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Vector/VectorTransforms.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -85,20 +76,21 @@ static unsigned dimToIndex(StringRef dim) {
 
 namespace {
 /// Function pass that implements tiling and fusion in Linalg on buffers.
-class TileAndVectorizeInOneWorkgroupPass
-    : public PassWrapper<TileAndVectorizeInOneWorkgroupPass,
-                         OperationPass<IREE::HAL::ExecutableTargetOp>> {
+class LinalgToSPIRVTileAndVectorizeOneWorkgroupPass
+    : public LinalgToSPIRVTileAndVectorizeOneWorkgroupBase<
+          LinalgToSPIRVTileAndVectorizeOneWorkgroupPass> {
  public:
-  TileAndVectorizeInOneWorkgroupPass(const SPIRVCodegenOptions &passOptions)
+  LinalgToSPIRVTileAndVectorizeOneWorkgroupPass(
+      const SPIRVCodegenOptions &passOptions)
       : options(passOptions) {}
-  TileAndVectorizeInOneWorkgroupPass(
-      const TileAndVectorizeInOneWorkgroupPass &pass)
+  LinalgToSPIRVTileAndVectorizeOneWorkgroupPass(
+      const LinalgToSPIRVTileAndVectorizeOneWorkgroupPass &pass)
       : options(pass.options) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<AffineDialect, IREE::HAL::HALDialect, gpu::GPUDialect,
-                    linalg::LinalgDialect, scf::SCFDialect, ShapeDialect,
-                    vector::VectorDialect>();
+                    linalg::LinalgDialect, memref::MemRefDialect,
+                    scf::SCFDialect, ShapeDialect, vector::VectorDialect>();
   }
 
   void runOnOperation() override;
@@ -155,7 +147,7 @@ struct PromoteConvSubviewsPattern
 }  // namespace
 
 static void populatePromotionPatterns(MLIRContext *context,
-                                      OwningRewritePatternList &patterns) {
+                                      RewritePatternSet &patterns) {
   patterns
       .insert<PromoteMatmulSubviewsPattern,
               PromoteConvSubviewsPattern<linalg::ConvInputNHWCFilterHWCFOp>>(
@@ -208,9 +200,9 @@ struct TileMatmulSubgroupPattern
 }  // namespace
 
 /// Patterns for second level tiling to target subgroups.
-static void populateTilingToSubgroupPatterns(
-    MLIRContext *context, const LaunchConfig &launchConfig,
-    OwningRewritePatternList &patterns) {
+static void populateTilingToSubgroupPatterns(MLIRContext *context,
+                                             const LaunchConfig &launchConfig,
+                                             RewritePatternSet &patterns) {
   auto getInnerTileSizeFn = [&launchConfig](
                                 OpBuilder &builder,
                                 Operation *operation) -> SmallVector<Value, 4> {
@@ -233,8 +225,9 @@ static void populateTilingToSubgroupPatterns(
     return getSubgroupIdsAndCounts(builder, loc, numSubgroups);
   };
 
-  linalg::LinalgLoopDistributionOptions subgroupDistributionOptions = {
-      getSubgroupProcInfoFn,
+  linalg::LinalgLoopDistributionOptions subgroupDistributionOptions;
+  subgroupDistributionOptions.procInfo = getSubgroupProcInfoFn;
+  subgroupDistributionOptions.distributionMethod = {
       {linalg::DistributionMethod::CyclicNumProcsEqNumIters,
        linalg::DistributionMethod::CyclicNumProcsEqNumIters}};
 
@@ -254,9 +247,9 @@ static void populateTilingToSubgroupPatterns(
 //===----------------------------------------------------------------------===//
 
 /// Patterns for third level tiling to target invocations.
-static void populateTilingToInvocationPatterns(
-    MLIRContext *context, const LaunchConfig &launchConfig,
-    OwningRewritePatternList &patterns) {
+static void populateTilingToInvocationPatterns(MLIRContext *context,
+                                               const LaunchConfig &launchConfig,
+                                               RewritePatternSet &patterns) {
   linalg::TileSizeComputationFunction getInnerTileSizeFn =
       [&launchConfig](OpBuilder &builder, Operation *operation) {
         ArrayRef<int64_t> tileSizes = launchConfig.getTileSizes(operation, 2);
@@ -275,8 +268,9 @@ static void populateTilingToInvocationPatterns(
     return getGPUProcessorIdsAndCounts<gpu::ThreadIdOp, gpu::BlockDimOp>(
         builder, loc, parallelLoopRanges.size());
   };
-  linalg::LinalgLoopDistributionOptions invocationDistributionOptions = {
-      getThreadProcInfoFn,
+  linalg::LinalgLoopDistributionOptions invocationDistributionOptions;
+  invocationDistributionOptions.procInfo = getThreadProcInfoFn;
+  invocationDistributionOptions.distributionMethod = {
       {linalg::DistributionMethod::Cyclic, linalg::DistributionMethod::Cyclic,
        linalg::DistributionMethod::Cyclic}};
 
@@ -294,7 +288,6 @@ static void populateTilingToInvocationPatterns(
       linalg::LinalgTilingPattern<linalg::ConvInputNDHWCFilterDHWCFOp>,
       linalg::LinalgTilingPattern<linalg::DepthwiseConvInputNHWCFilterHWCFOp>,
       linalg::LinalgTilingPattern<linalg::GenericOp>,
-      linalg::LinalgTilingPattern<linalg::IndexedGenericOp>,
       linalg::LinalgTilingPattern<linalg::PoolingNHWCMaxFOp>,
       linalg::LinalgTilingPattern<linalg::PoolingNHWCMinFOp>,
       linalg::LinalgTilingPattern<linalg::PoolingNHWCSumFOp>>(
@@ -339,7 +332,7 @@ static Optional<std::pair<AffineExpr, AffineExpr>> getThreadRange(
 
 static void populateVectorizationPatterns(MLIRContext *context,
                                           const LaunchConfig &launchConfig,
-                                          OwningRewritePatternList &patterns) {
+                                          RewritePatternSet &patterns) {
   linalg::insertVectorizationPatterns<linalg::FillOp, linalg::GenericOp,
                                       linalg::ContractionOpInterface>(
       patterns, linalg::LinalgVectorizationOptions(),
@@ -352,10 +345,10 @@ static void populateVectorizationPatterns(MLIRContext *context,
 //====---------------------------------------------------------------------===//
 
 static void populateVectorUnrollPatterns(MLIRContext *context,
-                                         OwningRewritePatternList &patterns) {
+                                         RewritePatternSet &patterns) {
   patterns.insert<vector::UnrollVectorPattern>(
       context,
-      vector::UnrollVectorOptions().setNativeShapeFn(getNativeVectorSize));
+      vector::UnrollVectorOptions().setNativeShapeFn(getSPIRVNativeVectorSize));
 }
 
 namespace {
@@ -425,13 +418,13 @@ static void applyVectorTransformation(FuncOp funcOp) {
       targetEnv.allows(spirv::Extension::SPV_NV_cooperative_matrix);
   {
     {
-      OwningRewritePatternList vectorUnrollPatterns(funcOp.getContext());
+      RewritePatternSet vectorUnrollPatterns(funcOp.getContext());
       populateVectorUnrollPatterns(funcOp.getContext(), vectorUnrollPatterns);
       (void)applyPatternsAndFoldGreedily(funcOp,
                                          std::move(vectorUnrollPatterns));
     }
     {
-      OwningRewritePatternList canonicalizationPatterns1(funcOp.getContext());
+      RewritePatternSet canonicalizationPatterns1(funcOp.getContext());
 
       vector::populateVectorToVectorTransformationPatterns(
           canonicalizationPatterns1);
@@ -441,7 +434,7 @@ static void applyVectorTransformation(FuncOp funcOp) {
       (void)applyPatternsAndFoldGreedily(funcOp,
                                          std::move(canonicalizationPatterns1));
 
-      OwningRewritePatternList canonicalizationPatterns2(funcOp.getContext());
+      RewritePatternSet canonicalizationPatterns2(funcOp.getContext());
       vector::populateVectorSlicesLoweringPatterns(canonicalizationPatterns2);
       vector::populateVectorTransferLoweringPatterns(canonicalizationPatterns2);
       (void)applyPatternsAndFoldGreedily(funcOp,
@@ -453,13 +446,13 @@ static void applyVectorTransformation(FuncOp funcOp) {
         // converted to cooperative matrix matmul op.
         // TODO(thomasraoux): remove that once we support cooperative matrix
         // lowering in MLIR core.
-        OwningRewritePatternList combineTransposePatterns(funcOp.getContext());
+        RewritePatternSet combineTransposePatterns(funcOp.getContext());
         combineTransposePatterns.add<CombineContractTranspose>(
             funcOp.getContext());
         (void)applyPatternsAndFoldGreedily(funcOp,
                                            std::move(combineTransposePatterns));
       } else {
-        OwningRewritePatternList contractLoweringPatterns(funcOp.getContext());
+        RewritePatternSet contractLoweringPatterns(funcOp.getContext());
         vector::populateVectorContractLoweringPatterns(
             contractLoweringPatterns,
             vector::VectorTransformsOptions().setVectorTransformsOptions(
@@ -491,7 +484,7 @@ static void applyVectorTransformation(FuncOp funcOp) {
 //====---------------------------------------------------------------------===//
 
 static void populateTilingConvFilterPatterns(
-    MLIRContext *context, OwningRewritePatternList &patterns,
+    MLIRContext *context, RewritePatternSet &patterns,
     const LaunchConfig &launchConfig,
     linalg::LinalgTransformationFilter marker) {
   auto getTileSizeFn = [&launchConfig](OpBuilder &builder, Operation *op) {
@@ -545,7 +538,7 @@ struct LowerToLoops final : public OpRewritePattern<OpTy> {
 // Main pass implementation
 //====---------------------------------------------------------------------===//
 
-void TileAndVectorizeInOneWorkgroupPass::runOnOperation() {
+void LinalgToSPIRVTileAndVectorizeOneWorkgroupPass::runOnOperation() {
   MLIRContext *context = &getContext();
   IREE::HAL::ExecutableTargetOp targetOp = getOperation();
   ModuleOp module = targetOp.getInnerModule();
@@ -595,10 +588,16 @@ void TileAndVectorizeInOneWorkgroupPass::runOnOperation() {
       // The promotion patterns are put separate from the tiling patterns to
       // make sure that the allocated scratchspace memory is constant sizes
       // which requires some folding to trigger.
-      OwningRewritePatternList promotionPatterns(&getContext());
+      RewritePatternSet promotionPatterns(&getContext());
       populatePromotionPatterns(context, promotionPatterns);
       (void)applyPatternsAndFoldGreedily(funcOp, std::move(promotionPatterns));
-      applyCanonicalizationPatternsForTiling(context, funcOp);
+
+      RewritePatternSet promotionCanonicalizationPatterns =
+          linalg::getLinalgTilingCanonicalizationPatterns(context);
+      populateAffineMinCanonicalizationPattern(
+          promotionCanonicalizationPatterns);
+      (void)applyPatternsAndFoldGreedily(
+          funcOp, std::move(promotionCanonicalizationPatterns));
 
       LLVM_DEBUG({
         llvm::dbgs() << "--- After workgroup memory promotion  ---\n";
@@ -611,12 +610,18 @@ void TileAndVectorizeInOneWorkgroupPass::runOnOperation() {
     // controlled by vectorization. This is needed due to historical reasons.
     // Change the second level tiling to cyclic to loops and remove this.
     if (launchConfig.useVectorize()) {
-      OwningRewritePatternList secondLevelTilingPatterns(&getContext());
+      RewritePatternSet secondLevelTilingPatterns(&getContext());
       populateTilingToSubgroupPatterns(context, launchConfig,
                                        secondLevelTilingPatterns);
       (void)applyPatternsAndFoldGreedily(funcOp,
                                          std::move(secondLevelTilingPatterns));
-      applyCanonicalizationPatternsForTiling(context, funcOp);
+
+      RewritePatternSet secondLevelTilingCanonicalizationPatterns =
+          linalg::getLinalgTilingCanonicalizationPatterns(context);
+      populateAffineMinCanonicalizationPattern(
+          secondLevelTilingCanonicalizationPatterns);
+      (void)applyPatternsAndFoldGreedily(
+          funcOp, std::move(secondLevelTilingCanonicalizationPatterns));
       promoteSingleIterationLoops(funcOp);
 
       LLVM_DEBUG({
@@ -627,7 +632,7 @@ void TileAndVectorizeInOneWorkgroupPass::runOnOperation() {
     }
 
     {
-      OwningRewritePatternList thirdLevelTilingPatterns(&getContext());
+      RewritePatternSet thirdLevelTilingPatterns(&getContext());
       populateTilingToInvocationPatterns(context, launchConfig,
                                          thirdLevelTilingPatterns);
       (void)applyPatternsAndFoldGreedily(funcOp,
@@ -649,7 +654,12 @@ void TileAndVectorizeInOneWorkgroupPass::runOnOperation() {
                                          std::move(canoncalizationPatterns));
 
       // Perform generic canonicalization.
-      applyCanonicalizationPatternsForTiling(context, funcOp);
+      RewritePatternSet threadLevelTilingCanonicalizationPatterns =
+          linalg::getLinalgTilingCanonicalizationPatterns(context);
+      populateAffineMinCanonicalizationPattern(
+          threadLevelTilingCanonicalizationPatterns);
+      (void)applyPatternsAndFoldGreedily(
+          funcOp, std::move(threadLevelTilingCanonicalizationPatterns));
 
       LLVM_DEBUG({
         llvm::dbgs() << "--- After tiling to invocations ---\n";
@@ -659,7 +669,7 @@ void TileAndVectorizeInOneWorkgroupPass::runOnOperation() {
     }
 
     {
-      OwningRewritePatternList tilingPatterns(&getContext());
+      RewritePatternSet tilingPatterns(&getContext());
       auto marker = getLinalgMatchAndReplaceMarker(
           getConvFilterTileMarker(), getVectorizeMarker(), context);
       populateTilingConvFilterPatterns(context, tilingPatterns, launchConfig,
@@ -668,7 +678,13 @@ void TileAndVectorizeInOneWorkgroupPass::runOnOperation() {
       tilingPatterns.insert<linalg::AffineMinSCFCanonicalizationPattern>(
           context);
       (void)applyPatternsAndFoldGreedily(funcOp, std::move(tilingPatterns));
-      applyCanonicalizationPatternsForTiling(context, funcOp);
+
+      RewritePatternSet convTilingCanonicalizationPatterns =
+          linalg::getLinalgTilingCanonicalizationPatterns(context);
+      populateAffineMinCanonicalizationPattern(
+          convTilingCanonicalizationPatterns);
+      (void)applyPatternsAndFoldGreedily(
+          funcOp, std::move(convTilingCanonicalizationPatterns));
 
       LLVM_DEBUG({
         llvm::dbgs() << "--- After tiling convolution filter  ---\n";
@@ -679,10 +695,11 @@ void TileAndVectorizeInOneWorkgroupPass::runOnOperation() {
 
     if (launchConfig.useVectorize()) {
       {
-        OwningRewritePatternList vectorizationPatterns(&getContext());
+        RewritePatternSet vectorizationPatterns(&getContext());
         populateVectorizationPatterns(context, launchConfig,
                                       vectorizationPatterns);
-        populateVectorizeLinalgConvPatterns(context, vectorizationPatterns);
+        populateLinalgToVectorVectorizeConvPatterns(context,
+                                                    vectorizationPatterns);
         (void)applyPatternsAndFoldGreedily(funcOp,
                                            std::move(vectorizationPatterns));
         LLVM_DEBUG({
@@ -718,7 +735,6 @@ void TileAndVectorizeInOneWorkgroupPass::runOnOperation() {
                LowerToLoops<linalg::DepthwiseConvInputNHWCFilterHWCFOp>,
                LowerToLoops<linalg::DepthwiseConvInputNHWCFilterHWCOp>,
                LowerToLoops<linalg::FillOp>, LowerToLoops<linalg::GenericOp>,
-               LowerToLoops<linalg::IndexedGenericOp>,
                LowerToLoops<linalg::MatmulOp>,
                LowerToLoops<linalg::PoolingNHWCMaxFOp>,
                LowerToLoops<linalg::PoolingNHWCMinFOp>,
@@ -735,16 +751,11 @@ void TileAndVectorizeInOneWorkgroupPass::runOnOperation() {
 //===----------------------------------------------------------------------===//
 
 std::unique_ptr<OperationPass<IREE::HAL::ExecutableTargetOp>>
-createTileAndVectorizeInOneWorkgroupPass(const SPIRVCodegenOptions &options) {
-  return std::make_unique<TileAndVectorizeInOneWorkgroupPass>(options);
+createLinalgToSPIRVTileAndVectorizeOneWorkgroupPass(
+    const SPIRVCodegenOptions &options) {
+  return std::make_unique<LinalgToSPIRVTileAndVectorizeOneWorkgroupPass>(
+      options);
 }
-
-static PassRegistration<TileAndVectorizeInOneWorkgroupPass> pass(
-    "iree-spirv-tile-and-vectorize-in-one-workgroup",
-    "Tile and vectorize Linalg operations on buffers in one workgroup", [] {
-      SPIRVCodegenOptions options = getSPIRVCodegenOptionsFromClOptions();
-      return std::make_unique<TileAndVectorizeInOneWorkgroupPass>(options);
-    });
 
 }  // namespace iree_compiler
 }  // namespace mlir

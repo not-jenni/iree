@@ -1,17 +1,9 @@
 # Lint as: python3
-# Copyright 2019 Google LLC
+# Copyright 2019 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 """Top-level python system API.
 
 This facility layers on top of the underlying binding native facilities and
@@ -116,7 +108,6 @@ class Config:
   driver: _binding.HalDriver
   device: _binding.HalDevice
   vm_instance: _binding.VmInstance
-  host_type_factory: _binding.HostTypeFactory
   default_vm_modules: Tuple[_binding.VmModule, ...]
 
   def __init__(self, driver_name: Optional[str] = None):
@@ -125,10 +116,7 @@ class Config:
         driver_name.split(",") if driver_name is not None else None)
     self.device = self.driver.create_default_device()
     hal_module = _binding.create_hal_module(self.device)
-    strings_module = _binding.create_strings_module()
-    tensorlist_module = _binding.create_tensorlist_module()
-    self.host_type_factory = _binding.HostTypeFactory.get_numpy()
-    self.default_vm_modules = (hal_module, strings_module, tensorlist_module)
+    self.default_vm_modules = (hal_module,)
 
 
 _global_config = None
@@ -186,56 +174,6 @@ def _convert_lists_to_tuples(pytree):
     return pytree
 
 
-class BoundFunction:
-  """Wraps a VmFunction, VmContext and ABI into a pythonic function."""
-
-  def __init__(self, context: "SystemContext",
-               vm_function: _binding.VmFunction):
-    self._context = context
-    self._vm_function = vm_function
-    self._abi = context.create_function_abi(vm_function)
-    self._serialized_inputs = None
-    self._serialized_outputs = None
-
-  def __call__(self, *args, **kwargs):
-    # Convert tensors, device arrays, ints, ... to IREE-friendly inputs.
-    args = [normalize_value(value) for value in args]
-    kwargs = {k: normalize_value(v) for k, v in kwargs.items()}
-    args = [_bool_to_int8(value) for value in args]
-    kwargs = {k: _bool_to_int8(v) for k, v in kwargs.items()}
-
-    # NOTE: This is just doing sync dispatch right now. In the future,
-    # this should default to async and potentially have some kind of policy
-    # flag that can allow it to be overridden.
-    inputs = self._abi.pack_inputs(*args, **kwargs)
-    self._serialized_inputs = tuple(self._abi.serialize_vm_list(inputs))
-    results = self._abi.allocate_results(inputs, static_alloc=False)
-    self._context._vm_context.invoke(self._vm_function, inputs, results)
-    self._serialized_outputs = tuple(self._abi.serialize_vm_list(results))
-    unpacked_results = self._abi.unpack_results(results)
-
-    # TODO(#5359): Add support for list and tuple return types.
-    # The SIP signature used by the runtime bindings cannot differentiate
-    # between Lists and Tuples, as it only has a single 'sequence' type.
-    # The function abi uses py::list when unpacking the results according to the
-    # SIP signature. The most common instance of a returned Sequence in Python
-    # however is multiple return values, and that is represented by a tuple.
-    # We manually change the return types of all Sequences to Tuple in order to
-    # match the semantics of this case.
-    unpacked_results = _convert_lists_to_tuples(unpacked_results)
-
-    return unpacked_results
-
-  def __repr__(self):
-    return f"<BoundFunction {repr(self._abi)} ({repr(self._vm_function)})>"
-
-  def get_serialized_values(self):
-    if self._serialized_inputs is None:
-      raise RuntimeError("Attempted to call get_serialized_values() before "
-                         "any values were passed.")
-    return self._serialized_inputs, self._serialized_outputs
-
-
 class BoundModule:
   """Wraps a VmModule with its context and provides nice python accessors.
 
@@ -270,21 +208,11 @@ class BoundModule:
     if vm_function is None:
       raise KeyError(f"Function '{name}' not found in module '{self}'")
 
-    # TODO: Remove this fork and delete the local BoundFunction once SIP is
-    # removed. We take the new path if there is a native IREE ABI attribute
-    # or no SIP ('f') attribute.
-    reflection_dict = vm_function.reflection
-    if "iree.abi" in reflection_dict or "f" not in reflection_dict:
-      # TODO: Needing to know the precise device to allocate on here is bad
-      # layering and will need to be fixed in some fashion if/when doing
-      # heterogenous dispatch.
-      return FunctionInvoker(self._context.vm_context,
-                             self._context.config.device, vm_function)
-
-    # Legacy SIP path.
-    bound_function = BoundFunction(self._context, vm_function)
-    self._lazy_functions[name] = bound_function
-    return bound_function
+    # TODO: Needing to know the precise device to allocate on here is bad
+    # layering and will need to be fixed in some fashion if/when doing
+    # heterogenous dispatch.
+    return FunctionInvoker(self._context.vm_context,
+                           self._context.config.device, vm_function)
 
   def __repr__(self):
     return f"<BoundModule {repr(self._vm_module)}>"
@@ -345,11 +273,6 @@ class SystemContext:
   @property
   def modules(self) -> BoundModules:
     return self._bound_modules
-
-  def create_function_abi(self, f: _binding.VmFunction) -> _binding.FunctionAbi:
-    return self._vm_context.create_function_abi(self._config.device,
-                                                self._config.host_type_factory,
-                                                f)
 
   def add_vm_modules(self, vm_modules):
     assert self._is_dynamic, "Cannot 'add_module' on a static context"

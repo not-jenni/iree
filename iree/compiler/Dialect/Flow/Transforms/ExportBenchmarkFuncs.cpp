@@ -1,20 +1,13 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "iree/compiler/Dialect/Flow/Transforms/PassDetail.h"
 #include "iree/compiler/Dialect/Flow/Transforms/Passes.h"
+#include "iree/compiler/Dialect/IREE/IR/IREEDialect.h"
 #include "iree/compiler/Dialect/IREE/IR/IREEOps.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/BlockAndValueMapping.h"
@@ -34,6 +27,10 @@ namespace Flow {
 class ExportBenchmarkFuncsPass
     : public ExportBenchmarkFuncsBase<ExportBenchmarkFuncsPass> {
  public:
+  void getDependentDialects(DialectRegistry& registry) const override {
+    registry.insert<IREEDialect>();
+  }
+
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
 
@@ -42,7 +39,7 @@ class ExportBenchmarkFuncsPass
     // the wrapping for only the inputs.
     SmallVector<FuncOp, 4> entryFuncOps;
     for (auto entryFuncOp : moduleOp.getOps<FuncOp>()) {
-      if (entryFuncOp->getAttr("iree.module.export")) {
+      if (entryFuncOp.isPublic()) {
         entryFuncOps.push_back(entryFuncOp);
       }
     }
@@ -57,9 +54,11 @@ class ExportBenchmarkFuncsPass
                                                     OpBuilder& moduleBuilder) {
     std::string baseName = "_benchmark_input_";
     std::string name = baseName + std::to_string(uniqueId++);
-    auto variableOp = moduleBuilder.create<VariableOp>(
-        loc, name,
-        /*isMutable=*/false, inputType, moduleBuilder.getZeroAttr(inputType));
+    auto initialValue = moduleBuilder.getZeroAttr(inputType);
+    assert(initialValue && "failed to get zero attr for type");
+    auto variableOp = moduleBuilder.create<VariableOp>(loc, name,
+                                                       /*isMutable=*/false,
+                                                       inputType, initialValue);
     variableOp.setPrivate();
     variableOp->setAttr("noinline", UnitAttr::get(moduleBuilder.getContext()));
     return variableOp;
@@ -82,7 +81,6 @@ class ExportBenchmarkFuncsPass
     auto funcOp = moduleBuilder.create<FuncOp>(
         loc, funcName, moduleBuilder.getFunctionType({}, {}));
     funcOp.setPublic();
-    funcOp->setAttr("iree.module.export", moduleBuilder.getUnitAttr());
     funcOp->setAttr("iree.abi.stub", moduleBuilder.getUnitAttr());
     SmallVector<NamedAttribute> reflectionAttrs = {
         moduleBuilder.getNamedAttr("benchmark",
@@ -110,7 +108,6 @@ class ExportBenchmarkFuncsPass
 
     // Ensure the original function is not exported and not inlined.
     entryFuncOp->setAttr("noinline", moduleBuilder.getUnitAttr());
-    entryFuncOp->removeAttr("iree.module.export");
     entryFuncOp->removeAttr("iree.reflection");
     entryFuncOp.setPrivate();
   }

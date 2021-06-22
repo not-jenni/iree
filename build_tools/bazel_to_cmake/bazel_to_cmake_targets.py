@@ -1,17 +1,9 @@
 # Lint as: python3
-# Copyright 2020 Google LLC
+# Copyright 2020 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 # Bazel to CMake target name conversions used by bazel_to_cmake.py.
 
@@ -19,13 +11,13 @@ EXPLICIT_TARGET_MAPPING = {
     # Internal utilities to emulate various binary/library options.
     "//build_tools:default_linkopts": [],
 
-    # absl
-    "@com_google_absl//absl/flags:flag": ["absl::flags"],
-    "@com_google_absl//absl/flags:parse": ["absl::flags_parse"],
+    # LLVM
+    "@llvm-project//llvm:IPO": ["LLVMipo"],
     # MLIR
     "@llvm-project//mlir:AllPassesAndDialects": ["MLIRAllDialects"],
     "@llvm-project//mlir:AffineToStandardTransforms": ["MLIRAffineToStandard"],
     "@llvm-project//mlir:CFGTransforms": ["MLIRSCFToStandard"],
+    "@llvm-project//mlir:ComplexDialect": ["MLIRComplex"],
     "@llvm-project//mlir:DialectUtils": [""],
     "@llvm-project//mlir:ExecutionEngineUtils": ["MLIRExecutionEngine"],
     "@llvm-project//mlir:GPUDialect": ["MLIRGPU"],
@@ -63,23 +55,10 @@ EXPLICIT_TARGET_MAPPING = {
     "@com_github_dvidelabs_flatcc//:flatcc": ["flatcc"],
     "@com_github_dvidelabs_flatcc//:runtime": ["flatcc::runtime"],
     "@com_google_googletest//:gtest": ["gmock", "gtest"],
-    "@renderdoc_api//:renderdoc_app": ["renderdoc_api::renderdoc_app"],
     "@spirv_cross//:spirv_cross_lib": ["spirv-cross-msl"],
     "@cpuinfo": ["cpuinfo"],
     "@vulkan_memory_allocator//:impl_header_only": ["vulkan_memory_allocator"],
 }
-
-
-def _convert_absl_target(target):
-  # Default to a pattern substitution approach.
-  # Take "absl::" and append the name part of the full target identifier, e.g.
-  #   "@com_google_absl//absl/types:optional" -> "absl::optional"
-  #   "@com_google_absl//absl/types:span"     -> "absl::span"
-  if ":" in target:
-    target_name = target.rsplit(":")[-1]
-  else:
-    target_name = target.rsplit("/")[-1]
-  return ["absl::" + target_name]
 
 
 def _convert_mlir_target(target):
@@ -116,8 +95,6 @@ def convert_external_target(target):
   """
   if target in EXPLICIT_TARGET_MAPPING:
     return EXPLICIT_TARGET_MAPPING[target]
-  if target.startswith("@com_google_absl//absl"):
-    return _convert_absl_target(target)
   if target.startswith("@llvm-project//llvm"):
     return _convert_llvm_target(target)
   if target.startswith("@llvm-project//mlir"):

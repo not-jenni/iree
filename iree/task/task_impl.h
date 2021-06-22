@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #ifndef IREE_TASK_TASK_IMPL_H_
 #define IREE_TASK_TASK_IMPL_H_
@@ -130,10 +122,14 @@ iree_task_dispatch_slice_t* iree_task_dispatch_slice_allocate(
 // Executes and retires a dispatch slice task.
 // May block the caller for an indeterminate amount of time and should only be
 // called from threads owned by or donated to the executor.
+//
+// |local_memory| is a block of memory exclusively available to the slice
+// during execution. Contents are undefined both before and after execution.
+//
 // Returns ok if all tiles were successfully executed and otherwise returns
 // an unspecified status (probably the first non-ok status hit).
 iree_status_t iree_task_dispatch_slice_execute(
-    iree_task_dispatch_slice_t* task,
+    iree_task_dispatch_slice_t* task, iree_byte_span_t local_memory,
     iree_task_submission_t* pending_submission);
 
 //==============================================================================
@@ -150,11 +146,15 @@ iree_task_dispatch_shard_t* iree_task_dispatch_shard_allocate(
 // Executes and retires a dispatch shard task.
 // May block the caller for an indeterminate amount of time and should only be
 // called from threads owned by or donated to the executor.
+//
+// |local_memory| is a block of memory exclusively available to the shard
+// during execution. Contents are undefined both before and after execution.
+//
 // Returns ok if all tiles processed in the shard successfully executed and
 // otherwise returns an unspecified status (probably the first non-ok status
 // hit).
 iree_status_t iree_task_dispatch_shard_execute(
-    iree_task_dispatch_shard_t* task,
+    iree_task_dispatch_shard_t* task, iree_byte_span_t local_memory,
     iree_task_submission_t* pending_submission);
 
 #ifdef __cplusplus

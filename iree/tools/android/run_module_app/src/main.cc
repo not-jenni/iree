@@ -1,31 +1,23 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include <android/log.h>
 #include <android_native_app_glue.h>
 
 #include <array>
 #include <chrono>
+#include <string>
 #include <thread>
 
-#include "absl/strings/str_split.h"
-#include "absl/strings/string_view.h"
-#include "iree/base/status.h"
+#include "iree/base/status_cc.h"
 #include "iree/hal/drivers/init.h"
-#include "iree/modules/hal/hal_module.h"
+#include "iree/modules/hal/module.h"
 #include "iree/tools/utils/vm_util.h"
 #include "iree/vm/api.h"
+#include "iree/vm/bytecode_module.h"
 
 namespace iree {
 namespace {
@@ -104,12 +96,16 @@ Status RunModule(const IreeModuleInvocation& invocation) {
       "creating instance");
 
   iree_vm_module_t* input_module = nullptr;
-  IREE_RETURN_IF_ERROR(LoadBytecodeModule(invocation.module, &input_module));
+  IREE_RETURN_IF_ERROR(iree_vm_bytecode_module_create(
+      iree_make_const_byte_span((void*)invocation.module.data(),
+                                invocation.module.size()),
+      iree_allocator_null(), iree_allocator_system(), &input_module));
 
   iree_hal_device_t* device = nullptr;
   IREE_RETURN_IF_ERROR(CreateDevice(invocation.driver.c_str(), &device));
   iree_vm_module_t* hal_module = nullptr;
-  IREE_RETURN_IF_ERROR(CreateHalModule(device, &hal_module));
+  IREE_RETURN_IF_ERROR(
+      iree_hal_module_create(device, iree_allocator_system(), &hal_module));
 
   iree_vm_context_t* context = nullptr;
   // Order matters. The input module will likely be dependent on the hal module.
@@ -128,8 +124,13 @@ Status RunModule(const IreeModuleInvocation& invocation) {
           &function),
       "looking up function '%s'", function_name.c_str());
 
-  std::vector<absl::string_view> input_views(
-      absl::StrSplit(invocation.inputs, '\n', absl::SkipEmpty()));
+  size_t pos = 0;
+  std::string inputs_str = invocation.inputs;
+  std::vector<std::string> input_views;
+  while ((pos = inputs_str.find('\n')) != std::string::npos) {
+    input_views.push_back(inputs_str.substr(0, pos));
+    inputs_str.erase(0, pos + 1);
+  }
   vm::ref<iree_vm_list_t> inputs;
   IREE_RETURN_IF_ERROR(ParseToVariantList(iree_hal_device_allocator(device),
                                           input_views, &inputs));

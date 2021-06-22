@@ -1,16 +1,8 @@
-// Copyright 2019 Google LLC
+// Copyright 2019 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 // Tests covering the dispatch logic for individual ops.
 //
@@ -18,10 +10,8 @@
 // avoid defining the IR inline here so that we can run this test on platforms
 // that we can't run the full MLIR compiler stack on.
 
-#include "absl/strings/match.h"
-#include "absl/strings/str_replace.h"
 #include "iree/base/logging.h"
-#include "iree/base/status.h"
+#include "iree/base/status_cc.h"
 #include "iree/testing/gtest.h"
 #include "iree/vm/api.h"
 #include "iree/vm/bytecode_module.h"
@@ -37,9 +27,11 @@ struct TestParams {
 };
 
 std::ostream& operator<<(std::ostream& os, const TestParams& params) {
-  return os << absl::StrReplaceAll(params.module_file.name,
-                                   {{":", "_"}, {".", "_"}})
-            << "_" << params.function_name;
+  std::string name{params.module_file.name};
+  auto name_sv = iree_make_string_view(name.data(), name.size());
+  iree_string_view_replace_char(name_sv, ':', '_');
+  iree_string_view_replace_char(name_sv, '.', '_');
+  return os << name << "_" << params.function_name;
 }
 
 std::vector<TestParams> GetModuleTestParams() {
@@ -56,8 +48,7 @@ std::vector<TestParams> GetModuleTestParams() {
         iree_const_byte_span_t{
             reinterpret_cast<const uint8_t*>(module_file.data),
             module_file.size},
-        iree_allocator_null(), iree_allocator_system(), &module))
-        << "Bytecode module failed to load";
+        iree_allocator_null(), iree_allocator_system(), &module));
     iree_vm_module_signature_t signature = module->signature(module->self);
     test_params.reserve(test_params.size() + signature.export_function_count);
     for (int i = 0; i < signature.export_function_count; ++i) {
@@ -86,8 +77,7 @@ class VMBytecodeDispatchTest
         iree_const_byte_span_t{
             reinterpret_cast<const uint8_t*>(test_params.module_file.data),
             test_params.module_file.size},
-        iree_allocator_null(), iree_allocator_system(), &bytecode_module_))
-        << "Bytecode module failed to load";
+        iree_allocator_null(), iree_allocator_system(), &bytecode_module_));
 
     std::vector<iree_vm_module_t*> modules = {bytecode_module_};
     IREE_CHECK_OK(iree_vm_context_create_with_modules(
@@ -105,8 +95,7 @@ class VMBytecodeDispatchTest
     iree_vm_function_t function;
     IREE_CHECK_OK(bytecode_module_->lookup_function(
         bytecode_module_->self, IREE_VM_FUNCTION_LINKAGE_EXPORT,
-        iree_make_cstring_view(function_name), &function))
-        << "Exported function '" << function_name << "' not found";
+        iree_make_cstring_view(function_name), &function));
 
     return iree_vm_invoke(context_, function,
                           /*policy=*/nullptr, /*inputs=*/nullptr,
@@ -120,7 +109,7 @@ class VMBytecodeDispatchTest
 
 TEST_P(VMBytecodeDispatchTest, Check) {
   const auto& test_params = GetParam();
-  bool expect_failure = absl::StartsWith(test_params.function_name, "fail_");
+  bool expect_failure = test_params.function_name.find("fail_") == 0;
 
   iree_status_t status = RunFunction(test_params.function_name.c_str());
   if (iree_status_is_ok(status)) {

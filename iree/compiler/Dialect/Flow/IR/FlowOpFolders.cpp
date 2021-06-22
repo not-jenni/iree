@@ -1,16 +1,8 @@
-// Copyright 2019 Google LLC
+// Copyright 2019 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include <algorithm>
 #include <numeric>
@@ -109,6 +101,23 @@ static bool hasUsersInStreamAfterUpdate(Value value, Operation *updateOp) {
   return false;
 }
 
+// Returns true if the given |operand| is a constant tied to a result of
+// |updateOp| and the |updateOp| has inplace update semantics.
+static bool updatesConstantInStream(Value operand, Operation *updateOp) {
+  // Only two ops have inplace update semantics thus far. (TensorReshapeOp,
+  // which also implements TiedOpInterface, is fine.) Checking the explicit
+  // op list is not good; we should have an op interface.
+  if (!isa<DispatchOp, TensorUpdateOp>(updateOp)) return false;
+
+  // For loaded variables, check whether it's mutable. Immutable variables will
+  // be aggregated into one read-only buffer.
+  if (auto varLoadOp = operand.getDefiningOp<VariableLoadOp>()) {
+    return !varLoadOp.getLoadedVariable().is_mutable();
+  }
+
+  return false;
+}
+
 /// Inserts clones into the stream as required by tied results.
 /// This is required to preserve the immutable tensor semantics required by the
 /// SSA use-def chain.
@@ -142,7 +151,7 @@ struct InsertImmutabilityPreservingStreamClones
         }
       }
     }
-    return didClone ? success() : failure();
+    return success(didClone);
   }
 
   bool insertTiedClones(TiedOpInterface tiedOp,
@@ -160,7 +169,24 @@ struct InsertImmutabilityPreservingStreamClones
         SmallPtrSet<Operation *, 1> excludedOps;
         excludedOps.insert(tiedOp.getOperation());
         excludedOps.insert(clonedOperand.getDefiningOp());
-        tiedOperand.replaceAllUsesExcept(clonedOperand, excludedOps);
+        tiedOperand.replaceUsesWithIf(clonedOperand, [&](OpOperand &use) {
+          Operation *user = use.getOwner();
+          return !excludedOps.count(user) &&
+                 user->getBlock() == clonedOperand.getDefiningOp()->getBlock();
+        });
+        didClone = true;
+      }
+
+      // TODO(#5492): This is a temporary solution to address the issue where we
+      // aggreate constants in a read-only buffer but still see inplace updates
+      // to them. Force clones for such constants for now.
+      if (updatesConstantInStream(tiedOperand, tiedOp)) {
+        rewriter.setInsertionPoint(tiedOp);
+        auto clonedOperand = rewriter.createOrFold<TensorCloneOp>(
+            tiedOperand.getLoc(), tiedOperand);
+        tiedOperand.replaceUsesWithIf(clonedOperand, [&](OpOperand &use) {
+          return use.getOwner() == tiedOp.getOperation();
+        });
         didClone = true;
       }
     }
@@ -202,7 +228,8 @@ void ExStreamFragmentOp::getCanonicalizationPatterns(
     OwningRewritePatternList &results, MLIRContext *context) {
   results.insert<ClosureOptimizationPattern<ExStreamFragmentOp>>(context);
   results.insert<InsertImmutabilityPreservingStreamClones>(context);
-  results.insert<TieStreamResults>(context);
+  // TODO(#6185): fix stream ties when types/shapes change.
+  // results.insert<TieStreamResults>(context);
 }
 
 //===----------------------------------------------------------------------===//

@@ -1,17 +1,9 @@
 # Lint as: python3
-# Copyright 2021 Google LLC
+# Copyright 2021 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import json
 import logging
@@ -263,6 +255,10 @@ def _ndarray_to_vm(inv: Invocation, t: VmVariantList, x, desc):
   t.push_buffer_view(inv.device, x, element_type)
 
 
+def _ndarray_like_to_vm(inv: Invocation, t: VmVariantList, x, desc):
+  return _ndarray_to_vm(inv, t, np.asarray(x), desc)
+
+
 PYTHON_TO_VM_CONVERTERS = {
     bool: _bool_to_vm,
     int: _int_to_vm,
@@ -349,9 +345,13 @@ DTYPE_TO_HAL_ELEMENT_TYPE = (
 )
 
 
+def _is_ndarray_descriptor(desc):
+  return desc and desc[0] == "ndarray"
+
+
 def _is_0d_ndarray_descriptor(desc):
   # Example: ["ndarray", "f32", 0]
-  return desc[0] == "ndarray" and desc[2] == 0
+  return desc and desc[0] == "ndarray" and desc[2] == 0
 
 
 def _cast_scalar_to_ndarray(inv: Invocation, x, desc):
@@ -394,10 +394,18 @@ def _merge_python_sequence_to_vm(inv: Invocation, vm_list, py_list, descs):
     inv.current_arg = py_value
     inv.current_desc = desc
     py_type = py_value.__class__
-    try:
-      converter = PYTHON_TO_VM_CONVERTERS[py_type]
-    except KeyError:
-      _raise_argument_error(inv, f"cannot map Python type to VM: {py_type}")
+
+    # For ndarray, we want to be able to handle array-like, so check for that
+    # explicitly (duck typed vs static typed).
+    if _is_ndarray_descriptor(desc):
+      converter = _ndarray_like_to_vm
+    else:
+      try:
+        converter = PYTHON_TO_VM_CONVERTERS[py_type]
+      except KeyError:
+        _raise_argument_error(
+            inv, f"cannot map Python type to VM: {py_type}"
+            f" (for desc {desc})")
     try:
       converter(inv, vm_list, py_value, desc)
     except Exception as e:

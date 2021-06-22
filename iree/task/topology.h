@@ -1,21 +1,15 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #ifndef IREE_TASK_TOPOLOGY_H_
 #define IREE_TASK_TOPOLOGY_H_
 
 #include <limits.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 #include "iree/base/api.h"
 #include "iree/base/internal/threading.h"
@@ -24,8 +18,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
-
-struct cpuinfo_core;
 
 // A bitmask indicating which other groups from 0 to N may constructively share
 // caches. For example, a value of 0b1100 indicates that group 2 and 3 share.
@@ -38,13 +30,13 @@ typedef uint64_t iree_task_topology_group_mask_t;
 // Information about a particular group within the topology.
 // Groups may be of varying levels of granularity even within the same topology
 // based on how the topology is defined.
-typedef struct {
+typedef struct iree_task_topology_group_t {
   // Group index within the topology matching a particular bit in
   // iree_task_topology_group_mask_t.
   uint8_t group_index;
 
   // A name assigned to executor workers used for logging/tracing.
-  char name[16];
+  char name[15];
 
   // Processor index in the cpuinfo set.
   uint32_t processor_index;
@@ -83,7 +75,7 @@ void iree_task_topology_group_initialize(uint8_t group_index,
 // and attempt to derive some (hopefully) useful task system topology from it.
 // We can add the more common heuristics over time to the core and leave the
 // edge cases for applications to construct.
-typedef struct {
+typedef struct iree_task_topology_t {
   iree_host_size_t group_count;
   iree_task_topology_group_t groups[IREE_TASK_EXECUTOR_MAX_WORKER_COUNT];
 } iree_task_topology_t;
@@ -129,51 +121,6 @@ iree_status_t iree_task_topology_push_group(
 // preferred processors by default.
 void iree_task_topology_initialize_from_group_count(
     iree_host_size_t group_count, iree_task_topology_t* out_topology);
-
-// Initializes a topology with one group for each physical core in the machine.
-//
-// If detailed cache information is not available this is a decent
-// approximation that can be used as a fallback.
-void iree_task_topology_initialize_from_physical_cores(
-    iree_host_size_t max_core_count, iree_task_topology_t* out_topology);
-
-// Initializes a topology with one group for each physical core in the machine
-// with the given microarchitecture specified as a cpuinfo_uarch value.
-//
-// If detailed uarch information is not available this falls back to the same
-// behavior as iree_task_topology_initialize_from_physical_cores.
-void iree_task_topology_initialize_from_physical_cores_with_uarch(
-    uint32_t cpuinfo_uarch, iree_host_size_t max_core_count,
-    iree_task_topology_t* out_topology);
-
-// Returns true if the given |core| passes the filter and should be included.
-// |user_data| is the value passed alongside the filter function.
-typedef bool (*iree_task_topology_core_filter_t)(
-    const struct cpuinfo_core* core, uintptr_t user_data);
-
-// Initializes a topology with one group for each core that matches |filter_fn|.
-//
-// If cpuinfo is not available this falls back to the same behavior as
-// iree_task_topology_initialize_from_physical_cores.
-void iree_task_topology_initialize_from_physical_cores_with_filter(
-    iree_task_topology_core_filter_t filter_fn, uintptr_t filter_fn_data,
-    iree_host_size_t max_core_count, iree_task_topology_t* out_topology);
-
-// Initializes a topology with one group for each unique L2 cache group across
-// all available cores. This optimizes for temporal and spatial cache locality
-// but may suffer from oversubscription if there are other processes trying to
-// use the same cores.
-//
-// If detailed cache information is not available this falls back to the same
-// behavior as iree_task_topology_initialize_from_physical_cores.
-void iree_task_topology_initialize_from_unique_l2_cache_groups(
-    iree_host_size_t max_group_count, iree_task_topology_t* out_topology);
-
-// TODO(#4654): more helpers and better defaults for the platforms we support.
-// Users can always make their own but just using these is the common path.
-// Ideas:
-// - _from_unique_l2_cache_groups but with a min/max count (N% utilization)
-// - cluster filtering (big/little cores on ARM)
 
 #ifdef __cplusplus
 }  // extern "C"

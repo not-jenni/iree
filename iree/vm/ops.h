@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #ifndef IREE_VM_OPS_H_
 #define IREE_VM_OPS_H_
@@ -107,10 +99,10 @@ static inline float vm_cast_ui32f32(int32_t operand) {
   return (float)(uint32_t)operand;
 }
 static inline int32_t vm_cast_f32si32(float operand) {
-  return (int32_t)roundf(operand);
+  return (int32_t)lroundf(operand);
 }
 static inline int32_t vm_cast_f32ui32(float operand) {
-  return (uint32_t)roundf(operand);
+  return (uint32_t)lroundf(operand);
 }
 
 static inline float vm_atan_f32(float operand) { return atanf(operand); }
@@ -190,6 +182,15 @@ static inline int32_t vm_cmp_lt_i32u(int32_t lhs, int32_t rhs) {
 static inline int32_t vm_cmp_nz_i32(int32_t operand) {
   return (operand != 0) ? 1 : 0;
 }
+static inline int32_t vm_cmp_eq_ref(iree_vm_ref_t* lhs, iree_vm_ref_t* rhs) {
+  return iree_vm_ref_equal(lhs, rhs) ? 1 : 0;
+}
+static inline int32_t vm_cmp_ne_ref(iree_vm_ref_t* lhs, iree_vm_ref_t* rhs) {
+  return (!iree_vm_ref_equal(lhs, rhs)) ? 1 : 0;
+}
+static inline int32_t vm_cmp_nz_ref(iree_vm_ref_t* operand) {
+  return (operand->ptr != NULL) ? 1 : 0;
+}
 
 static inline int32_t vm_cmp_eq_f32o(float lhs, float rhs) {
   return (lhs == rhs) ? 1 : 0;
@@ -215,7 +216,9 @@ static inline int32_t vm_cmp_lte_f32o(float lhs, float rhs) {
 static inline int32_t vm_cmp_lte_f32u(float lhs, float rhs) {
   return (isunordered(lhs, rhs) || islessequal(lhs, rhs)) ? 1 : 0;
 }
-static inline int32_t vm_cmp_nan_f32(float operand) { return isnan(operand); }
+static inline int32_t vm_cmp_nan_f32(float operand) {
+  return isnan(operand) ? 1 : 0;
+}
 
 //===------------------------------------------------------------------===//
 // Control flow ops
@@ -320,7 +323,7 @@ static inline int32_t vm_cmp_nz_i64(int64_t operand) {
 }
 
 //===------------------------------------------------------------------===//
-// Utility macros (Used for things that EmitC can't hadnle)
+// Utility macros (Used for things that EmitC can't handle)
 //===------------------------------------------------------------------===//
 
 // Get the address of an array element
@@ -330,6 +333,13 @@ static inline int32_t vm_cmp_nz_i64(int64_t operand) {
 #define VM_REF_ARRAY_RELEASE(array)                          \
   for (int i = 0; i < IREE_ARRAYSIZE(array); i++) {          \
     iree_vm_ref_release(VM_ARRAY_ELEMENT_ADDRESS(array, i)); \
+  }
+
+#define VM_REF_RELEASE_IF_TYPE_MISMATCH(ref, type_def) \
+  if (ref->type != IREE_VM_REF_TYPE_NULL &&            \
+      (iree_vm_type_def_is_value(type_def) ||          \
+       ref->type != type_def->ref_type)) {             \
+    iree_vm_ref_release(ref);                          \
   }
 
 // TODO(simon-camp): This macro should resemble the error handling part of the

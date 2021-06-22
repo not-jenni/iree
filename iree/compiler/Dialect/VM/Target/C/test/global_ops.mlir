@@ -2,17 +2,21 @@
 
 vm.module @global_ops {
   // check the generated state struct
-  // CHECK-LABEL: struct global_ops_state_s {
+  // CHECK-LABEL: struct global_ops_state_t {
   // CHECK-NEXT: iree_allocator_t allocator;
   // CHECK-NEXT: uint8_t rwdata[8];
   // CHECK-NEXT: iree_vm_ref_t refs[0];
+  // CHECK-NEXT: iree_vm_buffer_t rodata_buffers[0];
   // CHECK-NEXT: };
 
   vm.global.i32 @c42 42 : i32
   vm.global.i32 @c107_mut mutable 107 : i32
 
+  // Skip forward declarations
+  // CHECK: DEFINE FUNCTIONS
+
   vm.export @test_global_load_i32
-  // CHECK-LABEL: iree_status_t global_ops_test_global_load_i32_impl(
+  // CHECK: static iree_status_t global_ops_test_global_load_i32_impl(
   vm.func @test_global_load_i32() -> i32 {
     // CHECK-NEXT: VARIABLE DECLARATIONS
     // CHECK-NEXT: RESULTS
@@ -25,7 +29,7 @@ vm.module @global_ops {
   }
 
   vm.export @test_global_store_i32
-  // CHECK-LABEL: iree_status_t global_ops_test_global_store_i32_impl(
+  // CHECK: static iree_status_t global_ops_test_global_store_i32_impl(
   vm.func @test_global_store_i32() -> i32 {
     // CHECK-NEXT: VARIABLE DECLARATIONS
     // CHECK-NEXT: RESULTS
@@ -43,7 +47,7 @@ vm.module @global_ops {
   }
 
   // check state initialization inside the alloc_state function
-  // CHECK-LABEL: static iree_status_t global_ops_alloc_state(
+  // CHECK: static iree_status_t global_ops_alloc_state(
   // CHECK: vm_global_store_i32(state->rwdata, 0, 42);
   // CHECK-NEXT: vm_global_store_i32(state->rwdata, 4, 107);
 }

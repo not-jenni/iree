@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 // Custom translation main entry function.
 // Based on the iree-translate main entry function (iree-translate-main.cc).
@@ -18,7 +10,6 @@
 // We need this entry function because we want to register the custom
 // dialect, which is missing in IREE's translation main entry function.
 
-#include "iree/compiler/Conversion/init_conversions.h"
 #include "iree/compiler/Dialect/VM/Target/init_targets.h"
 #include "iree/samples/custom_modules/dialect/init_dialect.h"
 #include "iree/tools/init_compiler_modules.h"
@@ -69,7 +60,8 @@ int main(int argc, char **argv) {
   mlir::iree_compiler::registerVMTargets();
   mlir::registerMlirTranslations();
   mlir::iree_compiler::registerIreeTranslations();
-  mlir::iree_compiler::registerLinalgToSPIRVPasses();
+  // Make sure command line options are registered.
+  (void)mlir::iree_compiler::IREE::HAL::getTargetOptionsFromFlags();
 
   // Register MLIRContext command-line options like
   // -mlir-print-op-on-diagnostic.

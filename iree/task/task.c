@@ -1,22 +1,22 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/task/task.h"
 
 #include <stdio.h>
+#include <string.h>
 
+#include "iree/base/tracing.h"
+#include "iree/task/list.h"
+#include "iree/task/pool.h"
+#include "iree/task/post_batch.h"
+#include "iree/task/scope.h"
+#include "iree/task/submission.h"
 #include "iree/task/task_impl.h"
+#include "iree/task/tuning.h"
 
 //==============================================================================
 // Task bookkeeping
@@ -375,7 +375,7 @@ static void iree_task_dispatch_initialize_base(
   out_task->closure = closure;
   memcpy(out_task->workgroup_size, workgroup_size,
          sizeof(out_task->workgroup_size));
-  out_task->shared_memory_size = 0;
+  out_task->local_memory_size = 0;
   memset(&out_task->statistics, 0, sizeof(out_task->statistics));
 }
 
@@ -545,11 +545,6 @@ void iree_task_dispatch_issue_sharded(
   IREE_TRACE_ZONE_APPEND_TEXT_STRING_VIEW(z0, xyz_string, xyz_string_length);
 #endif  // IREE_TRACING_FEATURES & IREE_TRACING_FEATURE_INSTRUMENTATION
 
-  // TODO(benvanik): shared memory; likely pulled from a ringbuffer.
-  // We'll have to ensure we have the memory available prior to scheduling the
-  // dispatch and probably just pass it in as an argument in here.
-  shared_state->shared_memory = iree_make_byte_span(NULL, 0);
-
   // Setup the iteration space for shards to pull work from the complete grid.
   iree_atomic_store_int32(&shared_state->tile_index, 0,
                           iree_memory_order_relaxed);
@@ -643,10 +638,9 @@ void iree_task_dispatch_slice_initialize(iree_task_dispatch_t* dispatch_task,
   memcpy(out_task->workgroup_count, workgroup_count,
          sizeof(out_task->workgroup_count));
 
-  // TODO(benvanik): shared memory; likely pulled from a ringbuffer.
-  // We'll have to ensure we have the memory available prior to scheduling the
-  // dispatch and probably just pass it in as an argument in here.
-  out_task->shared_memory = iree_make_byte_span(NULL, 0);
+  // Each slice requires at most this amount of memory from the worker-local
+  // pool.
+  out_task->local_memory_size = dispatch_task->local_memory_size;
 
   // Wire up dispatch statistics; we'll track on the slice while we run and
   // then the per-slice statistics will roll up into the dispatch statistics.
@@ -673,7 +667,7 @@ iree_task_dispatch_slice_t* iree_task_dispatch_slice_allocate(
 }
 
 iree_status_t iree_task_dispatch_slice_execute(
-    iree_task_dispatch_slice_t* task,
+    iree_task_dispatch_slice_t* task, iree_byte_span_t local_memory,
     iree_task_submission_t* pending_submission) {
   IREE_TRACE_ZONE_BEGIN(z0);
   IREE_TRACE_ZONE_SET_COLOR(z0,
@@ -689,8 +683,19 @@ iree_status_t iree_task_dispatch_slice_execute(
          sizeof(tile_context.workgroup_size));
   memcpy(&tile_context.workgroup_count, task->workgroup_count,
          sizeof(tile_context.workgroup_count));
-  tile_context.shared_memory = task->shared_memory;
   tile_context.statistics = &task->slice_statistics;
+
+  // Map only the requested amount of worker local memory into the tile context.
+  // This ensures that how much memory is used by some executions does not
+  // inadvertently leak over into other executions.
+  if (IREE_UNLIKELY(task->local_memory_size > local_memory.data_length)) {
+    return iree_make_status(IREE_STATUS_RESOURCE_EXHAUSTED,
+                            "dispatch requires %ub of local memory but only "
+                            "%zub is available per-worker",
+                            task->local_memory_size, local_memory.data_length);
+  }
+  tile_context.local_memory =
+      iree_make_byte_span(local_memory.data, task->local_memory_size);
 
   const uint32_t base_x = task->workgroup_base[0];
   const uint32_t base_y = task->workgroup_base[1];
@@ -773,7 +778,7 @@ iree_task_dispatch_shard_t* iree_task_dispatch_shard_allocate(
 }
 
 iree_status_t iree_task_dispatch_shard_execute(
-    iree_task_dispatch_shard_t* task,
+    iree_task_dispatch_shard_t* task, iree_byte_span_t local_memory,
     iree_task_submission_t* pending_submission) {
   IREE_TRACE_ZONE_BEGIN(z0);
 
@@ -788,9 +793,22 @@ iree_status_t iree_task_dispatch_shard_execute(
          sizeof(tile_context.workgroup_size));
   memcpy(&tile_context.workgroup_count, dispatch_task->workgroup_count.value,
          sizeof(tile_context.workgroup_count));
-  tile_context.shared_memory = shared_state->shared_memory;
   uint32_t workgroup_count_x = tile_context.workgroup_count[0];
   uint32_t workgroup_count_y = tile_context.workgroup_count[1];
+
+  // Map only the requested amount of worker local memory into the tile context.
+  // This ensures that how much memory is used by some executions does not
+  // inadvertently leak over into other executions.
+  if (IREE_UNLIKELY(dispatch_task->local_memory_size >
+                    local_memory.data_length)) {
+    return iree_make_status(IREE_STATUS_RESOURCE_EXHAUSTED,
+                            "dispatch requires %ub of local memory but only "
+                            "%zub is available per-worker",
+                            dispatch_task->local_memory_size,
+                            local_memory.data_length);
+  }
+  tile_context.local_memory =
+      iree_make_byte_span(local_memory.data, dispatch_task->local_memory_size);
 
   // We perform all our shard statistics work locally here and only push back to
   // the dispatch at the end; this avoids contention from each shard trying to

@@ -1,16 +1,8 @@
-// Copyright 2019 Google LLC
+// Copyright 2019 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 // Helpers for wrapping Vulkan handles that don't require us to wrap every type.
 // This keeps our compilation time reasonable (as the vulkancpp library is
@@ -24,8 +16,8 @@
 #ifndef IREE_HAL_VULKAN_HANDLE_UTIL_H_
 #define IREE_HAL_VULKAN_HANDLE_UTIL_H_
 
-// clang-format off: Must be included before all other headers:
-#include "iree/hal/vulkan/vulkan_headers.h"
+// clang-format off: must be included before all other headers.
+#include "iree/hal/vulkan/vulkan_headers.h"  // IWYU pragma: export
 // clang-format on
 
 #include "iree/base/internal/synchronization.h"
@@ -37,6 +29,13 @@
 namespace iree {
 namespace hal {
 namespace vulkan {
+
+template <class T, class U = T>
+constexpr T exchange(T& obj, U&& new_value) {
+  T old_value = std::move(obj);
+  obj = std::forward<U>(new_value);
+  return old_value;
+}
 
 class VkDeviceHandle : public RefObject<VkDeviceHandle> {
  public:
@@ -54,8 +53,7 @@ class VkDeviceHandle : public RefObject<VkDeviceHandle> {
   VkDeviceHandle(const VkDeviceHandle&) = delete;
   VkDeviceHandle& operator=(const VkDeviceHandle&) = delete;
   VkDeviceHandle(VkDeviceHandle&& other) noexcept
-      : value_(iree::exchange(other.value_,
-                              static_cast<VkDevice>(VK_NULL_HANDLE))),
+      : value_(exchange(other.value_, static_cast<VkDevice>(VK_NULL_HANDLE))),
         syms_(std::move(other.syms_)),
         enabled_extensions_(other.enabled_extensions_),
         owns_device_(other.owns_device_),
@@ -106,8 +104,8 @@ class VkCommandPoolHandle {
   VkCommandPoolHandle& operator=(const VkCommandPoolHandle&) = delete;
   VkCommandPoolHandle(VkCommandPoolHandle&& other) noexcept
       : logical_device_(std::move(other.logical_device_)),
-        value_(iree::exchange(other.value_,
-                              static_cast<VkCommandPool>(VK_NULL_HANDLE))) {}
+        value_(exchange(other.value_,
+                        static_cast<VkCommandPool>(VK_NULL_HANDLE))) {}
   VkCommandPoolHandle& operator=(VkCommandPoolHandle&& other) {
     std::swap(logical_device_, other.logical_device_);
     std::swap(value_, other.value_);

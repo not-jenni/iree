@@ -1,16 +1,8 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/HAL/IR/LoweringConfig.h"
 
@@ -18,12 +10,54 @@
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 
 static const char kConfigAttrName[] = "lowering.config";
+static const char kTranslationInfoAttrName[] = "translation.info";
 
 #include "iree/compiler/Dialect/HAL/IR/LoweringConfig.cpp.inc"
 #include "iree/compiler/Dialect/HAL/IR/LoweringConfigEnums.cpp.inc"
 
 namespace mlir {
 namespace iree_compiler {
+
+//===----------------------------------------------------------------------===//
+// Helpers for getting/setting information needed to lower an executable. These
+// are information that are stored as attributes on the
+// `hal.executable.entry_point`
+//===----------------------------------------------------------------------===//
+
+IREE::HAL::TranslationInfo buildTranslationInfo(
+    IREE::HAL::DispatchLoweringPassPipeline passPipeline,
+    ArrayRef<int64_t> workloadPerWorkgroup, MLIRContext *context) {
+  OpBuilder builder(context);
+  auto pipelineAttr =
+      IREE::HAL::DispatchLoweringPassPipelineAttr::get(context, passPipeline);
+  ArrayAttr workloadPerWorkgroupAttr =
+      builder.getI64ArrayAttr(workloadPerWorkgroup);
+  return IREE::HAL::TranslationInfo::get(pipelineAttr, workloadPerWorkgroupAttr,
+                                         context);
+}
+
+IREE::HAL::TranslationInfo getTranslationInfo(
+    IREE::HAL::ExecutableEntryPointOp entryPointOp) {
+  return entryPointOp->getAttrOfType<IREE::HAL::TranslationInfo>(
+      kTranslationInfoAttrName);
+}
+
+LogicalResult setTranslationInfo(IREE::HAL::ExecutableEntryPointOp entryPointOp,
+                                 IREE::HAL::TranslationInfo translationInfo) {
+  auto currTranslationAttr =
+      entryPointOp->getAttrOfType<IREE::HAL::TranslationInfo>(
+          kTranslationInfoAttrName);
+  if (currTranslationAttr) {
+    if (currTranslationAttr != translationInfo) {
+      return entryPointOp.emitError(
+          "illegal to override set translation information");
+    }
+  }
+  if (!currTranslationAttr) {
+    entryPointOp->setAttr(kTranslationInfoAttrName, translationInfo);
+  }
+  return success();
+}
 
 //===----------------------------------------------------------------------===//
 // Helpers for getting/setting the `hal.lowering.*` attributes that drive the
@@ -50,9 +84,9 @@ void eraseLoweringConfig(Operation *op) { op->removeAttr(kConfigAttrName); }
 // Helpers for accessing values from the LoweringConfig attribute.
 //===----------------------------------------------------------------------===//
 
-IREE::HAL::LoweringConfig getConfigAttr(TileSizesListTypeRef tileSizes,
-                                        ArrayRef<int64_t> nativeVectorSize,
-                                        MLIRContext *context) {
+IREE::HAL::LoweringConfig buildConfigAttr(TileSizesListTypeRef tileSizes,
+                                          ArrayRef<int64_t> nativeVectorSize,
+                                          MLIRContext *context) {
   OpBuilder builder(context);
   ArrayAttr tileSizesAttr = nullptr;
   if (!tileSizes.empty()) {

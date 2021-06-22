@@ -1,20 +1,12 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/samples/emitc_modules/add_module.h"
 
-#include "iree/base/status.h"
+#include "iree/base/status_cc.h"
 #include "iree/testing/gtest.h"
 #include "iree/testing/status_matchers.h"
 #include "iree/vm/api.h"
@@ -120,15 +112,16 @@ class VMAddModuleTest : public ::testing::Test {
 
 TEST_F(VMAddModuleTest, AddTest) {
   IREE_ASSERT_OK_AND_ASSIGN(
-      int32_t v, RunFunction(iree_make_cstring_view("add_module.add"), 17, 42));
+      int32_t v,
+      RunFunction(iree_make_cstring_view("add_module.add_and_double"), 17, 42));
   ASSERT_EQ(v, 118);
 }
 
 TEST_F(VMAddModuleTest, AddCallTest) {
   IREE_ASSERT_OK_AND_ASSIGN(
       int32_t v,
-      RunFunction(iree_make_cstring_view("add_module.add_call"), 17));
-  ASSERT_EQ(v, 34);
+      RunFunction(iree_make_cstring_view("add_module.test_call"), 17));
+  ASSERT_EQ(v, 136);
 }
 
 }  // namespace

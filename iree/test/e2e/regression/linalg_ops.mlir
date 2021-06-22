@@ -1,4 +1,4 @@
-func @multi_result() attributes {iree.module.export} {
+func @multi_result() {
   %input1 = iree.unfoldable_constant dense<[
       [1, 2, 3, 4],
       [5, 6, 7, 8],
@@ -20,7 +20,7 @@ func @multi_result() attributes {iree.module.export} {
           %1 = addi %arg0, %arg1 : i32
           %2 = muli %arg0, %arg1 : i32
           linalg.yield %1, %2 : i32, i32
-      } -> tensor<3x4xi32>, tensor<3x4xi32>
+      } -> (tensor<3x4xi32>, tensor<3x4xi32>)
   check.expect_eq_const(%0#0, dense<[
       [14, 16, 18, 20],
       [22, 24, 26, 28],

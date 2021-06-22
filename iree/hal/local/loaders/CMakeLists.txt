@@ -24,6 +24,7 @@ iree_cc_library(
     iree::hal
     iree::hal::local
     iree::hal::local::elf::elf_module
+    iree::hal::local::executable_library
   DEFINES
     "IREE_HAL_HAVE_EMBEDDED_LIBRARY_LOADER=1"
   PUBLIC
@@ -44,6 +45,7 @@ iree_cc_library(
     iree::base::tracing
     iree::hal
     iree::hal::local
+    iree::hal::local::executable_library
     iree::schemas::dylib_executable_def_c_fbs
   DEFINES
     "IREE_HAL_HAVE_LEGACY_LIBRARY_LOADER=1"
@@ -62,27 +64,9 @@ iree_cc_library(
     iree::base::tracing
     iree::hal
     iree::hal::local
+    iree::hal::local::executable_library
   DEFINES
     "IREE_HAL_HAVE_STATIC_LIBRARY_LOADER=1"
-  PUBLIC
-)
-
-iree_cc_library(
-  NAME
-    system_library_loader
-  HDRS
-    "system_library_loader.h"
-  SRCS
-    "system_library_loader.c"
-  DEPS
-    iree::base
-    iree::base::internal::file_io
-    iree::base::internal::flatcc
-    iree::base::tracing
-    iree::hal
-    iree::hal::local
-  DEFINES
-    "IREE_HAL_HAVE_SYSTEM_LIBRARY_LOADER=1"
   PUBLIC
 )
 
@@ -100,6 +84,7 @@ iree_cc_library(
     iree::base::tracing
     iree::hal
     iree::hal::local
+    iree::hal::local::executable_library
     iree::modules::vmvx
     iree::vm
     iree::vm::bytecode_module

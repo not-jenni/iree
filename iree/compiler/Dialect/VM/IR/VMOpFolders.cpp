@@ -1,21 +1,14 @@
-// Copyright 2019 Google LLC
+// Copyright 2019 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include <algorithm>
 
 #include "iree/compiler/Dialect/VM/IR/VMDialect.h"
 #include "iree/compiler/Dialect/VM/IR/VMOps.h"
+#include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/StringExtras.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
@@ -966,12 +959,12 @@ static OpFoldResult foldDivFOp(T op, ArrayRef<Attribute> operands) {
     // x / 1 = x
     return op.lhs();
   }
-  return constFoldBinaryOp<FloatAttr>(operands,
-                                      [](const APFloat &a, const APFloat &b) {
-                                        APFloat c = a;
-                                        c.divide(b, APFloat::rmTowardZero);
-                                        return c;
-                                      });
+  return constFoldBinaryOp<FloatAttr>(
+      operands, [](const APFloat &a, const APFloat &b) {
+        APFloat c = a;
+        c.divide(b, APFloat::rmNearestTiesToAway);
+        return c;
+      });
 }
 
 OpFoldResult DivF32Op::fold(ArrayRef<Attribute> operands) {
@@ -1019,7 +1012,7 @@ static OpFoldResult foldFMAFOp(T op, ArrayRef<Attribute> operands) {
   return constFoldTernaryOp<FloatAttr>(
       operands, [](const APFloat &a, const APFloat &b, const APFloat &c) {
         APFloat d = a;
-        d.fusedMultiplyAdd(b, c, APFloat::rmTowardZero);
+        d.fusedMultiplyAdd(b, c, APFloat::rmNearestTiesToAway);
         return d;
       });
 }
@@ -1465,7 +1458,7 @@ OpFoldResult CastSI32F32Op::fold(ArrayRef<Attribute> operands) {
   return constFoldCastOp<IntegerAttr, FloatAttr>(
       Float32Type::get(getContext()), operands, [&](const APInt &a) {
         APFloat b = APFloat(0.0f);
-        b.convertFromAPInt(a, /*IsSigned=*/true, APFloat::rmTowardZero);
+        b.convertFromAPInt(a, /*IsSigned=*/true, APFloat::rmNearestTiesToAway);
         return b;
       });
 }
@@ -1474,7 +1467,7 @@ OpFoldResult CastUI32F32Op::fold(ArrayRef<Attribute> operands) {
   return constFoldCastOp<IntegerAttr, FloatAttr>(
       Float32Type::get(getContext()), operands, [&](const APInt &a) {
         APFloat b = APFloat(0.0f);
-        b.convertFromAPInt(a, /*IsSigned=*/false, APFloat::rmTowardZero);
+        b.convertFromAPInt(a, /*IsSigned=*/false, APFloat::rmNearestTiesToAway);
         return b;
       });
 }
@@ -1484,7 +1477,7 @@ OpFoldResult CastF32SI32Op::fold(ArrayRef<Attribute> operands) {
       IntegerType::get(getContext(), 32), operands, [&](const APFloat &a) {
         bool isExact = false;
         llvm::APSInt b;
-        a.convertToInteger(b, APFloat::rmTowardZero, &isExact);
+        a.convertToInteger(b, APFloat::rmNearestTiesToAway, &isExact);
         return b;
       });
 }
@@ -1494,7 +1487,7 @@ OpFoldResult CastF32UI32Op::fold(ArrayRef<Attribute> operands) {
       IntegerType::get(getContext(), 32), operands, [&](const APFloat &a) {
         bool isExact = false;
         llvm::APSInt b;
-        a.convertToInteger(b, APFloat::rmTowardZero, &isExact);
+        a.convertToInteger(b, APFloat::rmNearestTiesToAway, &isExact);
         b.setIsUnsigned(true);
         return b;
       });

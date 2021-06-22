@@ -1,16 +1,8 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #ifndef IREE_VM_SHIMS_EMITC_H_
 #define IREE_VM_SHIMS_EMITC_H_
@@ -31,6 +23,24 @@ static iree_status_t call_0v_v_shim(iree_vm_stack_t* stack,
                                     void* module_state,
                                     iree_vm_execution_result_t* out_result) {
   return target_fn(stack, module, module_state);
+}
+
+// 0v_i
+typedef iree_status_t (*call_0v_i_t)(iree_vm_stack_t* stack, void* module_ptr,
+                                     void* module_state, int32_t* res0);
+
+static iree_status_t call_0v_i_shim(iree_vm_stack_t* stack,
+                                    const iree_vm_function_call_t* call,
+                                    call_0v_i_t target_fn, void* module,
+                                    void* module_state,
+                                    iree_vm_execution_result_t* out_result) {
+  typedef struct {
+    int32_t ret0;
+  } results_t;
+
+  results_t* results = (results_t*)call->results.data;
+
+  return target_fn(stack, module, module_state, &results->ret0);
 }
 
 // 0i_i

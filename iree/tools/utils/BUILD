@@ -1,16 +1,8 @@
-# Copyright 2020 Google LLC
+# Copyright 2020 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 package(
     default_visibility = ["//visibility:public"],
@@ -18,21 +10,23 @@ package(
     licenses = ["notice"],  # Apache 2.0
 )
 
-# TODO(b/146898896): Refactor these into more coherent packages.
+# TODO(benvanik): fold these into iree/runtime and use that instead.
 cc_library(
     name = "vm_util",
     srcs = ["vm_util.cc"],
     hdrs = ["vm_util.h"],
     deps = [
-        "//iree/base:status",
+        "//iree/base",
+        "//iree/base:cc",
+        "//iree/base:logging",
+        "//iree/base:tracing",
         "//iree/base/internal:file_io",
+        "//iree/base/internal:span",
         "//iree/hal",
         "//iree/modules/hal",
         "//iree/vm",
         "//iree/vm:bytecode_module",
         "//iree/vm:cc",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -48,6 +42,6 @@ cc_test(
         "//iree/testing:gtest",
         "//iree/testing:gtest_main",
         "//iree/vm",
-        "@com_google_absl//absl/strings",
+        "//iree/vm:cc",
     ],
 )

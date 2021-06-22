@@ -16,7 +16,6 @@ iree_lit_test_suite(
   SRCS
     "dynamic_abs.mlir"
     "dynamic_add.mlir"
-    "dynamic_compare_and_select.mlir"
     "dynamic_dot.mlir"
     "dynamic_torch_index_select_high_rank.mlir"
     "dynamic_torch_index_select_negative.mlir"
@@ -44,6 +43,8 @@ iree_check_single_backend_test_suite(
     "dylib-llvm-aot"
   DRIVER
     "dylib"
+  COMPILER_FLAGS
+    "-iree-input-type=mhlo"
 )
 
 iree_check_single_backend_test_suite(
@@ -55,6 +56,8 @@ iree_check_single_backend_test_suite(
     "vmvx"
   DRIVER
     "vmvx"
+  COMPILER_FLAGS
+    "-iree-input-type=mhlo"
 )
 
 iree_check_single_backend_test_suite(
@@ -66,6 +69,8 @@ iree_check_single_backend_test_suite(
     "vulkan-spirv"
   DRIVER
     "vulkan"
+  COMPILER_FLAGS
+    "-iree-input-type=mhlo"
 )
 
 ### BAZEL_TO_CMAKE_PRESERVES_ALL_CONTENT_BELOW_THIS_LINE ###

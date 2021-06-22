@@ -1,16 +1,8 @@
-// Copyright 2019 Google LLC
+// Copyright 2019 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/HAL/Utils/TypeUtils.h"
 
@@ -111,9 +103,8 @@ Value getValueSize(Location loc, Value value, OpBuilder &builder) {
   if (!elementType) return {};
   auto shape = IREE::HAL::getShapeDims(loc, value, builder);
   if (!shape) return {};
-  auto deviceValue = builder.createOrFold<IREE::HAL::ExSharedDeviceOp>(loc);
-  auto allocatorValue =
-      builder.createOrFold<IREE::HAL::DeviceAllocatorOp>(loc, deviceValue);
+  auto allocatorValue = builder.createOrFold<IREE::HAL::BufferAllocatorOp>(
+      loc, IREE::HAL::AllocatorType::get(builder.getContext()), value);
   return builder.createOrFold<IREE::HAL::AllocatorComputeSizeOp>(
       loc, allocatorValue, *shape, elementType.getValue());
 }

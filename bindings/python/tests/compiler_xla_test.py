@@ -1,17 +1,9 @@
 # Lint as: python3
-# Copyright 2020 Google LLC
+# Copyright 2020 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import logging
 import os
@@ -37,8 +29,7 @@ class CompilerTest(unittest.TestCase):
     text = iree.compiler.xla.compile_file(path,
                                           import_only=True).decode("utf-8")
     logging.info("%s", text)
-    self.assertIn("mhlo.constant", text)
-    self.assertIn("iree.module.export", text)
+    self.assertIn("linalg.generic", text)
 
   def testCompileBinaryPbFile(self):
     path = os.path.join(os.path.dirname(__file__), "testdata", "xla_sample.pb")
@@ -61,7 +52,7 @@ class CompilerTest(unittest.TestCase):
       finally:
         os.remove(f.name)
     logging.info("%s", text)
-    self.assertIn("mhlo.constant", text)
+    self.assertIn("linalg.generic", text)
 
   def testCompileBinaryPbFileOutputFile(self):
     path = os.path.join(os.path.dirname(__file__), "testdata", "xla_sample.pb")
@@ -87,7 +78,7 @@ class CompilerTest(unittest.TestCase):
     text = iree.compiler.xla.compile_str(content,
                                          import_only=True).decode("utf-8")
     logging.info("%s", text)
-    self.assertIn("mhlo.constant", text)
+    self.assertIn("linalg.generic", text)
 
   def testCompileBinaryPbBytes(self):
     path = os.path.join(os.path.dirname(__file__), "testdata", "xla_sample.pb")
@@ -103,8 +94,7 @@ class CompilerTest(unittest.TestCase):
     text = iree.compiler.xla.compile_file(
         path, import_only=True, import_format="hlo_text").decode("utf-8")
     logging.info("%s", text)
-    self.assertIn("mhlo.constant", text)
-    self.assertIn("iree.module.export", text)
+    self.assertIn("linalg.generic", text)
 
   def testImportHloTextStr(self):
     path = os.path.join(os.path.dirname(__file__), "testdata", "xla_sample.hlo")
@@ -113,8 +103,7 @@ class CompilerTest(unittest.TestCase):
     text = iree.compiler.xla.compile_str(
         content, import_only=True, import_format="hlo_text").decode("utf-8")
     logging.info("%s", text)
-    self.assertIn("mhlo.constant", text)
-    self.assertIn("iree.module.export", text)
+    self.assertIn("linalg.generic", text)
 
   def testImportHloTextBytes(self):
     path = os.path.join(os.path.dirname(__file__), "testdata", "xla_sample.hlo")
@@ -123,8 +112,7 @@ class CompilerTest(unittest.TestCase):
     text = iree.compiler.xla.compile_str(
         content, import_only=True, import_format="hlo_text").decode("utf-8")
     logging.info("%s", text)
-    self.assertIn("mhlo.constant", text)
-    self.assertIn("iree.module.export", text)
+    self.assertIn("linalg.generic", text)
 
 
 if __name__ == "__main__":

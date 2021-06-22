@@ -1,23 +1,15 @@
-// Copyright 2021 Google LLC
+// Copyright 2021 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "iree/compiler/Conversion/CodegenUtils/FunctionUtils.h"
-#include "iree/compiler/Conversion/CodegenUtils/MarkerUtils.h"
-#include "iree/compiler/Conversion/CodegenUtils/TransformUtils.h"
-#include "iree/compiler/Conversion/Common/Transforms.h"
-#include "iree/compiler/Conversion/LinalgToLLVMGPU/Passes.h"
-#include "mlir/Conversion/StandardToSPIRV/StandardToSPIRV.h"
+#include "iree/compiler/Conversion/PassDetail.h"
+#include "iree/compiler/Conversion/Passes.h"
+#include "iree/compiler/Conversion/Transforms/Transforms.h"
+#include "iree/compiler/Conversion/Utils/MarkerUtils.h"
+#include "iree/compiler/Conversion/Utils/Utils.h"
+#include "mlir/Conversion/VectorToSCF/VectorToSCF.h"
 #include "mlir/Dialect/Linalg/Transforms/Hoisting.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/Vector/VectorOps.h"
@@ -32,16 +24,25 @@ namespace iree_compiler {
 // Patterns for vectorization
 //====---------------------------------------------------------------------===//
 
-static void populateVectorizationPatterns(OwningRewritePatternList &patterns) {
+static void populateVectorizationPatterns(RewritePatternSet &patterns) {
+  // We currently don't support vectorization of generic ops with reduction.
+  // TODO(thomasraoux): Add lowering for vector.multireduce ops.
+  auto filterReduction = [](Operation *op) {
+    if (auto genericOp = llvm::dyn_cast<linalg::GenericOp>(op)) {
+      if (genericOp.getNumReductionLoops() > 0) return failure();
+    }
+    return success();
+  };
   linalg::insertVectorizationPatterns<linalg::FillOp, linalg::CopyOp,
                                       linalg::GenericOp,
                                       linalg::ContractionOpInterface>(
       patterns, linalg::LinalgVectorizationOptions(),
       linalg::LinalgTransformationFilter(
+          filterReduction,
           Identifier::get(getVectorizeMarker(), patterns.getContext())));
 }
 
-static Optional<SmallVector<int64_t, 4>> getNativeVectorSize(Operation *op) {
+static Optional<SmallVector<int64_t, 4>> getGPUNativeVectorSize(Operation *op) {
   if ((OpTrait::hasElementwiseMappableTraits(op) && op->getNumResults() == 1)) {
     if (auto vecType = op->getResultTypes()[0].dyn_cast<VectorType>()) {
       // Map elementwise ops to vec4.
@@ -66,15 +67,16 @@ static Optional<SmallVector<int64_t, 4>> getNativeVectorSize(Operation *op) {
   return llvm::None;
 }
 
-static void populateVectorUnrollPatterns(OwningRewritePatternList &patterns) {
+static void populateVectorUnrollPatterns(RewritePatternSet &patterns) {
   patterns.add<vector::UnrollVectorPattern>(
       patterns.getContext(),
-      vector::UnrollVectorOptions().setNativeShapeFn(getNativeVectorSize));
+      vector::UnrollVectorOptions().setNativeShapeFn(getGPUNativeVectorSize));
 }
 
 namespace {
-struct VectorizationPass
-    : public PassWrapper<VectorizationPass, OperationPass<FuncOp>> {
+struct LinalgToLLVMGPUVectorizationPass
+    : public LinalgToLLVMGPUVectorizationBase<
+          LinalgToLLVMGPUVectorizationPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<vector::VectorDialect>();
   }
@@ -84,7 +86,7 @@ struct VectorizationPass
 
     {
       // Step 1. Vectorize
-      OwningRewritePatternList vectorizationPatterns(context);
+      RewritePatternSet vectorizationPatterns(context);
       populateVectorizationPatterns(vectorizationPatterns);
       (void)applyPatternsAndFoldGreedily(funcOp,
                                          std::move(vectorizationPatterns));
@@ -99,7 +101,7 @@ struct VectorizationPass
 
     {
       // Lower transfer op to canonical form.
-      OwningRewritePatternList lowerTransferOpPatterns(funcOp.getContext());
+      RewritePatternSet lowerTransferOpPatterns(funcOp.getContext());
       vector::populateVectorToVectorCanonicalizationPatterns(
           lowerTransferOpPatterns);
       vector::populateVectorToVectorTransformationPatterns(
@@ -111,12 +113,12 @@ struct VectorizationPass
 
     {
       // Step 2. Unroll the vetors to native size and canonicalize.
-      OwningRewritePatternList vectorUnrollPatterns(context);
+      RewritePatternSet vectorUnrollPatterns(context);
       populateVectorUnrollPatterns(vectorUnrollPatterns);
       (void)applyPatternsAndFoldGreedily(funcOp,
                                          std::move(vectorUnrollPatterns));
 
-      OwningRewritePatternList canonicalizationPatterns1(funcOp.getContext());
+      RewritePatternSet canonicalizationPatterns1(funcOp.getContext());
       vector::populateVectorToVectorCanonicalizationPatterns(
           canonicalizationPatterns1);
       vector::populateVectorToVectorTransformationPatterns(
@@ -124,7 +126,7 @@ struct VectorizationPass
       (void)applyPatternsAndFoldGreedily(funcOp,
                                          std::move(canonicalizationPatterns1));
 
-      OwningRewritePatternList canonicalizationPatterns2(funcOp.getContext());
+      RewritePatternSet canonicalizationPatterns2(funcOp.getContext());
       vector::populateVectorSlicesLoweringPatterns(canonicalizationPatterns2);
       (void)applyPatternsAndFoldGreedily(funcOp,
                                          std::move(canonicalizationPatterns2));
@@ -146,13 +148,10 @@ struct VectorizationPass
 };
 }  // namespace
 
-std::unique_ptr<OperationPass<FuncOp>> createVectorizationPass() {
-  return std::make_unique<VectorizationPass>();
+std::unique_ptr<OperationPass<FuncOp>>
+createLinalgToLLVMGPUVectorizationPass() {
+  return std::make_unique<LinalgToLLVMGPUVectorizationPass>();
 }
-
-static PassRegistration<VectorizationPass> pass(
-    "iree-codegen-llvmgpu-vectorization",
-    "Pass to convert linalg into Vector.");
 
 }  // namespace iree_compiler
 }  // namespace mlir

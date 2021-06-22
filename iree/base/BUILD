@@ -1,16 +1,8 @@
-# Copyright 2019 Google LLC
+# Copyright 2019 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 # Common types and utilities used in the IREE codebase.
 
@@ -30,7 +22,9 @@ cc_library(
         "allocator.c",
         "allocator.h",
         "api.c",
+        "assert.h",
         "status.c",
+        "status.h",
         "string_view.c",
         "string_view.h",
         "time.c",
@@ -41,6 +35,43 @@ cc_library(
     deps = [
         ":core_headers",
         ":tracing",
+    ],
+)
+
+# TODO(benvanik): make these srcs and only expose an api_cc.h.
+cc_library(
+    name = "cc",
+    srcs = [
+        "status_cc.cc",
+    ],
+    hdrs = [
+        "status_cc.h",
+    ],
+    deps = [
+        ":base",
+        ":core_headers",
+        ":logging",
+    ],
+)
+
+cc_test(
+    name = "status_test",
+    srcs = ["status_test.cc"],
+    deps = [
+        ":base",
+        ":cc",
+        "//iree/testing:gtest",
+        "//iree/testing:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "string_view_test",
+    srcs = ["string_view_test.cc"],
+    deps = [
+        ":base",
+        "//iree/testing:gtest",
+        "//iree/testing:gtest_main",
     ],
 )
 
@@ -81,55 +112,6 @@ cc_library(
         ":core_headers",
         ":tracing",
         "//iree/base/internal:flags",
-    ],
-)
-
-cc_library(
-    name = "signature_parser",
-    srcs = ["signature_parser.cc"],
-    hdrs = ["signature_parser.h"],
-    deps = [
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/types:optional",
-        "@com_google_absl//absl/types:span",
-    ],
-)
-
-cc_test(
-    name = "signature_parser_test",
-    srcs = ["signature_parser_test.cc"],
-    deps = [
-        ":signature_parser",
-        "//iree/testing:gtest",
-        "//iree/testing:gtest_main",
-    ],
-)
-
-cc_library(
-    name = "status",
-    hdrs = ["status.h"],
-    deps = [
-        "//iree/base/internal:status_internal",
-    ],
-)
-
-cc_test(
-    name = "status_test",
-    srcs = ["status_test.cc"],
-    deps = [
-        ":status",
-        "//iree/testing:gtest",
-        "//iree/testing:gtest_main",
-    ],
-)
-
-cc_test(
-    name = "string_view_test",
-    srcs = ["string_view_test.cc"],
-    deps = [
-        ":base",
-        "//iree/testing:gtest",
-        "//iree/testing:gtest_main",
     ],
 )
 

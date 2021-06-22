@@ -1,16 +1,8 @@
-# Copyright 2021 Google LLC
+# Copyright 2021 The IREE Authors
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 """Helper functions for configuring IREE and dependent project WORKSPACE files."""
 
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
@@ -29,12 +21,6 @@ def configure_iree_submodule_deps(iree_repo_alias = "@", iree_path = "./"):
       iree_repo_alias: The alias for the IREE repository.
       iree_path: The path to the IREE repository containing submodules
     """
-
-    maybe(
-        native.local_repository,
-        name = "com_google_absl",
-        path = paths.join(iree_path, "third_party/abseil-cpp"),
-    )
 
     maybe(
         native.local_repository,
@@ -81,13 +67,6 @@ def configure_iree_submodule_deps(iree_repo_alias = "@", iree_path = "./"):
         native.local_repository,
         name = "com_google_benchmark",
         path = paths.join(iree_path, "third_party/benchmark"),
-    )
-
-    maybe(
-        native.new_local_repository,
-        name = "renderdoc_api",
-        build_file = iree_repo_alias + "//:build_tools/third_party/renderdoc_api/BUILD.overlay",
-        path = paths.join(iree_path, "third_party/renderdoc_api"),
     )
 
     maybe(

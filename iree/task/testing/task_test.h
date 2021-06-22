@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 // NOTE: the best kind of synchronization is no synchronization; always try to
 // design your algorithm so that you don't need anything from this file :)
@@ -32,9 +24,10 @@ class TaskTest : public ::testing::Test {
   virtual void SetUp() {
     iree_task_topology_t topology;
     iree_task_topology_initialize_from_group_count(8, &topology);
-    IREE_ASSERT_OK(iree_task_executor_create(IREE_TASK_SCHEDULING_MODE_RESERVED,
-                                             &topology, iree_allocator_system(),
-                                             &executor_));
+    IREE_ASSERT_OK(
+        iree_task_executor_create(IREE_TASK_SCHEDULING_MODE_RESERVED, &topology,
+                                  /*worker_local_memory_size=*/(64 * 1024),
+                                  iree_allocator_system(), &executor_));
     iree_task_topology_deinitialize(&topology);
 
     iree_task_scope_initialize(iree_make_cstring_view("scope"), &scope_);

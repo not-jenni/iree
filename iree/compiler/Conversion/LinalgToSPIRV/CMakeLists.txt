@@ -12,30 +12,20 @@ iree_add_all_subdirs()
 
 iree_cc_library(
   NAME
-    CodeGenOptionUtils
-  HDRS
-    "CodeGenOptionUtils.h"
-  SRCS
-    "CodeGenOptionUtils.cpp"
-  DEPS
-    LLVMSupport
-  PUBLIC
-)
-
-iree_cc_library(
-  NAME
     LinalgToSPIRV
   HDRS
     "KernelDispatchUtils.h"
+    "LaunchConfig.h"
     "MemorySpace.h"
-    "Passes.h"
     "Utils.h"
   SRCS
+    "CodeGenOptionUtils.cpp"
     "ConcretizeTileAmongWorkgroupsPass.cpp"
     "ConvertToGPUPass.cpp"
     "ConvertToSPIRVPass.cpp"
     "FoldGPUProcessorIDUses.cpp"
     "KernelDispatchUtils.cpp"
+    "LaunchConfig.cpp"
     "Passes.cpp"
     "TileAndVectorizeInOneWorkgroupPass.cpp"
     "Utils.cpp"
@@ -43,7 +33,6 @@ iree_cc_library(
     "VectorToGPUPass.cpp"
     "VectorizeMemrefLoadStorePass.cpp"
   DEPS
-    ::CodeGenOptionUtils
     LLVMSupport
     MLIRAffine
     MLIRAffineToStandard
@@ -71,10 +60,10 @@ iree_cc_library(
     MLIRTransforms
     MLIRVector
     MLIRVectorToSPIRV
-    iree::compiler::Conversion::CodegenUtils
     iree::compiler::Conversion::Common
-    iree::compiler::Conversion::HLOToLinalg
-    iree::compiler::Conversion::LinalgToVector
+    iree::compiler::Conversion::PassHeaders
+    iree::compiler::Conversion::Transforms
+    iree::compiler::Conversion::Utils
     iree::compiler::Dialect::Flow::IR
     iree::compiler::Dialect::HAL::IR
     iree::compiler::Dialect::HAL::IR::HALDialect

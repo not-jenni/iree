@@ -1,16 +1,8 @@
-// Copyright 2020 Google LLC
+// Copyright 2020 The IREE Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/HAL/Target/LLVM/LinkerTool.h"
 
@@ -115,12 +107,20 @@ void Artifacts::keepAllFiles() {
 }
 
 std::string LinkerTool::getToolPath() const {
+  // Always use the -iree-llvm-linker-path flag when specified as it's
+  // explicitly telling us what to use.
+  if (!targetOptions.linkerPath.empty()) {
+    return targetOptions.linkerPath;
+  }
+
+  // Allow users to override the automatic search with an environment variable.
   char *linkerPath = std::getenv("IREE_LLVMAOT_LINKER_PATH");
   if (linkerPath) {
     return std::string(linkerPath);
-  } else {
-    return "";
   }
+
+  // Fallback to other searches as specified by the LinkerTool implementation.
+  return "";
 }
 
 // It's easy to run afoul of quoting rules on Windows, such as when using
