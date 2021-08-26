@@ -31,29 +31,29 @@ jobs:
           # python -m pip install iree-compiler-snapshot iree-jax-snapshot iree-runtime-snapshot iree-tools-tflite-snapshot iree-tools-tf-snapshot iree-tools-xla-snapshot -f https://github.com/google/iree/tag/snapshot-${{ github.event.inputs.package_version }}
           python -m pip install iree-compiler-snapshot iree-jax-snapshot iree-runtime-snapshot iree-tools-tflite-snapshot iree-tools-tf-snapshot iree-tools-xla-snapshot -f https://github.com/not-jenni/iree/releases/tag/snapshot-${{ github.event.inputs.package_version }}
 
-    validate_command_line_tools:
-      name: "Validate command lines tools"
-      runs-on: ubuntu-18.04
-      steps:
-        - name: Download packages
-          id: download_packages
-          run: |
-            # wget https://github.com/google/iree/releases/tag/snapshot-${{ github.event.inputs.package_version }}/iree-dist-snapshot-${{ github.event.inputs.package_version }}-linux-x86_64.tar.xz
-            wget https://github.com/not-jenni/iree/releases/download/snapshot-${{ github.event.inputs.package_version }}/iree-dist-snapshot-${{ github.event.inputs.package_version }}-linux-x86_64.tar.xz
-        - name: Run tools with basic commands
-          id: run_tools_with_basic_commands
-          run: |
-            ./iree-benchmark-module --help
-            ./iree-benchmark-trace --help
-            ./iree-check-module --help
-            # ./iree-dump-module --help
-            ./iree-flatcc-cli --help
-            ./iree-opt --help
-            ./iree-run-mlir --help
-            ./iree-run-module --help
-            ./iree-run-trace --help
-            ./iree-tblgen --help
-            ./iree-translate --help
+  validate_command_line_tools:
+    name: "Validate command lines tools"
+    runs-on: ubuntu-18.04
+    steps:
+      - name: Download packages
+        id: download_packages
+        run: |
+          # wget https://github.com/google/iree/releases/tag/snapshot-${{ github.event.inputs.package_version }}/iree-dist-snapshot-${{ github.event.inputs.package_version }}-linux-x86_64.tar.xz
+          wget https://github.com/not-jenni/iree/releases/download/snapshot-${{ github.event.inputs.package_version }}/iree-dist-snapshot-${{ github.event.inputs.package_version }}-linux-x86_64.tar.xz
+      - name: Run tools with basic commands
+        id: run_tools_with_basic_commands
+        run: |
+          ./iree-benchmark-module --help
+          ./iree-benchmark-trace --help
+          ./iree-check-module --help
+          # ./iree-dump-module --help
+          ./iree-flatcc-cli --help
+          ./iree-opt --help
+          ./iree-run-mlir --help
+          ./iree-run-module --help
+          ./iree-run-trace --help
+          ./iree-tblgen --help
+          ./iree-translate --help
 
   publish_release:
     name: "Publish release"
