@@ -41,7 +41,6 @@ jobs:
         with:
           github_token: ${{secrets.WRITE_ACCESS_TOKEN}}
           workflow: build_package.yml
-          run_id: ${{ github.event.inputs.release_id }}
           name: iree-dist-snapshot-${{ github.event.inputs.package_version }}-linux-x86_64.tar.xz
       - name: Run tools with basic commands
         id: run_tools_with_basic_commands
