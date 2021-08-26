@@ -37,9 +37,12 @@ jobs:
     steps:
       - name: Download packages
         id: download_packages
-        run: |
-          # wget https://github.com/google/iree/releases/tag/snapshot-${{ github.event.inputs.package_version }}/iree-dist-snapshot-${{ github.event.inputs.package_version }}-linux-x86_64.tar.xz
-          wget https://github.com/not-jenni/iree/releases/download/snapshot-${{ github.event.inputs.package_version }}/iree-dist-snapshot-${{ github.event.inputs.package_version }}-linux-x86_64.tar.xz
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          github_token: ${{secrets.WRITE_ACCESS_TOKEN}}
+          workflow: build_package.yml
+          run_id: ${{ github.event.inputs.release_id }}
+          name: iree-dist-snapshot-${{ github.event.inputs.package_version }}-linux-x86_64.tar.xz
       - name: Run tools with basic commands
         id: run_tools_with_basic_commands
         run: |
