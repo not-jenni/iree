@@ -79,11 +79,10 @@ static LogicalResult convertOperation(Operation *oldOp,
                                       FlowTypeConverter &typeConverter,
                                       BlockAndValueMapping &mapping,
                                       OpBuilder &builder) {
-  if (llvm::isa<linalg::LinalgOp>(oldOp)) {
+  if (isa<linalg::LinalgDialect>(oldOp->getDialect()) &&
+      !isa<linalg::TensorCollapseShapeOp>(oldOp) &&
+      !isa<linalg::TensorExpandShapeOp>(oldOp)) {
     // Currently we assume all Linalg structured ops only contain valid types.
-    // We allow to convert non-structured operation like
-    // linalg.tensor_expand_shape.
-    // TODO: Support converting Linalg types when unsupported.
     builder.clone(*oldOp, mapping);
     return success();
   }
@@ -127,15 +126,6 @@ static LogicalResult convertOperation(Operation *oldOp,
   }
 
   auto *newOp = builder.createOperation(state);
-  if (failed(mlir::verify(newOp))) {
-    // TODO(benvanik): we could possibly try again with a different set of type
-    // conversions to see if that works. For example, we could lean toward
-    // materializing conversions/inserting cases instead of directly doing the
-    // conversions here. Unfortunately ops don't allow us to query what types
-    // they support so this is trial-and-error.
-    return newOp->emitOpError()
-           << "post-conversion verification failed - unsupported types";
-  }
 
   for (auto oldNewResult :
        llvm::zip(oldOp->getResults(), newOp->getResults())) {
@@ -243,6 +233,17 @@ class LegalizeInputTypesPass
         }
         oldOp->erase();
       }
+    }
+
+    if (failed(mlir::verify(moduleOp))) {
+      // TODO(benvanik): we could possibly try again with a different set of
+      // type conversions to see if that works. For example, we could lean
+      // toward materializing conversions/inserting cases instead of directly
+      // doing the conversions here. Unfortunately ops don't allow us to query
+      // what types they support so this is trial-and-error.
+      moduleOp.emitOpError()
+          << "post-conversion verification failed - unsupported types";
+      return signalPassFailure();
     }
   }
 };

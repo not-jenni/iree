@@ -21,20 +21,16 @@ def ConvertConv2DToImg2Col :
   let constructor = "mlir::iree_compiler::IREE::Flow::createConvertConv2DToImg2ColPass()";
 }
 
-def ConvertTensorOps :
-    Pass<"iree-flow-convert-tensor-ops-pass", "mlir::FuncOp"> {
-  let summary = "Convert tensor operations to equivalent flow.tensor.* operations";
-  let constructor = "mlir::iree_compiler::IREE::Flow::createConvertTensorOpsPass()";
+def ConvertToFlowBeforeDispatchFormation :
+    Pass<"iree-flow-convert-to-flow-before-dispatch-formation", "mlir::FuncOp"> {
+  let summary = "Convert operations to flow before dispatch formation";
+  let constructor = "mlir::iree_compiler::IREE::Flow::createConvertToFlowBeforeDispatchFormation()";
 }
 
-def ConvertLinalgTensorOps :
-    Pass<"iree-flow-convert-linalg-tensor-ops-pass", "mlir::FuncOp"> {
-  let summary = "Convert linalg operations to equivalent flow.tensor.* operations";
-  let constructor = "mlir::iree_compiler::IREE::Flow::createConvertLinalgTensorOpsPass()";
-  let options = [
-    Option<"runBeforeDispatchRegionFormation", "run-before-dispatch-region-formation",
-           "bool", /*default=*/"true", "Run the pass before dispatch region formation">
-  ];
+def ConvertToFlowAfterDispatchFormation :
+    Pass<"iree-flow-convert-to-flow-after-dispatch-formation", "mlir::FuncOp"> {
+  let summary = "Convert operations to flow after dispatch formation";
+  let constructor = "mlir::iree_compiler::IREE::Flow::createConvertToFlowAfterDispatchFormation()";
 }
 
 def DeduplicateExecutables :
@@ -135,12 +131,6 @@ def PromoteI1ToI8 :
   let constructor = "mlir::iree_compiler::IREE::Flow::createPromoteI1ToI8Pass()";
 }
 
-def PromoteTensorLoads :
-    Pass<"iree-flow-promote-tensor-loads", "mlir::FuncOp"> {
-  let summary = "Converts standard ops which match to flow.tensor.load (typically causing a read-back)";
-  let constructor = "mlir::iree_compiler::IREE::Flow::createPromoteTensorLoadsPass()";
-}
-
 def StripAndSplatConstantVariables :
     Pass<"iree-flow-strip-and-splat-constant-variables", "mlir::ModuleOp"> {
   let summary = "Strips constant util.globals and replaces them with splats.";
@@ -148,7 +138,7 @@ def StripAndSplatConstantVariables :
 }
 
 def VerifyInputLegality: Pass<"iree-verify-input-legality", "mlir::FuncOp"> {
-  let summary = "Checks the legality of the IR at the start of IREE compilation flow.";
+  let summary = "Checks the legality of the IR at the start of IREE flow transformation pipeline.";
   let constructor = "mlir::iree_compiler::IREE::Flow::createVerifyInputLegalityPass()";
 }
 

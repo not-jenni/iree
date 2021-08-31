@@ -17,6 +17,8 @@
 #include "iree/compiler/Codegen/Transforms/Transforms.h"
 #include "iree/compiler/Codegen/Utils/MarkerUtils.h"
 #include "iree/compiler/Codegen/Utils/Utils.h"
+#include "iree/compiler/Dialect/LinalgExt/IR/LinalgExtOps.h"
+#include "iree/compiler/Dialect/LinalgExt/Transforms/Transforms.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
@@ -26,6 +28,7 @@
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/SCF.h"
+#include "mlir/Dialect/SCF/Transforms.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Vector/VectorTransforms.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -48,15 +51,18 @@ namespace iree_compiler {
 /// Returns a Linalg marker that matches any of the `matchMarkers` and replaces
 /// it with `replaceMarker`.
 static linalg::LinalgTransformationFilter getLinalgMatchAndReplaceMarker(
-    ArrayRef<StringRef> matchMarkers, StringRef replaceMarker,
+    ArrayRef<StringRef> matchMarkers, Optional<StringRef> replaceMarker,
     MLIRContext *context) {
-  SmallVector<Identifier, 2> markers;
-  markers.reserve(matchMarkers.size());
+  SmallVector<Identifier, 2> matchIds;
+  matchIds.reserve(matchMarkers.size());
   for (StringRef marker : matchMarkers) {
-    markers.emplace_back(Identifier::get(marker, context));
+    matchIds.emplace_back(Identifier::get(marker, context));
   }
-  return linalg::LinalgTransformationFilter(
-      markers, Identifier::get(replaceMarker, context));
+
+  Optional<Identifier> replaceId;
+  if (replaceMarker) replaceId = Identifier::get(*replaceMarker, context);
+
+  return linalg::LinalgTransformationFilter(matchIds, replaceId);
 }
 
 /// Converts a symbolic GPU processor dimension to its numeric one.
@@ -172,29 +178,35 @@ static void populateTilingToInvocationPatterns(MLIRContext *context,
           .setTileSizeComputationFunction(getInnerTileSizeFn)
           .setDistributionOptions(invocationDistributionOptions);
 
-  patterns.insert<
-      linalg::LinalgTilingPattern<linalg::MatmulOp>,
-      linalg::LinalgTilingPattern<linalg::FillOp>,
-      linalg::LinalgTilingPattern<linalg::BatchMatmulOp>,
-      linalg::LinalgTilingPattern<linalg::ConvInputNWCFilterWCFOp>,
-      linalg::LinalgTilingPattern<linalg::ConvInputNDHWCFilterDHWCFOp>,
-      linalg::LinalgTilingPattern<linalg::DepthwiseConvInputNHWCFilterHWCFOp>,
-      linalg::LinalgTilingPattern<linalg::GenericOp>,
-      linalg::LinalgTilingPattern<linalg::PoolingNhwcMaxOp>,
-      linalg::LinalgTilingPattern<linalg::PoolingNhwcMinOp>,
-      linalg::LinalgTilingPattern<linalg::PoolingNhwcSumOp>>(
-      context, tilingOptions,
-      getLinalgMatchAndReplaceMarker(
-          {getWorkgroupMemoryMarker(), getWorkgroupMarker()},
-          getVectorizeMarker(), context));
+  SmallVector<StringRef, 2> matchMarkers = {getWorkgroupMemoryMarker(),
+                                            getWorkgroupMarker()};
 
-  patterns.insert<
-      linalg::LinalgTilingPattern<linalg::ConvInputNHWCFilterHWCFOp>,
-      linalg::LinalgTilingPattern<linalg::DepthwiseConvInputNHWCFilterHWCOp>>(
+  patterns
+      .insert<linalg::LinalgTilingPattern<linalg::BatchMatmulOp>,
+              linalg::LinalgTilingPattern<linalg::Conv1DNwcWcfOp>,
+              linalg::LinalgTilingPattern<linalg::Conv3DNdhwcDhwcfOp>,
+              linalg::LinalgTilingPattern<linalg::DepthwiseConv2DNhwcOp>,
+              linalg::LinalgTilingPattern<linalg::FillOp>,
+              linalg::LinalgTilingPattern<linalg::GenericOp>,
+              linalg::LinalgTilingPattern<linalg::MatmulOp>,
+              linalg::LinalgTilingPattern<linalg::PoolingNhwcMaxOp>,
+              linalg::LinalgTilingPattern<linalg::PoolingNhwcMinOp>,
+              linalg::LinalgTilingPattern<linalg::PoolingNhwcSumOp>,
+              linalg_ext::TiledOpInterfaceTilingPattern<linalg_ext::ScatterOp>>(
+          context, tilingOptions,
+          getLinalgMatchAndReplaceMarker(matchMarkers, getVectorizeMarker(),
+                                         context));
+
+  patterns.insert<linalg::LinalgTilingPattern<linalg::Conv2DNhwcHwcfOp>,
+                  linalg::LinalgTilingPattern<linalg::DepthwiseConv2DNhwOp>>(
       context, tilingOptions,
-      getLinalgMatchAndReplaceMarker(
-          {getWorkgroupMemoryMarker(), getWorkgroupMarker()},
-          getConvFilterTileMarker(), context));
+      getLinalgMatchAndReplaceMarker(matchMarkers, getConvFilterTileMarker(),
+                                     context));
+
+  patterns
+      .insert<linalg_ext::TiledOpInterfaceTilingPattern<linalg_ext::SortOp>>(
+          context, tilingOptions,
+          getLinalgMatchAndReplaceMarker(matchMarkers, llvm::None, context));
 }
 
 /// Returns the corresponding range for the given `processorValue` is a GPU
@@ -241,10 +253,9 @@ static void populateTilingConvFilterPatterns(
                            .setLoopType(linalg::LinalgTilingLoopType::Loops)
                            .setTileSizeComputationFunction(getTileSizeFn);
 
-  patterns.insert<
-      linalg::LinalgTilingPattern<linalg::ConvInputNHWCFilterHWCFOp>,
-      linalg::LinalgTilingPattern<linalg::DepthwiseConvInputNHWCFilterHWCFOp>,
-      linalg::LinalgTilingPattern<linalg::DepthwiseConvInputNHWCFilterHWCOp>>(
+  patterns.insert<linalg::LinalgTilingPattern<linalg::Conv2DNhwcHwcfOp>,
+                  linalg::LinalgTilingPattern<linalg::DepthwiseConv2DNhwOp>,
+                  linalg::LinalgTilingPattern<linalg::DepthwiseConv2DNhwcOp>>(
       context, tilingOptions, marker);
 }
 
@@ -347,8 +358,7 @@ void SPIRVTileAndDistributePass::runOnOperation() {
                                                  getVectorizeMarker(), context);
     populateTilingConvFilterPatterns(context, convFilterTilingPatterns, marker);
     populateFoldGPUProcessorIDUsesPatterns(context, convFilterTilingPatterns);
-    convFilterTilingPatterns
-        .insert<linalg::AffineMinSCFCanonicalizationPattern>(context);
+    scf::populateSCFLoopBodyCanonicalizationPatterns(convFilterTilingPatterns);
     (void)applyPatternsAndFoldGreedily(funcOp,
                                        std::move(convFilterTilingPatterns));
 
