@@ -15,14 +15,17 @@ hal.executable @matmul_tensors attributes {sym_visibility = "private"} {
       interface = @io,
       ordinal = 0 : index
     }
-    module {
+    builtin.module {
       func @matmul_tensors() {
         %c0 = constant 0 : index
         %c1 = constant 1 : index
-        %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?xf32>
-        %2 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?x?xf32>
-        %4 = hal.interface.binding.subspan @io::@arg2[%c0] : memref<?x?xf32>
-        %6 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?xf32>
+        %pcM = hal.interface.load.constant offset = 0 : index
+        %pcN = hal.interface.load.constant offset = 1 : index
+        %pcK = hal.interface.load.constant offset = 2 : index
+        %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?xf32>{%pcM, %pcK}
+        %2 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?x?xf32>{%pcK, %pcN}
+        %4 = hal.interface.binding.subspan @io::@arg2[%c0] : memref<?x?xf32>{%pcM, %pcN}
+        %6 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?xf32>{%pcM, %pcN}
         %M = memref.dim %0, %c0 : memref<?x?xf32>
         %N = memref.dim %2, %c1 : memref<?x?xf32>
         %K = memref.dim %0, %c1 : memref<?x?xf32>
@@ -92,12 +95,14 @@ hal.executable @add_no_config attributes {sym_visibility = "private"} {
       interface = @io,
       ordinal = 0 : index
     }
-    module  {
+    builtin.module  {
       func @add_no_config() {
         %c0 = constant 0 : index
-        %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?xf32>
-        %1 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?xf32>
-        %2 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?xf32>
+        %dim0 = hal.interface.load.constant offset = 0 : index
+        %dim1 = hal.interface.load.constant offset = 1 : index
+        %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?xf32>{%dim0, %dim1}
+        %1 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?xf32>{%dim1}
+        %2 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?xf32>{%dim0, %dim1}
         linalg.generic {
           indexing_maps = [affine_map<(d0, d1) -> (d0, d1)>,
                            affine_map<(d0, d1) -> (d1)>,
@@ -136,13 +141,15 @@ hal.executable @add attributes {sym_visibility = "private"} {
       interface = @io, ordinal = 0 : index,
       signature = (!flow.dispatch.tensor<readonly:?x?xf32>, !flow.dispatch.tensor<readonly:?xf32>,
         !flow.dispatch.tensor<writeonly:?x?xf32>) -> ()}
-    module  {
+    builtin.module  {
       func @add() {
         %c0 = constant 0 : index
         %c1 = constant 1 : index
-        %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?xf32>
-        %2 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?xf32>
-        %6 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?xf32>
+        %dim0 = hal.interface.load.constant offset = 0 : index
+        %dim1 = hal.interface.load.constant offset = 1 : index
+        %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?xf32>{%dim0, %dim1}
+        %2 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?xf32>{%dim1}
+        %6 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?xf32>{%dim0, %dim1}
         %M = memref.dim %0, %c0 : memref<?x?xf32>
         %N = memref.dim %0, %c1 : memref<?x?xf32>
         %workgroup_size_x = hal.interface.workgroup.size[0] : index
@@ -215,15 +222,19 @@ hal.executable @add4D attributes {sym_visibility = "private"} {
       interface = @io, ordinal = 0 : index,
       signature = (!flow.dispatch.tensor<readonly:?x?x?x?xf32>, !flow.dispatch.tensor<readonly:?xf32>,
         !flow.dispatch.tensor<writeonly:?x?x?x?xf32>) -> ()}
-    module  {
+    builtin.module  {
       func @add4D() {
         %c0 = constant 0 : index
         %c1 = constant 1 : index
         %c2 = constant 2 : index
         %c3 = constant 3 : index
-        %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?x?x?xf32>
-        %2 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?x?x?x?xf32>
-        %6 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?x?x?xf32>
+        %dim0 = hal.interface.load.constant offset = 0 : index
+        %dim1 = hal.interface.load.constant offset = 1 : index
+        %dim2 = hal.interface.load.constant offset = 2 : index
+        %dim3 = hal.interface.load.constant offset = 3 : index
+        %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?x?x?xf32>{%dim0, %dim1, %dim2, %dim3}
+        %2 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?x?x?x?xf32>{%dim0, %dim1, %dim2, %dim3}
+        %6 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?x?x?xf32>{%dim0, %dim1, %dim2, %dim3}
         %B = memref.dim %0, %c0 : memref<?x?x?x?xf32>
         %M = memref.dim %0, %c1 : memref<?x?x?x?xf32>
         %N = memref.dim %0, %c2 : memref<?x?x?x?xf32>
@@ -315,15 +326,19 @@ hal.executable @batch_matmul_tensors attributes {sym_visibility = "private"} {
       interface = @io,
       ordinal = 0 : index
     }
-    module {
+    builtin.module {
       func @batch_matmul_tensors() {
         %c0 = constant 0 : index
         %c1 = constant 1 : index
         %c2 = constant 2 : index
-        %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?x?xf32>
-        %2 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?x?x?xf32>
-        %4 = hal.interface.binding.subspan @io::@arg2[%c0] : memref<?x?x?xf32>
-        %6 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?x?xf32>
+        %pcB = hal.interface.load.constant offset = 0 : index
+        %pcM = hal.interface.load.constant offset = 1 : index
+        %pcN = hal.interface.load.constant offset = 2 : index
+        %pcK = hal.interface.load.constant offset = 3 : index
+        %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?x?xf32>{%pcB, %pcM, %pcK}
+        %2 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?x?x?xf32>{%pcB, %pcK, %pcN}
+        %4 = hal.interface.binding.subspan @io::@arg2[%c0] : memref<?x?x?xf32>{%pcB, %pcM, %pcN}
+        %6 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?x?xf32>{%pcB, %pcM, %pcN}
         %M = memref.dim %0, %c1 : memref<?x?x?xf32>
         %N = memref.dim %2, %c2 : memref<?x?x?xf32>
         %B = memref.dim %0, %c0 : memref<?x?x?xf32>
@@ -412,7 +427,7 @@ hal.executable @preset_config_matmul_tensors attributes {sym_visibility = "priva
             %13 = affine.min affine_map<(d0)[s0] -> (-d0 + 128, s0)>(%arg0)[%workgroup_size_y]
             %14 = affine.min affine_map<(d0)[s0] -> (-d0 + 512, s0)>(%arg1)[%workgroup_size_x]
             %15 = linalg.init_tensor [%13, %14] : tensor<?x?xf32>
-            %16 = linalg.fill(%cst, %15) : f32, tensor<?x?xf32> -> tensor<?x?xf32> 
+            %16 = linalg.fill(%cst, %15) : f32, tensor<?x?xf32> -> tensor<?x?xf32>
             %17 = linalg.matmul {__internal_linalg_transform__ = "workgroup", lowering.config = {passPipeline = 1 : i32, tileSizes = [[32, 32, 32]]}} ins(%8, %10 : tensor<?x256xf32>, tensor<256x?xf32>) outs(%16 : tensor<?x?xf32>) -> tensor<?x?xf32>
             flow.dispatch.tensor.store %17, %2, offsets = [%arg0, %arg1], sizes = [%11, %12], strides = [1, 1] : tensor<?x?xf32> -> !flow.dispatch.tensor<writeonly:128x512xf32>
           }
@@ -438,7 +453,7 @@ hal.executable @preset_config_matmul_tensors attributes {sym_visibility = "priva
 //  CHECK-DAG:     %[[NWG_Y:.+]] = affine.apply #[[MAP0]]()[%[[ARG1]]]
 //      CHECK:     return %[[NWG_X]], %[[NWG_Y]], %[[C1]]
 //      CHECK: builtin.module
-//      CHECK:   builtin.func @preset_config
+//      CHECK:   func @preset_config
 //  CHECK-DAG:     %[[WGID_X:.+]] = hal.interface.workgroup.id[0]
 //  CHECK-DAG:     %[[WGCOUNT_X:.+]] = hal.interface.workgroup.count[0]
 //  CHECK-DAG:     %[[WGID_Y:.+]] = hal.interface.workgroup.id[1]

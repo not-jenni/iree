@@ -26,12 +26,19 @@ hal.executable @matmul attributes {sym_visibility = "private"} {
       workgroup_size = [16: index, 8: index, 1: index],
       translation.info = {passPipeline = 6 : i32, workloadPerWorkgroup = [8, 16]}
     }
-    module {
+    builtin.module attributes {
+      spv.target_env =
+        #spv.target_env<#spv.vce<v1.3, [Shader], [SPV_KHR_storage_buffer_storage_class]>,
+                        {max_compute_workgroup_invocations = 128 : i32,
+                         max_compute_workgroup_size = dense<[128, 128, 64]> : vector<3xi32>}>} {
       func @matmul() {
         %c0 = constant 0 : index
-        %arg0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?xf32>
-        %arg1 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?x?xf32>
-        %arg2 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?xf32>
+        %M = hal.interface.load.constant offset = 0 : index
+        %N = hal.interface.load.constant offset = 1 : index
+        %K = hal.interface.load.constant offset = 2 : index
+        %arg0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?xf32>{%M, %K}
+        %arg1 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?x?xf32>{%K, %N}
+        %arg2 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?xf32>{%M, %N}
         %c4 = constant 4 : index
         %c1 = constant 1 : index
         %0 = memref.dim %arg0, %c1 : memref<?x?xf32>
@@ -105,7 +112,7 @@ hal.executable @conv_1d attributes {sym_visibility = "private"} {
       workgroup_size = [32: index, 4: index, 1: index],
       translation.info = {passPipeline = 6 : i32, workloadPerWorkgroup = [32, 4, 1]}
     }
-    module {
+    builtin.module attributes {spv.target_env = #spv.target_env<#spv.vce<v1.3, [Shader, GroupNonUniform, GroupNonUniformVote, GroupNonUniformArithmetic, GroupNonUniformBallot, GroupNonUniformShuffle, GroupNonUniformShuffleRelative], [SPV_KHR_storage_buffer_storage_class]>, SwiftShader:CPU, {cooperative_matrix_properties_nv = [], max_compute_shared_memory_size = 16384 : i32, max_compute_workgroup_invocations = 128 : i32, max_compute_workgroup_size = dense<[128, 128, 64]> : vector<3xi32>, subgroup_size = 4 : i32}>}  {
       func @conv_1d() {
         %cst = constant 0.000000e+00 : f32
         %c0 = constant 0 : index
@@ -192,12 +199,25 @@ hal.executable @conv_no_padding attributes {sym_visibility = "private"} {
       workgroup_size = [32: index, 4: index, 1: index],
       translation.info = {passPipeline = 6 : i32, workloadPerWorkgroup = [32, 4, 1]}
     }
-    module {
+    builtin.module attributes {
+      spv.target_env =
+        #spv.target_env<#spv.vce<v1.3, [Shader], [SPV_KHR_storage_buffer_storage_class]>,
+                        {max_compute_workgroup_invocations = 128 : i32,
+                         max_compute_workgroup_size = dense<[128, 128, 64]> : vector<3xi32>}>} {
       func @conv_no_padding() {
         %c0 = constant 0 : index
-        %arg0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?x?x?xf32>
-        %arg1 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?x?x?x?xf32>
-        %arg2 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?x?x?xf32>
+        %n = hal.interface.load.constant offset = 0 : index
+        %oh = hal.interface.load.constant offset = 1 : index
+        %ow = hal.interface.load.constant offset = 2 : index
+        %oc = hal.interface.load.constant offset = 3 : index
+        %ih = hal.interface.load.constant offset = 4 : index
+        %iw = hal.interface.load.constant offset = 5 : index
+        %ic = hal.interface.load.constant offset = 6 : index
+        %fh = hal.interface.load.constant offset = 7 : index
+        %fw = hal.interface.load.constant offset = 8 : index
+        %arg0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x?x?x?xf32>{%n, %ih, %iw, %ic}
+        %arg1 = hal.interface.binding.subspan @io::@arg1[%c0] : memref<?x?x?x?xf32>{%fh, %fw, %ic, %oc}
+        %arg2 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x?x?x?xf32>{%n, %oh, %ow, %oc}
         %c2 = constant 2 : index
         %c3 = constant 3 : index
         %c1 = constant 1 : index
@@ -317,7 +337,7 @@ hal.executable @conv_3d attributes {sym_visibility = "private"} {
       workgroup_size = [32: index, 4: index, 1: index],
       translation.info = {passPipeline = 6 : i32, workloadPerWorkgroup = [32, 4, 1]}
     }
-    module {
+    builtin.module attributes {spv.target_env = #spv.target_env<#spv.vce<v1.3, [Shader, GroupNonUniform, GroupNonUniformVote, GroupNonUniformArithmetic, GroupNonUniformBallot, GroupNonUniformShuffle, GroupNonUniformShuffleRelative], [SPV_KHR_storage_buffer_storage_class]>, SwiftShader:CPU, {cooperative_matrix_properties_nv = [], max_compute_shared_memory_size = 16384 : i32, max_compute_workgroup_invocations = 128 : i32, max_compute_workgroup_size = dense<[128, 128, 64]> : vector<3xi32>, subgroup_size = 4 : i32}>}  {
       func @conv_3d() {
         %cst = constant 0.000000e+00 : f32
         %c0 = constant 0 : index
@@ -394,7 +414,7 @@ module  {
         workgroup_size = [32: index, 4: index, 1: index],
         translation.info = {passPipeline = 6 : i32, workloadPerWorkgroup = [32, 4, 1]}
       }
-      module {
+      builtin.module attributes {spv.target_env = #spv.target_env<#spv.vce<v1.3, [Shader], [SPV_KHR_storage_buffer_storage_class]>, {max_compute_workgroup_invocations = 128 : i32, max_compute_workgroup_size = dense<[128, 128, 64]> : vector<3xi32>}>}  {
         func @pooling_nhwc_max() {
           %c0 = constant 0 : index
           %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<2x16x16x6xf32>
