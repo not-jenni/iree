@@ -17,7 +17,7 @@ jobs:
         id: last_green_commit
         uses: talentpair/last-green-commit-action@master
         with:
-          token: ${{ secrets.WRITE_ACCESS_TOKEN }}
+          github-token: ${{ secrets.WRITE_ACCESS_TOKEN }}
       - name: Checking out repository
         uses: actions/checkout@v2
         with:
