@@ -35,47 +35,47 @@ jobs:
       matrix:
         include:
           # Ubuntu packages.
-          - os: ubuntu-18.04
-            build_package: main-dist-linux
-            experimental: false
-          - os: ubuntu-18.04
-            build_package: py-compiler-pkg
-            experimental: false
+          # - os: ubuntu-18.04
+          #   build_package: main-dist-linux
+          #   experimental: false
+          # - os: ubuntu-18.04
+          #   build_package: py-compiler-pkg
+          #   experimental: false
           - os: ubuntu-18.04
             build_package: py-runtime-pkg
             experimental: false
-          - os: ubuntu-18.04
-            build_package: instrumented-py-runtime-pkg
-            experimental: true
-          - os: ubuntu-18.04
-            build_package: py-xla-compiler-tools-pkg
-            experimental: false
-          - os: ubuntu-18.04
-            build_package: py-tflite-compiler-tools-pkg
-            experimental: false
-          - os: ubuntu-18.04
-            build_package: py-tf-compiler-tools-pkg
-            experimental: false
+          # - os: ubuntu-18.04
+          #   build_package: instrumented-py-runtime-pkg
+          #   experimental: true
+          # - os: ubuntu-18.04
+          #   build_package: py-xla-compiler-tools-pkg
+          #   experimental: false
+          # - os: ubuntu-18.04
+          #   build_package: py-tflite-compiler-tools-pkg
+          #   experimental: false
+          # - os: ubuntu-18.04
+          #   build_package: py-tf-compiler-tools-pkg
+          #   experimental: false
           # Only needs to be built on Linux because platform independent.
           - os: ubuntu-18.04
             build_package: py-pure-pkgs
             experimental: false
 
           # Windows packages.
-          - os: windows-2019
-            build_package: py-compiler-pkg
-            experimental: false
-          - os: windows-2019
-            build_package: py-runtime-pkg
-            experimental: false
+          # - os: windows-2019
+          #   build_package: py-compiler-pkg
+          #   experimental: false
+          # - os: windows-2019
+          #   build_package: py-runtime-pkg
+          #   experimental: false
 
           # Macos packages.
-          - os: macos-latest
-            build_package: py-compiler-pkg
-            experimental: true
-          - os: macos-latest
-            build_package: py-runtime-pkg
-            experimental: true
+          # - os: macos-latest
+          #   build_package: py-compiler-pkg
+          #   experimental: true
+          # - os: macos-latest
+          #   build_package: py-runtime-pkg
+          #   experimental: true
     env:
       CIBW_BUILD_VERBOSITY: 1
 
