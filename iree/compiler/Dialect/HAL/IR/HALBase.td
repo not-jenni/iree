@@ -9,6 +9,7 @@
 
 include "iree/compiler/Dialect/HAL/IR/HALDialect.td"
 include "iree/compiler/Dialect/HAL/IR/HALInterfaces.td"
+include "mlir/IR/AttrTypeBase.td"
 
 //===----------------------------------------------------------------------===//
 // HAL enums
@@ -42,26 +43,6 @@ def HAL_MemoryTypeBitfieldAttr :
       HAL_MemoryType_HostLocal,
       HAL_MemoryType_DeviceVisible,
       HAL_MemoryType_DeviceLocal,
-    ]> {
-  let cppNamespace = "mlir::iree_compiler::IREE::HAL";
-}
-
-def HAL_MemoryAccess_None         : BitEnumAttrCase<"None",         0x0000>;  // ?
-def HAL_MemoryAccess_Read         : BitEnumAttrCase<"Read",         0x0001>;  // R
-def HAL_MemoryAccess_Write        : BitEnumAttrCase<"Write",        0x0002>;  // W
-def HAL_MemoryAccess_Discard      : BitEnumAttrCase<"Discard",      0x0004>;  // D
-def HAL_MemoryAccess_DiscardWrite : BitEnumAttrCase<"DiscardWrite", 0x0006>;
-def HAL_MemoryAccess_MayAlias     : BitEnumAttrCase<"MayAlias",     0x0008>;  // A
-def HAL_MemoryAccess_All          : BitEnumAttrCase<"All",          0x0007>;
-def HAL_MemoryAccessBitfieldAttr :
-    BitEnumAttr<"MemoryAccessBitfield", "valid MemoryAccess", [
-      HAL_MemoryAccess_None,
-      HAL_MemoryAccess_Read,
-      HAL_MemoryAccess_Write,
-      HAL_MemoryAccess_Discard,
-      HAL_MemoryAccess_DiscardWrite,
-      HAL_MemoryAccess_MayAlias,
-      HAL_MemoryAccess_All,
     ]> {
   let cppNamespace = "mlir::iree_compiler::IREE::HAL";
 }
@@ -108,10 +89,10 @@ def HAL_CommandCategoryBitfieldAttr :
   let cppNamespace = "mlir::iree_compiler::IREE::HAL";
 }
 
-def HAL_DescriptorType_UniformBuffer : I32EnumAttrCase<"UniformBuffer", 6>;
-def HAL_DescriptorType_StorageBuffer : I32EnumAttrCase<"StorageBuffer", 7>;
-def HAL_DescriptorType_UniformBufferDynamic : I32EnumAttrCase<"UniformBufferDynamic", 8>;
-def HAL_DescriptorType_StorageBufferDynamic : I32EnumAttrCase<"StorageBufferDynamic", 9>;
+def HAL_DescriptorType_UniformBuffer : I32EnumAttrCase<"UniformBuffer", 6, "uniform_buffer">;
+def HAL_DescriptorType_StorageBuffer : I32EnumAttrCase<"StorageBuffer", 7, "storage_buffer">;
+def HAL_DescriptorType_UniformBufferDynamic : I32EnumAttrCase<"UniformBufferDynamic", 8, "uniform_buffer_dynamic">;
+def HAL_DescriptorType_StorageBufferDynamic : I32EnumAttrCase<"StorageBufferDynamic", 9, "storage_buffer_dynamic">;
 def HAL_DescriptorTypeAttr :
     I32EnumAttr<"DescriptorType", "IREE HAL DescriptorType", [
       HAL_DescriptorType_UniformBuffer,
@@ -122,8 +103,8 @@ def HAL_DescriptorTypeAttr :
   let cppNamespace = "::mlir::iree_compiler::IREE::HAL";
 }
 
-def HAL_DescriptorSetLayoutUsageType_Immutable : I32EnumAttrCase<"Immutable", 0>;
-def HAL_DescriptorSetLayoutUsageType_PushOnly : I32EnumAttrCase<"PushOnly", 1>;
+def HAL_DescriptorSetLayoutUsageType_Immutable : I32EnumAttrCase<"Immutable", 0, "immutable">;
+def HAL_DescriptorSetLayoutUsageType_PushOnly : I32EnumAttrCase<"PushOnly", 1, "push_only">;
 def HAL_DescriptorSetLayoutUsageTypeAttr :
     I32EnumAttr<"DescriptorSetLayoutUsageType", "IREE HAL DescriptorSetLayoutType", [
       HAL_DescriptorSetLayoutUsageType_Immutable,
@@ -369,6 +350,7 @@ def HAL_HostSizeAttr : Util_IndexAttrBase<"size_t">;
 def HAL_TimelineValue : TypeAlias<Index>;
 
 def HAL_PrimitiveType : AnyTypeOf<[Index, AnySignlessInteger, AnyFloat]>;
+def HAL_FillPatternType : AnyTypeOf<[I8, I16, I32]>;
 
 def HAL_GlobalRefAttr : AliasedSymbolRefAttr;
 def HAL_GlobalType : AnyTypeOf<[HAL_PrimitiveType, AnyVector, HAL_ObjectType]>;
@@ -435,20 +417,89 @@ def HAL_BufferConstraintsAttr :
   let cppNamespace = "mlir::iree_compiler::IREE::HAL";
 }
 
-def HAL_DescriptorSetLayoutBindingAttr :
-  Util_StructAttr<"descriptor_set_layout_binding",
-                  "DescriptorSetLayoutBindingAttr",
-                  HAL_Dialect, [
-    Util_StructFieldAttr<"binding", I32Attr>,
-    Util_StructFieldAttr<"type", HAL_DescriptorTypeAttr>,
-    Util_StructFieldAttr<"access", HAL_MemoryAccessBitfieldAttr>,
-  ]> {
-  let cppNamespace = "mlir::iree_compiler::IREE::HAL";
+def HAL_DescriptorSetBindingAttr :
+    AttrDef<HAL_Dialect, "DescriptorSetBinding", []> {
+  let mnemonic = "descriptor_set.binding";
+  let summary = [{descriptor set binding specification}];
+  let description = [{
+    Specifies a single binding within a descriptor set layout.
+  }];
+  let parameters = (ins
+    AttrParameter<"int64_t", "">:$ordinal,
+    AttrParameter<"DescriptorType", "">:$type
+  );
+  let assemblyFormat = [{
+    `<` $ordinal `,` $type `>`
+  }];
 }
 
-def HAL_DescriptorSetLayoutBindingArrayAttr : TypedArrayAttrBase<
-    HAL_DescriptorSetLayoutBindingAttr,
-    "HAL descriptor set layout binding array attribute">;
+def HAL_DescriptorSetLayoutBindingArrayAttr :
+    TypedArrayAttrBase<HAL_DescriptorSetBindingAttr,
+                       "HAL descriptor set layout binding array attribute">;
+
+def HAL_DescriptorSetLayoutAttr :
+    AttrDef<HAL_Dialect, "DescriptorSetLayout", []> {
+  let mnemonic = "descriptor_set.layout";
+  let summary = [{descriptor set layout specification}];
+  let description = [{
+    Specifies the layout information of a single set of descriptors used within
+    an executable layout. Multiple of these sets may be used by a single entry
+    point to allow for bindings with similar update frequencies to be grouped.
+  }];
+  let parameters = (ins
+    AttrParameter<"int64_t", "">:$ordinal,
+    ArrayRefParameter<"DescriptorSetBindingAttr", "">:$bindings
+  );
+  let assemblyFormat = [{
+    `<`
+    $ordinal `,`
+    `bindings` `=` `[` $bindings `]`
+    `>`
+  }];
+}
+
+def HAL_ExecutableLayoutAttr :
+    AttrDef<HAL_Dialect, "ExecutableLayout", []> {
+  let mnemonic = "executable.layout";
+  let summary = [{executable entry point layout specification}];
+  let description = [{
+    Specifies the layout information used for interacting with executable
+    functions. This allows host code to correctly map parameters to the
+    lower-level target-specific argument passing behavior.
+  }];
+  let parameters = (ins
+    AttrParameter<"int64_t", "">:$pushConstants,
+    ArrayRefParameter<"DescriptorSetLayoutAttr", "">:$setLayouts
+  );
+  let assemblyFormat = [{
+    `<`
+    `push_constants` `=` $pushConstants `,`
+    `sets` `=` `[` $setLayouts `]`
+    `>`
+  }];
+}
+
+def HAL_InterfaceBindingAttr :
+    AttrDef<HAL_Dialect, "InterfaceBinding", []> {
+  let mnemonic = "interface.binding";
+  let summary = [{interface binding specification}];
+  let description = [{
+    Specifies the descriptor set and binding ordinal of a particular layout
+    binding.
+
+    Example:
+    ```mlir
+    #hal.interface.binding<0, 1>
+    ```
+  }];
+  let parameters = (ins
+    AttrParameter<"int64_t", "">:$set,
+    AttrParameter<"int64_t", "">:$binding
+  );
+  let assemblyFormat = [{
+    `<` $set `,` $binding `>`
+  }];
+}
 
 //===----------------------------------------------------------------------===//
 // Device and executable target specification
@@ -525,6 +576,7 @@ def HAL_DeviceTargetAttr :
     static SmallVector<ExecutableTargetAttr, 4>
     lookupExecutableTargets(Operation *op);
   }];
+  let hasCustomAssemblyFormat = 1;
 }
 
 def HAL_ExecutableTargetAttr :
@@ -574,50 +626,7 @@ def HAL_ExecutableTargetAttr :
     // device that can load an executable of this target.
     Attribute getMatchExpression();
   }];
-}
-
-//===----------------------------------------------------------------------===//
-// Experimental binding metadata
-//===----------------------------------------------------------------------===//
-// TODO(benvanik): drop this when we have a HAL dispatch abstraction.
-
-def HAL_ExConstantStorageAttr :
-  Util_StructAttr<"ex.constant_storage",
-                  "ExConstantStorageAttr",
-                  HAL_Dialect, [
-    Util_StructFieldAttr<"binding", StrAttr>,
-    Util_StructFieldAttr<"storage", StrAttr>,
-    Util_StructFieldAttr<"offset", IndexAttr>,
-    Util_StructFieldAttr<"length", IndexAttr>,
-  ]> {
-  let cppNamespace = "mlir::iree_compiler::IREE::HAL";
-}
-def HAL_ExPushConstantAttr :
-  Util_StructAttr<"ex.push_constant",
-                  "ExPushConstantAttr",
-                  HAL_Dialect, [
-    Util_StructFieldAttr<"ordinal", IndexAttr>,
-    Util_StructFieldAttr<"operand", IndexAttr>,
-  ]> {
-  let cppNamespace = "mlir::iree_compiler::IREE::HAL";
-}
-def HAL_ExOperandBufferAttr :
-  Util_StructAttr<"ex.operand_buffer",
-                  "ExOperandBufferAttr",
-                  HAL_Dialect, [
-    Util_StructFieldAttr<"binding", StrAttr>,
-    Util_StructFieldAttr<"operand", IndexAttr>,
-  ]> {
-  let cppNamespace = "mlir::iree_compiler::IREE::HAL";
-}
-def HAL_ExResultBufferAttr :
-  Util_StructAttr<"ex.result_buffer",
-                  "ExResultBufferAttr",
-                  HAL_Dialect, [
-    Util_StructFieldAttr<"binding", StrAttr>,
-    Util_StructFieldAttr<"result", IndexAttr>,
-  ]> {
-  let cppNamespace = "mlir::iree_compiler::IREE::HAL";
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -654,6 +663,7 @@ def HAL_MatchAnyAttr :
       return $_get(context, ArrayAttr::get(context, conditions));
     }]>,
   ];
+  let hasCustomAssemblyFormat = 1;
 }
 
 def HAL_MatchAllAttr :
@@ -673,6 +683,7 @@ def HAL_MatchAllAttr :
       return $_get(context, ArrayAttr::get(context, conditions));
     }]>,
   ];
+  let hasCustomAssemblyFormat = 1;
 }
 
 def HAL_DeviceMatchIDAttr :
@@ -698,6 +709,7 @@ def HAL_DeviceMatchIDAttr :
       return $_get(target.getContext(), target.getDeviceID());
     }]>,
   ];
+  let hasCustomAssemblyFormat = 1;
 }
 
 def HAL_DeviceMatchFeatureAttr :
@@ -721,6 +733,7 @@ def HAL_DeviceMatchFeatureAttr :
       return $_get(pattern.getContext(), pattern);
     }]>,
   ];
+  let hasCustomAssemblyFormat = 1;
 }
 
 def HAL_DeviceMatchArchitectureAttr :
@@ -744,6 +757,7 @@ def HAL_DeviceMatchArchitectureAttr :
       return $_get(pattern.getContext(), pattern);
     }]>,
   ];
+  let hasCustomAssemblyFormat = 1;
 }
 
 def HAL_DeviceMatchExecutableFormatAttr :
@@ -780,16 +794,17 @@ def HAL_DeviceMatchExecutableFormatAttr :
       return $_get(target.getContext(), target.getFormat());
     }]>,
   ];
+
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
 // Base HAL op classes
 //===----------------------------------------------------------------------===//
 
-class HAL_Op<string mnemonic, list<OpTrait> traits = []> :
+class HAL_Op<string mnemonic, list<Trait> traits = []> :
     Op<HAL_Dialect, mnemonic, traits> {
-  let parser = [{ return parse$cppClass(parser, &result); }];
-  let printer = [{ return print$cppClass(p, *this); }];
+  let hasCustomAssemblyFormat = 1;
 }
 
 #endif  // IREE_DIALECT_HAL_BASE

@@ -14,9 +14,9 @@
 #include "mlir-hlo/Dialect/mhlo/IR/chlo_ops.h"
 #include "mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
 #include "mlir-hlo/Dialect/mhlo/transforms/rewriters.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Shape/IR/Shape.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -28,6 +28,7 @@
 
 namespace mlir {
 namespace iree_compiler {
+namespace MHLO {
 
 namespace {
 
@@ -77,110 +78,6 @@ static Value getF32Const(ImplicitLocOpBuilder b, ArrayRef<int64_t> shapes,
   return b.create<mhlo::ConstOp>(DenseFPElementsAttr::get(ty, values))
       .getResult();
 }
-
-static Value getF32SplatConst(ImplicitLocOpBuilder b, ArrayRef<int64_t> shapes,
-                              float value) {
-  return getF32Const(b, shapes, {value});
-}
-
-class DecomposeLog1PPattern : public OpRewritePattern<mhlo::Log1pOp> {
- public:
-  using OpRewritePattern<mhlo::Log1pOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(mhlo::Log1pOp op,
-                                PatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    auto type = op.operand().getType().cast<TensorType>();
-    DenseElementsAttr attr =
-        DenseElementsAttr::get(type, rewriter.getF32FloatAttr(1.0));
-    auto one = rewriter.create<arith::ConstantOp>(loc, attr);
-    auto x = rewriter.create<mhlo::AddOp>(loc, op.operand(), one);
-    rewriter.replaceOpWithNewOp<mhlo::LogOp>(op, x);
-    return success();
-  }
-};
-
-class DecomposeExpM1Pattern : public OpRewritePattern<mhlo::Expm1Op> {
- public:
-  using OpRewritePattern<mhlo::Expm1Op>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(mhlo::Expm1Op op,
-                                PatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    auto type = op.operand().getType().cast<TensorType>();
-    DenseElementsAttr attr =
-        DenseElementsAttr::get(type, rewriter.getF32FloatAttr(1.0));
-    auto one = rewriter.create<arith::ConstantOp>(loc, attr);
-    auto x = rewriter.create<mhlo::ExpOp>(loc, op.operand());
-    rewriter.replaceOpWithNewOp<mhlo::SubOp>(op, x, one);
-    return success();
-  }
-};
-
-class ExtractConvOpPaddingAttributes : public OpRewritePattern<mhlo::ConvOp> {
- public:
-  using OpRewritePattern<mhlo::ConvOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(mhlo::ConvOp op,
-                                PatternRewriter &rewriter) const override {
-    if (!hasPadding(op)) return failure();
-    auto inputType = op.lhs().getType().cast<ShapedType>();
-    int rank = inputType.getRank();
-
-    // TODO(suderman): Add proper support for padding + dilation for codegen.
-    // We can't extract padding if the left hand side has dilation.
-    if (op.lhs_dilation().hasValue()) {
-      for (auto val : op.lhs_dilation().getValue().getValues<APInt>()) {
-        if (val != 1) {
-          return failure();
-        }
-      }
-    }
-
-    SmallVector<int64_t, 4> paddingLow, paddingHigh, interiorPadding, shape;
-    paddingLow.append(rank, 0);
-    paddingHigh.append(rank, 0);
-    interiorPadding.append(rank, 0);
-    for (auto iter :
-         llvm::enumerate(op.dimension_numbers().getInputSpatialDimensions())) {
-      unsigned idx = iter.index();
-      unsigned dim = iter.value();
-      paddingLow[dim] = op.paddingAttr().getValue<int64_t>({idx, 0});
-      paddingHigh[dim] = op.paddingAttr().getValue<int64_t>({idx, 1});
-    }
-    for (unsigned i = 0; i < rank; ++i) {
-      // mhlo.pad doesn't support dynamic shape.
-      if (inputType.isDynamicDim(i)) return failure();
-      int size = inputType.getShape()[i];
-      shape.push_back(size + paddingLow[i] + paddingHigh[i]);
-    }
-
-    auto toDenseAttr = [&rewriter](ArrayRef<int64_t> elements) {
-      return DenseIntElementsAttr::get(
-          RankedTensorType::get(elements.size(), rewriter.getIntegerType(64)),
-          elements);
-    };
-
-    auto loc = op.getLoc();
-    auto padResultType =
-        RankedTensorType::get(shape, inputType.getElementType());
-    Attribute zeroAttr = rewriter.getZeroAttr(
-        RankedTensorType::get({}, inputType.getElementType()));
-    auto zero = rewriter.create<arith::ConstantOp>(loc, zeroAttr);
-    auto padOp = rewriter.create<mhlo::PadOp>(
-        loc, padResultType, op.lhs(), zero, toDenseAttr(paddingLow),
-        toDenseAttr(paddingHigh), toDenseAttr(interiorPadding));
-    auto resultType = op.getResult().getType();
-    auto newOp = rewriter.create<mhlo::ConvOp>(
-        op.getLoc(), resultType, padOp.getResult(), op.rhs(),
-        op.window_stridesAttr(), /*padding=*/nullptr, op.lhs_dilationAttr(),
-        op.rhs_dilationAttr(), /*window_reversal=*/nullptr,
-        op.dimension_numbersAttr(), op.feature_group_countAttr(),
-        op.batch_group_countAttr(), op.precision_configAttr());
-    rewriter.replaceOp(op, newOp.getResult());
-    return success();
-  }
-};
 
 // Guarantee that the input dimensions are ordered batch, spatial_dims, feature
 // dim.
@@ -375,70 +272,6 @@ class ReorderConvOpOutputDimensions : public OpRewritePattern<mhlo::ConvOp> {
   }
 };
 
-class ExtractReduceWindowOpPaddingAttributes
-    : public OpRewritePattern<mhlo::ReduceWindowOp> {
- public:
-  using OpRewritePattern<mhlo::ReduceWindowOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(mhlo::ReduceWindowOp op,
-                                PatternRewriter &rewriter) const override {
-    if (!op.padding()) return failure();
-
-    if ((op.base_dilations() && !isSplatValue(*op.base_dilations(), 1)) ||
-        (op.window_dilations() && !isSplatValue(*op.window_dilations(), 1))) {
-      return failure();
-    }
-    if (isAllZero(op.paddingAttr())) return failure();
-
-    // All inputs must be of the same static shape, since
-    // mhlo.pad doesn't support dynamic shape.
-    for (Type inputType : op.inputs().getType()) {
-      if (!inputType.cast<ShapedType>().hasStaticShape()) return failure();
-    }
-    ArrayRef<int64_t> inputShape =
-        op.inputs()[0].getType().cast<ShapedType>().getShape();
-
-    int rank = inputShape.size();
-    SmallVector<int64_t, 4> paddingLow, paddingHigh, interiorPadding, shape;
-    for (unsigned i = 0; i < rank; ++i) {
-      interiorPadding.push_back(0);
-      paddingLow.push_back(op.paddingAttr().getValue<int64_t>({i, 0}));
-      paddingHigh.push_back(op.paddingAttr().getValue<int64_t>({i, 1}));
-      int size = inputShape[i];
-      shape.push_back(size + paddingLow.back() + paddingHigh.back());
-    }
-
-    auto toDenseAttr = [&rewriter](ArrayRef<int64_t> elements) {
-      return DenseIntElementsAttr::get(
-          RankedTensorType::get(elements.size(), rewriter.getIntegerType(64)),
-          elements);
-    };
-
-    SmallVector<Value> padOps;
-    padOps.reserve(op.inputs().size());
-    auto loc = op.getLoc();
-    for (auto it : llvm::zip(op.inputs(), op.init_values())) {
-      Value input = std::get<0>(it);
-      Value initValue = std::get<1>(it);
-      auto inputType = input.getType().cast<ShapedType>();
-      auto padResultType =
-          RankedTensorType::get(shape, inputType.getElementType());
-      auto padOp = rewriter.create<mhlo::PadOp>(
-          loc, padResultType, input, initValue, toDenseAttr(paddingLow),
-          toDenseAttr(paddingHigh), toDenseAttr(interiorPadding));
-      padOps.push_back(padOp);
-    }
-    auto newOp = rewriter.create<mhlo::ReduceWindowOp>(
-        loc, op.getResultTypes(), padOps, op.init_values(),
-        op.window_dimensions(), op.window_stridesAttr(),
-        op.base_dilationsAttr(), op.window_dilationsAttr(),
-        /*padding=*/nullptr);
-    rewriter.inlineRegionBefore(op.body(), newOp.body(), newOp.body().begin());
-    rewriter.replaceOp(op, newOp.getResults());
-    return success();
-  }
-};
-
 // Adjust the shape of depthwise_conv filter where is applied by mhlo.
 class AdjustDepthwiseFilterShape : public OpRewritePattern<mhlo::ConvOp> {
  public:
@@ -493,11 +326,16 @@ SmallVector<int64_t> extract1DVector(DenseIntElementsAttr elements) {
 // inserts transposes so the dot_general always has the form:
 // {batch_dims, parallel_dims, contraction_dims}.
 //   {batch_dims, contraction_dims, parallel_dims}
-class TransposeGenericDotGeneral : public OpRewritePattern<mhlo::DotGeneralOp> {
+// After that, batch_dims, contraction_dims, parallel_dims are
+// in consecutive order and not spliting the domain. This pattern inserts
+// reshapes to collapse consecutive reduction and parallel dims to always
+// generate a rank-3 dot_general op.
+class TransposeReshapeGenericDotGeneral
+    : public OpRewritePattern<mhlo::DotGeneralOp> {
  public:
   using OpRewritePattern<mhlo::DotGeneralOp>::OpRewritePattern;
 
-  Value TransposeIfNonConsecutive(OpBuilder b, Location loc, Value src,
+  Value TransposeIfNonConsecutive(OpBuilder &b, Location loc, Value src,
                                   ArrayRef<int64_t> targetOrder) const {
     if (isConsecutive(targetOrder)) return src;
     auto type = src.getType().cast<RankedTensorType>();
@@ -508,6 +346,23 @@ class TransposeGenericDotGeneral : public OpRewritePattern<mhlo::DotGeneralOp> {
     return b.create<mhlo::TransposeOp>(
         loc, RankedTensorType::get(transposeShape, type.getElementType()), src,
         b.getI64TensorAttr(targetOrder));
+  }
+
+  Value ReshapeIfMorethan3D(OpBuilder &b, Location loc, Value src,
+                            size_t dimsBorder0, size_t dimsBorder1) const {
+    auto type = src.getType().cast<RankedTensorType>();
+    if (type.getRank() <= 3) return src;
+    auto shape = type.getShape();
+    SmallVector<int64_t, 4> result_shape = {
+        std::accumulate(shape.begin(), shape.begin() + dimsBorder0, 1,
+                        std::multiplies<int64_t>()),
+        std::accumulate(shape.begin() + dimsBorder0,
+                        shape.begin() + dimsBorder1, 1,
+                        std::multiplies<int64_t>()),
+        std::accumulate(shape.begin() + dimsBorder1, shape.end(), 1,
+                        std::multiplies<int64_t>())};
+    return b.create<mhlo::ReshapeOp>(
+        loc, RankedTensorType::get(result_shape, type.getElementType()), src);
   }
 
   LogicalResult matchAndRewrite(mhlo::DotGeneralOp op,
@@ -559,167 +414,210 @@ class TransposeGenericDotGeneral : public OpRewritePattern<mhlo::DotGeneralOp> {
                                           lhsTargetOrder);
     Value rhs = TransposeIfNonConsecutive(rewriter, op.getLoc(), op.rhs(),
                                           rhsTargetOrder);
-    if (lhs == op.lhs() && rhs == op.rhs()) return failure();
 
+    // The dimensions of this will always be transposed into {batch_dims,
+    // parallel_dims, contraction_dims}, and the
+    // following logic is based on this assumption.
+    // TODO(#7443): If we consider transpose performance, the above assumptions
+    // may not be true.
     int64_t numLhsContractionDims = lhsContractingDims.size();
     int64_t lhsContractionBase = lhsShapeType.getRank() - numLhsContractionDims;
     int64_t rhsContractionBase = rhsBatchingDims.size();
     int64_t numRhsContractionDims =
         rhsContractionBase + rhsContractingDims.size();
-    auto lhsBatchingDimsAttr =
-        llvm::to_vector<4>(llvm::seq<int64_t>(0, lhsBatchingDims.size()));
-    auto rhsBatchingDimsAttr =
-        llvm::to_vector<4>(llvm::seq<int64_t>(0, rhsBatchingDims.size()));
-    auto lhsContractingDimsAttr = llvm::to_vector<4>(
-        llvm::seq<int64_t>(lhsContractionBase, lhsShapeType.getRank()));
-    auto rhsContractingDimsAttr = llvm::to_vector<4>(
-        llvm::seq<int64_t>(rhsContractionBase, numRhsContractionDims));
+
+    lhs = ReshapeIfMorethan3D(rewriter, op.getLoc(), lhs,
+                              rhsBatchingDims.size(), lhsContractionBase);
+    rhs = ReshapeIfMorethan3D(rewriter, op.getLoc(), rhs,
+                              rhsBatchingDims.size(), numRhsContractionDims);
+
+    if (lhs == op.lhs() && rhs == op.rhs()) return failure();
+
     auto dimensionNumbers = mhlo::DotDimensionNumbersAttr::get(
-        rewriter.getContext(), lhsBatchingDimsAttr, rhsBatchingDimsAttr,
-        lhsContractingDimsAttr, rhsContractingDimsAttr);
+        rewriter.getContext(), /*lhsBatchingDimensions=*/0,
+        /*rhsBatchingDimensions=*/0,
+        /*lhsContractingDimensions=*/2, /*rhsContractingDimensions=*/1);
+    auto lhsNewType = lhs.getType().cast<RankedTensorType>();
+    auto rhsNewType = rhs.getType().cast<RankedTensorType>();
+
+    // if lhs's shape or rhs's shape has collapsed, we need reshape the result
+    bool needReshapeResult = lhsNewType.getRank() < lhsShapeType.getRank() ||
+                             rhsNewType.getRank() < rhsShapeType.getRank();
+    // batching、lhs parallel、rhs parallel this order is a convension
+    SmallVector<int64_t, 4> newShape = {lhsNewType.getShape()[0],
+                                        lhsNewType.getShape()[1],
+                                        rhsNewType.getShape()[2]};
+    auto newResultType =
+        needReshapeResult
+            ? RankedTensorType::get(newShape, resultType.getElementType())
+            : op.getType();
 
     Value result = rewriter.create<mhlo::DotGeneralOp>(
-        op.getLoc(), op.getType(), lhs, rhs, dimensionNumbers,
+        op.getLoc(), newResultType, lhs, rhs, dimensionNumbers,
         op.precision_configAttr());
+
+    if (needReshapeResult) {
+      result =
+          rewriter.create<mhlo::ReshapeOp>(op.getLoc(), resultType, result);
+    }
     rewriter.replaceOp(op, result);
     return success();
   }
 };
 
-// Rewrite mhlo.dot_general to operate on rank-3 tensors when reduction dims are
-// in consecutive order and not spliting the domain. This pattern inserts
-// reshapes to collapse consecutive reduction and parallel dims to always
-// generate a rank-3 dot_general op.
-class RankReducedDotGeneral : public OpRewritePattern<mhlo::DotGeneralOp> {
+class ScatterRank0Value : public OpRewritePattern<mhlo::ScatterOp> {
  public:
-  using OpRewritePattern<mhlo::DotGeneralOp>::OpRewritePattern;
+  using OpRewritePattern<mhlo::ScatterOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(mhlo::DotGeneralOp op,
+  LogicalResult matchAndRewrite(mhlo::ScatterOp op,
                                 PatternRewriter &rewriter) const override {
-    auto lhsShapeType = op.lhs().getType().dyn_cast<ShapedType>();
-    auto rhsShapeType = op.rhs().getType().dyn_cast<ShapedType>();
-    auto resultType = op.getResult().getType().dyn_cast<ShapedType>();
+    auto operand = op.operand();
+    auto indices = op.scatter_indices();
+    auto updates = op.updates();
 
-    if (!lhsShapeType || !rhsShapeType || !resultType) return failure();
-    if (!lhsShapeType.hasStaticShape() || !rhsShapeType.hasStaticShape())
+    auto operandTy = operand.getType().dyn_cast<RankedTensorType>();
+    auto indicesTy = indices.getType().dyn_cast<RankedTensorType>();
+    auto updatesTy = updates.getType().dyn_cast<RankedTensorType>();
+    if (!operandTy || !indicesTy || !updatesTy) return failure();
+
+    if (indicesTy.getRank() != 1 || !indicesTy.hasStaticShape() ||
+        updatesTy.getRank() != 0) {
       return failure();
-    if (resultType.getRank() <= 3) return failure();
+    }
 
-    mhlo::DotDimensionNumbersAttr dimNumbers = op.dot_dimension_numbers();
-    auto lhsBatchingDims =
-        llvm::to_vector<4>(dimNumbers.getLhsBatchingDimensions());
-    auto rhsBatchingDims =
-        llvm::to_vector<4>(dimNumbers.getRhsBatchingDimensions());
-    auto lhsContractingDims =
-        llvm::to_vector<4>(dimNumbers.getLhsContractingDimensions());
-    auto rhsContractingDims =
-        llvm::to_vector<4>(dimNumbers.getRhsContractingDimensions());
+    auto dimNumbers = op.scatter_dimension_numbers();
 
-    if (lhsBatchingDims.empty() || rhsBatchingDims.empty()) return failure();
+    // We only have one dim for shape so this should be 0.
+    if (dimNumbers.getIndexVectorDim() != 0) return failure();
 
-    llvm::sort(lhsBatchingDims);
-    llvm::sort(lhsContractingDims);
-    llvm::sort(rhsBatchingDims);
-    llvm::sort(rhsContractingDims);
+    // Require canonicalize scatter order.
+    // TODO(suderman): Transpose to canonicalized order.
+    for (auto en : llvm::enumerate(dimNumbers.getScatterDimsToOperandDims())) {
+      if (en.index() != en.value()) return failure();
+    }
 
-    auto isDomainSplit = [](ArrayRef<int64_t> shape,
-                            ArrayRef<int64_t> batchingDims,
-                            ArrayRef<int64_t> contractingDims) {
-      // Batching and contracting are contiguous.
-      if ((contractingDims.front() - batchingDims.back()) == 1) return false;
-      // Contracting dims are inner most.
-      if (contractingDims.back() == (shape.size() - 1)) return false;
-      return true;
-    };
+    // Inserted window dims should be in order. Technically we just need to
+    // check they are all contained.
+    for (auto en : llvm::enumerate(dimNumbers.getInsertedWindowDims())) {
+      if (en.index() != en.value()) return failure();
+    }
 
-    if (!isConsecutive(lhsBatchingDims) || !isConsecutive(lhsContractingDims) ||
-        !isConsecutive(rhsBatchingDims) || !isConsecutive(rhsContractingDims))
+    // This should be empty
+    if (dimNumbers.getUpdateWindowDims().size() != 0) {
       return failure();
+    }
 
-    if (isDomainSplit(lhsShapeType.getShape(), lhsBatchingDims,
-                      lhsContractingDims) ||
-        isDomainSplit(rhsShapeType.getShape(), rhsBatchingDims,
-                      rhsContractingDims))
-      return failure();
+    // Reshape indices to add the implicit 1x out front.
+    llvm::SmallVector<int64_t> newIndicesShape;
+    llvm::SmallVector<Value> newIndicesDynDims;
+    newIndicesShape.push_back(1);
+    for (auto it : llvm::enumerate(indicesTy.getShape())) {
+      auto dim = it.value();
+      newIndicesShape.push_back(dim);
+    }
 
-    // Collapsing shape into a rank-3 tensor, returns newCollabsedShape
-    // contraction and parallel dim indices.
-    auto computeCollapsedShape = [](ArrayRef<int64_t> shape,
-                                    ArrayRef<int64_t> batchingDims,
-                                    ArrayRef<int64_t> contractingDims) {
-      auto newRank =
-          shape.size() - batchingDims.size() - contractingDims.size() + 2;
-      auto batchingSize = std::accumulate(
-          batchingDims.begin(), batchingDims.end(), 1,
-          [shape](const int64_t accum, const int64_t index) -> int64_t {
-            return accum * shape[index];
-          });
-      auto contractingSize = std::accumulate(
-          contractingDims.begin(), contractingDims.end(), 1,
-          [shape](const int64_t accum, const int64_t index) -> int64_t {
-            return accum * shape[index];
-          });
+    Location loc = op.getLoc();
+    Value reshapedIndices = rewriter.create<mhlo::ReshapeOp>(
+        loc, RankedTensorType::get(newIndicesShape, indicesTy.getElementType()),
+        indices);
 
-      int parallelDimIndex, contractingDimIndex, parallelDimSize = 1;
-      if (contractingDims.front() - batchingDims.back() > 1) {
-        parallelDimIndex = 1;
-        contractingDimIndex = 2;
-        for (int i = batchingDims.back() + 1; i < contractingDims.front();
-             ++i) {
-          parallelDimSize *= shape[i];
-        }
-      } else {
-        contractingDimIndex = 1;
-        parallelDimIndex = 2;
-        for (int i = contractingDims.back() + 1; i < shape.size(); ++i) {
-          parallelDimSize *= shape[i];
-        }
+    Value reshapedUpdates = rewriter.create<mhlo::ReshapeOp>(
+        loc, RankedTensorType::get({1}, updatesTy.getElementType()), updates);
+
+    SmallVector<int64_t> insertedWindowDims =
+        llvm::to_vector<4>(llvm::seq<int64_t>(0, operandTy.getRank()));
+    SmallVector<int64_t> scatterDimsToOperandDims =
+        llvm::to_vector<4>(llvm::seq<int64_t>(0, operandTy.getRank()));
+    auto newDimNumbers = mhlo::ScatterDimensionNumbersAttr::get(
+        op.getContext(), {}, insertedWindowDims, scatterDimsToOperandDims,
+        /*indexVectorDim=*/1);
+
+    auto newScatter = rewriter.create<mhlo::ScatterOp>(
+        loc, op.getType(), operand, reshapedIndices, reshapedUpdates,
+        newDimNumbers, op.indices_are_sorted(), op.unique_indices());
+
+    Region &region = newScatter.update_computation();
+    rewriter.cloneRegionBefore(op.update_computation(), region, region.end());
+
+    rewriter.replaceOp(op, newScatter.getResult());
+
+    return success();
+  }
+};
+
+// Traverse upward past common operations to see if the value came from a
+// boolean tensor.
+bool isFromBool(Value val) {
+  while (true) {
+    Operation *op = val.getDefiningOp();
+    if (!op) return false;
+
+    if (auto convertOp = dyn_cast<mhlo::ConvertOp>(op)) {
+      auto inTy = convertOp.operand().getType().cast<ShapedType>();
+      if (inTy.getElementType().isInteger(1)) {
+        return true;
       }
-      llvm::SmallVector<int64_t, 4> newShape(newRank);
-      newShape[0] = batchingSize;
-      newShape[contractingDimIndex] = contractingSize;
-      newShape[parallelDimIndex] = parallelDimSize;
-      return std::make_tuple(newShape, contractingDimIndex, parallelDimIndex);
+      val = convertOp.operand();
+      continue;
+    }
+
+    if (isa<mhlo::DynamicBroadcastInDimOp>(op) ||
+        isa<mhlo::BroadcastInDimOp>(op) || isa<mhlo::BroadcastOp>(op)) {
+      val = op->getOperand(0);
+      continue;
+    }
+
+    return false;
+  }
+}
+
+// Mhlo of non-finite values (e.g. NaN, inf) and 0.0 produce 0.0 for XLA. For
+// linalg we need to conver these to select operations.
+class MulCastOfBool : public OpRewritePattern<mhlo::MulOp> {
+ public:
+  using OpRewritePattern<mhlo::MulOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mhlo::MulOp op,
+                                PatternRewriter &rewriter) const override {
+    auto resultTy = op.getType().cast<ShapedType>();
+    if (!resultTy.getElementType().isa<FloatType>()) return failure();
+    Value lhs = op.lhs();
+    Value rhs = op.rhs();
+    bool lhsIsBool = isFromBool(lhs);
+    bool rhsIsBool = isFromBool(rhs);
+
+    if (lhsIsBool == rhsIsBool) return failure();
+    if (rhsIsBool) std::swap(lhs, rhs);
+
+    Type eType = resultTy.getElementType();
+    auto lhsTy = lhs.getType().cast<ShapedType>();
+    Value lhsBool = rewriter.create<mhlo::ConvertOp>(
+        op.getLoc(), lhsTy.clone(rewriter.getIntegerType(1)), lhs);
+    Value zero = rewriter.create<mhlo::ConstOp>(
+        op.getLoc(), DenseElementsAttr::get(RankedTensorType::get({}, eType),
+                                            rewriter.getZeroAttr(eType)));
+
+    auto lhsShape = rewriter.create<shape::ShapeOfOp>(
+        op.getLoc(),
+        RankedTensorType::get({lhsTy.getRank()}, rewriter.getIndexType()), lhs);
+
+    int64_t resultRank = resultTy.getRank();
+    auto broadcast = [&](Value value) -> Value {
+      auto valueTy = value.getType().cast<ShapedType>();
+      auto newTy =
+          RankedTensorType::get(resultTy.getShape(), valueTy.getElementType());
+      if (valueTy == newTy) return value;
+      auto dimensions = llvm::to_vector<4>(
+          llvm::seq<int64_t>(resultRank - valueTy.getRank(), resultRank));
+      return rewriter.create<mhlo::DynamicBroadcastInDimOp>(
+          op.getLoc(), newTy, value, lhsShape,
+          rewriter.getI64TensorAttr(dimensions));
     };
 
-    int lhsContractingDimIndex, rhsContractingDimIndex, lhsParallelDimIndex,
-        rhsParallelDimIndex;
-    SmallVector<int64_t, 4> lhsNewShape, rhsNewShape;
-    std::tie(lhsNewShape, lhsContractingDimIndex, lhsParallelDimIndex) =
-        computeCollapsedShape(lhsShapeType.getShape(), lhsBatchingDims,
-                              lhsContractingDims);
+    zero = broadcast(zero);
 
-    std::tie(rhsNewShape, rhsContractingDimIndex, rhsParallelDimIndex) =
-        computeCollapsedShape(rhsShapeType.getShape(), rhsBatchingDims,
-                              rhsContractingDims);
-    SmallVector<int64_t, 4> resultNewShape = {lhsNewShape[0],
-                                              lhsNewShape[lhsParallelDimIndex],
-                                              rhsNewShape[rhsParallelDimIndex]};
-    Type dotGeneralResultType =
-        RankedTensorType::get(resultNewShape, resultType.getElementType());
-
-    auto loc = op.getLoc();
-    Value reshapedLhs = rewriter.create<mhlo::ReshapeOp>(
-        loc, RankedTensorType::get(lhsNewShape, lhsShapeType.getElementType()),
-        op.lhs());
-    Value reshapedRhs = rewriter.create<mhlo::ReshapeOp>(
-        loc, RankedTensorType::get(rhsNewShape, rhsShapeType.getElementType()),
-        op.rhs());
-    auto dimensionNumbers = mhlo::DotDimensionNumbersAttr::get(
-        rewriter.getContext(),
-        /*lhs_batching_dimensions=*/{0},
-        /*rhs_batching_dimensions=*/{0},
-        /*lhs_contracting_dimensions=*/{lhsContractingDimIndex},
-        /*rhs_contracting_dimensions=*/
-        {rhsContractingDimIndex});
-    Value dotGeneralResult = rewriter.create<mhlo::DotGeneralOp>(
-        loc, dotGeneralResultType, reshapedLhs, reshapedRhs, dimensionNumbers,
-        op.precision_configAttr());
-
-    Value result =
-        rewriter.create<mhlo::ReshapeOp>(loc, resultType, dotGeneralResult);
-    rewriter.replaceOp(op, result);
-
+    rewriter.replaceOpWithNewOp<mhlo::SelectOp>(op, resultTy, lhsBool, rhs,
+                                                zero);
     return success();
   }
 };
@@ -888,14 +786,14 @@ struct MHLOToMHLOPreprocessingPass
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ConversionTarget conversionTarget(*context);
-    OwningRewritePatternList conversionPatterns(&getContext());
+    RewritePatternSet conversionPatterns(&getContext());
     // Note that various input modalities may do their own legalization of
     // CHLO. Converting here allows IREE to accept CHLO dialect regardless of
     // whether it was legalized away at a higher level.
     // chlo::PopulateLegalizeChloToHloPatterns(context, &conversionPatterns);
     conversionTarget.addLegalDialect<
         shape::ShapeDialect, chlo::HloClientDialect, mhlo::MhloDialect,
-        math::MathDialect, mlir::StandardOpsDialect,
+        math::MathDialect, mlir::func::FuncDialect,
         mlir::arith::ArithmeticDialect, mlir::tensor::TensorDialect>();
     // conversionTarget.addIllegalDialect<chlo::HloClientDialect>();
     if (failed(applyPartialConversion(getOperation(), conversionTarget,
@@ -903,19 +801,18 @@ struct MHLOToMHLOPreprocessingPass
       return signalPassFailure();
     }
 
-    OwningRewritePatternList patterns(&getContext());
+    RewritePatternSet patterns(&getContext());
     // TODO: Remove once we have a general contraction to matmul pass.
     mhlo::PopulateEinsumToDotGeneralPatterns(context, &patterns);
     mhlo::PopulateUnfuseBatchNormPatterns(context, &patterns);
     mhlo::PopulateComplexLoweringPatterns(context, &patterns);
     mhlo::PopulateGatherToTorchIndexSelectPatterns(context, &patterns);
-    patterns.insert<ExtractReduceWindowOpPaddingAttributes,
-                    AdjustDepthwiseFilterShape, DecomposeLog1PPattern,
-                    DecomposeExpM1Pattern, ExpandRngNormal>(context);
+    patterns.insert<AdjustDepthwiseFilterShape, ScatterRank0Value,
+                    ExpandRngNormal, MulCastOfBool>(context);
 
     // dot_general canoncalization patterns.
     mhlo::PopulateGeneralDotOpLoweringPatterns(&patterns, context);
-    patterns.insert<RankReducedDotGeneral, TransposeGenericDotGeneral>(context);
+    patterns.insert<TransposeReshapeGenericDotGeneral>(context);
 
     // Unary elementwise op.
     patterns.insert<
@@ -960,23 +857,25 @@ struct MHLOToMHLOPreprocessingPass
         ReorderBroadcastInDimOpAndElementwiseOp<mhlo::AndOp>,
         ReorderBroadcastInDimOpAndElementwiseOp<mhlo::OrOp>,
         ReorderBroadcastInDimOpAndElementwiseOp<mhlo::XorOp>>(context);
-    if (extractPadFromConv) {
-      patterns.insert<ExtractConvOpPaddingAttributes>(context);
-    }
     if (orderConvFeatures) {
       patterns.insert<ReorderConvOpInputDimensions>(context);
       patterns.insert<ReorderConvOpKernelDimensions>(context);
       patterns.insert<ReorderConvOpOutputDimensions>(context);
     }
-    (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+    if (failed(applyPatternsAndFoldGreedily(getOperation(),
+                                            std::move(patterns)))) {
+      return signalPassFailure();
+    }
   }
 };
 
 }  // namespace
 
-std::unique_ptr<OperationPass<FuncOp>> createMHLOToMHLOPreprocessingPass() {
+std::unique_ptr<OperationPass<func::FuncOp>>
+createMHLOToMHLOPreprocessingPass() {
   return std::make_unique<MHLOToMHLOPreprocessingPass>();
 }
 
+}  // namespace MHLO
 }  // namespace iree_compiler
 }  // namespace mlir

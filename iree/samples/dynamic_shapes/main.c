@@ -17,16 +17,17 @@ iree_status_t reduce_sum_1d(iree_runtime_session_t* session, const int* values,
   iree_hal_buffer_view_t* arg0 = NULL;
   const iree_hal_dim_t arg0_shape[1] = {values_length};
 
-  // TODO(scotttodd): use iree_hal_buffer_view_wrap_or_clone_heap_buffer
-  //   * debugging some apparent memory corruption with the stack-local value
   iree_status_t status = iree_ok_status();
   if (iree_status_is_ok(status)) {
-    status = iree_hal_buffer_view_clone_heap_buffer(
+    status = iree_hal_buffer_view_allocate_buffer(
         iree_runtime_session_device_allocator(session), arg0_shape,
         IREE_ARRAYSIZE(arg0_shape), IREE_HAL_ELEMENT_TYPE_SINT_32,
         IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
-        IREE_HAL_MEMORY_TYPE_HOST_LOCAL | IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE,
-        IREE_HAL_BUFFER_USAGE_ALL,
+        (iree_hal_buffer_params_t){
+            .type = IREE_HAL_MEMORY_TYPE_HOST_LOCAL |
+                    IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE,
+            .usage = IREE_HAL_BUFFER_USAGE_ALL,
+        },
         iree_make_const_byte_span((void*)values, sizeof(int) * values_length),
         &arg0);
   }
@@ -43,16 +44,13 @@ iree_status_t reduce_sum_1d(iree_runtime_session_t* session, const int* values,
     status =
         iree_runtime_call_outputs_pop_front_buffer_view(&call, &buffer_view);
   }
-  iree_hal_buffer_mapping_t buffer_mapping;
   if (iree_status_is_ok(status)) {
-    status = iree_hal_buffer_map_range(iree_hal_buffer_view_buffer(buffer_view),
-                                       IREE_HAL_MEMORY_ACCESS_READ, 0,
-                                       IREE_WHOLE_BUFFER, &buffer_mapping);
+    status = iree_hal_device_transfer_d2h(
+        iree_runtime_session_device(session),
+        iree_hal_buffer_view_buffer(buffer_view), 0, out_result,
+        sizeof(*out_result), IREE_HAL_TRANSFER_BUFFER_FLAG_DEFAULT,
+        iree_infinite_timeout());
   }
-  if (iree_status_is_ok(status)) {
-    *out_result = *buffer_mapping.contents.data;
-  }
-  iree_hal_buffer_unmap_range(&buffer_mapping);
   iree_hal_buffer_view_release(buffer_view);
 
   iree_runtime_call_deinitialize(&call);
@@ -69,16 +67,17 @@ iree_status_t reduce_sum_2d(iree_runtime_session_t* session, const int* values,
   iree_hal_buffer_view_t* arg0 = NULL;
   const iree_hal_dim_t arg0_shape[2] = {values_length / 3, 3};
 
-  // TODO(scotttodd): use iree_hal_buffer_view_wrap_or_clone_heap_buffer
-  //   * debugging some apparent memory corruption with the stack-local value
   iree_status_t status = iree_ok_status();
   if (iree_status_is_ok(status)) {
-    status = iree_hal_buffer_view_clone_heap_buffer(
+    status = iree_hal_buffer_view_allocate_buffer(
         iree_runtime_session_device_allocator(session), arg0_shape,
         IREE_ARRAYSIZE(arg0_shape), IREE_HAL_ELEMENT_TYPE_SINT_32,
         IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
-        IREE_HAL_MEMORY_TYPE_HOST_LOCAL | IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE,
-        IREE_HAL_BUFFER_USAGE_ALL,
+        (iree_hal_buffer_params_t){
+            .type = IREE_HAL_MEMORY_TYPE_HOST_LOCAL |
+                    IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE,
+            .usage = IREE_HAL_BUFFER_USAGE_ALL,
+        },
         iree_make_const_byte_span((void*)values, sizeof(int) * values_length),
         &arg0);
   }
@@ -109,16 +108,17 @@ iree_status_t add_one(iree_runtime_session_t* session, const int* values,
   iree_hal_buffer_view_t* arg0 = NULL;
   const iree_hal_dim_t arg0_shape[1] = {values_length};
 
-  // TODO(scotttodd): use iree_hal_buffer_view_wrap_or_clone_heap_buffer
-  //   * debugging some apparent memory corruption with the stack-local value
   iree_status_t status = iree_ok_status();
   if (iree_status_is_ok(status)) {
-    status = iree_hal_buffer_view_clone_heap_buffer(
+    status = iree_hal_buffer_view_allocate_buffer(
         iree_runtime_session_device_allocator(session), arg0_shape,
         IREE_ARRAYSIZE(arg0_shape), IREE_HAL_ELEMENT_TYPE_SINT_32,
         IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
-        IREE_HAL_MEMORY_TYPE_HOST_LOCAL | IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE,
-        IREE_HAL_BUFFER_USAGE_ALL,
+        (iree_hal_buffer_params_t){
+            .type = IREE_HAL_MEMORY_TYPE_HOST_LOCAL |
+                    IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE,
+            .usage = IREE_HAL_BUFFER_USAGE_ALL,
+        },
         iree_make_const_byte_span((void*)values, sizeof(int) * values_length),
         &arg0);
   }
@@ -204,8 +204,10 @@ iree_status_t run_sample(iree_string_view_t bytecode_module_path,
     status = reduce_sum_2d(session, input, 6, &result_buffer_view);
     if (iree_status_is_ok(status)) {
       fprintf(stdout, "reduce_sum_2d([[1, 2, 3], [10, 20, 30]]): ");
-      status = iree_hal_buffer_view_fprint(stdout, result_buffer_view,
-                                           /*max_element_count=*/4096);
+      status = iree_hal_buffer_view_fprint(
+          stdout, result_buffer_view,
+          /*max_element_count=*/4096,
+          iree_runtime_session_host_allocator(session));
       fprintf(stdout, "\n");
     }
     iree_hal_buffer_view_release(result_buffer_view);
@@ -219,8 +221,10 @@ iree_status_t run_sample(iree_string_view_t bytecode_module_path,
     if (iree_status_is_ok(status)) {
       fprintf(stdout,
               "reduce_sum_2d([[1, 2, 3], [10, 20, 30], [100, 200, 300]]): ");
-      status = iree_hal_buffer_view_fprint(stdout, result_buffer_view,
-                                           /*max_element_count=*/4096);
+      status = iree_hal_buffer_view_fprint(
+          stdout, result_buffer_view,
+          /*max_element_count=*/4096,
+          iree_runtime_session_host_allocator(session));
       fprintf(stdout, "\n");
     }
     iree_hal_buffer_view_release(result_buffer_view);
@@ -233,8 +237,10 @@ iree_status_t run_sample(iree_string_view_t bytecode_module_path,
     status = add_one(session, input, 3, &result_buffer_view);
     if (iree_status_is_ok(status)) {
       fprintf(stdout, "add_one([1, 10, 100]): ");
-      status = iree_hal_buffer_view_fprint(stdout, result_buffer_view,
-                                           /*max_element_count=*/64);
+      status = iree_hal_buffer_view_fprint(
+          stdout, result_buffer_view,
+          /*max_element_count=*/64,
+          iree_runtime_session_host_allocator(session));
       fprintf(stdout, "\n");
     }
     iree_hal_buffer_view_release(result_buffer_view);

@@ -15,20 +15,33 @@ iree_cc_library(
     Utils
   HDRS
     "ConversionUtils.h"
+    "CustomKernelsTargetInfo.h"
     "FlatbufferUtils.h"
     "GraphUtils.h"
+    "IndexSet.h"
+    "ModuleUtils.h"
+    "OptionUtils.h"
+    "PassUtils.h"
     "PatternUtils.h"
+    "StringUtils.h"
     "TracingUtils.h"
   SRCS
     "ConversionUtils.cpp"
+    "CustomKernelsTargetInfo.cpp"
     "FlatbufferUtils.cpp"
     "GraphUtils.cpp"
+    "ModuleUtils.cpp"
+    "OptionUtils.cpp"
+    "PassUtils.cpp"
+    "StringUtils.cpp"
     "TracingUtils.cpp"
   DEPS
     LLVMSupport
+    MLIRArithmetic
+    MLIRFunc
     MLIRIR
+    MLIRParser
     MLIRPass
-    MLIRStandard
     MLIRSupport
     MLIRTransformUtils
     MLIRTransforms

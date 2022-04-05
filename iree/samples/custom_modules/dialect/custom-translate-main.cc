@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 // Custom translation main entry function.
-// Based on the iree-translate main entry function (iree-translate-main.cc).
+// Based on the iree-compile main entry function (iree-compile-main.cc).
 //
 // We need this entry function because we want to register the custom
 // dialect, which is missing in IREE's translation main entry function.
@@ -29,7 +29,7 @@
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Support/ToolUtilities.h"
-#include "mlir/Translation.h"
+#include "mlir/Tools/mlir-translate/Translation.h"
 
 static llvm::cl::opt<std::string> inputFilename(llvm::cl::Positional,
                                                 llvm::cl::desc("<input file>"),
@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
   mlir::registerMlirTranslations();
   mlir::iree_compiler::registerIreeTranslations();
   // Make sure command line options are registered.
-  (void)mlir::iree_compiler::IREE::HAL::getTargetOptionsFromFlags();
+  (void)mlir::iree_compiler::IREE::HAL::TargetOptions::FromFlags::get();
 
   // Register MLIRContext command-line options like
   // -mlir-print-op-on-diagnostic.

@@ -45,7 +45,7 @@ class VMVXTargetBackend final : public TargetBackend {
     Builder b(context);
     SmallVector<NamedAttribute> configItems;
 
-    configItems.emplace_back(b.getIdentifier("executable_targets"),
+    configItems.emplace_back(b.getStringAttr("executable_targets"),
                              getExecutableTargets(context));
 
     auto configAttr = b.getDictionaryAttr(configItems);
@@ -59,7 +59,8 @@ class VMVXTargetBackend final : public TargetBackend {
     OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
 
     // TODO(benvanik): derive these from a vm target triple.
-    auto vmOptions = IREE::VM::getTargetOptionsFromFlags();
+    auto vmOptions = IREE::VM::TargetOptions::FromFlags::get();
+    vmOptions.i64Extension = true;
     vmOptions.f32Extension = true;
     vmOptions.optimizeForStackSize = false;
     IREE::VM::buildVMTransformPassPipeline(nestedModulePM, vmOptions);

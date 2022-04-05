@@ -18,10 +18,7 @@ iree_cc_test(
     iree::base::logging
     iree::testing::gtest
     iree::testing::gtest_main
-    iree::vm::cc
-    iree::vm::ops
-    iree::vm::ops_emitc
-    iree::vm::shims_emitc
+    iree::vm
     ::arithmetic_ops
     ::arithmetic_ops_f32
     ::arithmetic_ops_i64
@@ -56,6 +53,8 @@ iree_c_module(
     "arithmetic_ops.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -67,6 +66,8 @@ iree_c_module(
     "arithmetic_ops_f32.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -78,6 +79,8 @@ iree_c_module(
     "arithmetic_ops_i64.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -89,6 +92,8 @@ iree_c_module(
     "assignment_ops.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -100,6 +105,8 @@ iree_c_module(
     "assignment_ops_f32.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -111,6 +118,8 @@ iree_c_module(
     "assignment_ops_i64.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -122,6 +131,8 @@ iree_c_module(
     "buffer_ops.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -133,6 +144,8 @@ iree_c_module(
     "call_ops.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -144,6 +157,8 @@ iree_c_module(
     "comparison_ops.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -155,6 +170,8 @@ iree_c_module(
     "comparison_ops_f32.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -166,6 +183,8 @@ iree_c_module(
     "comparison_ops_i64.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -177,6 +196,8 @@ iree_c_module(
     "control_flow_ops.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -188,6 +209,8 @@ iree_c_module(
     "conversion_ops.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -199,6 +222,8 @@ iree_c_module(
     "conversion_ops_f32.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -210,6 +235,8 @@ iree_c_module(
     "conversion_ops_i64.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -221,6 +248,8 @@ iree_c_module(
     "global_ops.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -232,6 +261,8 @@ iree_c_module(
     "global_ops_f32.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -243,6 +274,8 @@ iree_c_module(
     "global_ops_i64.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -254,6 +287,8 @@ iree_c_module(
     "list_ops.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -265,6 +300,8 @@ iree_c_module(
     "list_variant_ops.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -276,6 +313,8 @@ iree_c_module(
     "ref_ops.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -287,6 +326,8 @@ iree_c_module(
     "shift_ops.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 iree_c_module(
@@ -298,6 +339,8 @@ iree_c_module(
     "shift_ops_i64.h"
   FLAGS
     "-iree-vm-ir-to-c-module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
 )
 
 endif()

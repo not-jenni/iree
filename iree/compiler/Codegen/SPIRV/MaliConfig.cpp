@@ -14,7 +14,7 @@
 
 #include "iree/compiler/Codegen/SPIRV/KernelConfig.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/IR/BuiltinOps.h"
 
 namespace mlir {
@@ -41,12 +41,16 @@ LogicalResult setMaliCodeGenConfig(const spirv::TargetEnv &targetEnv,
         return setMatmulOpConfig(op, workgroupXY, threadMNK);
       })
       .Case<linalg::Conv2DNhwcHwcfOp>([subgroupSize](auto op) {
-        return setConvOpConfig(op, subgroupSize,
-                               /*bestTilingFactor=*/16);
+        bool hasPaddedInput =
+            op.image().template getDefiningOp<tensor::PadOp>();
+        int bestTilingFactor = hasPaddedInput ? 8 : 16;
+        return setConvOpConfig(op, subgroupSize, bestTilingFactor);
       })
-      .Case<linalg::DepthwiseConv2DNhwOp>([subgroupSize](auto op) {
-        return setConvOpConfig(op, subgroupSize,
-                               /*bestTilingFactor=*/16);
+      .Case<linalg::DepthwiseConv2DNhwcHwcOp>([subgroupSize](auto op) {
+        bool hasPaddedInput =
+            op.image().template getDefiningOp<tensor::PadOp>();
+        int bestTilingFactor = hasPaddedInput ? 8 : 16;
+        return setConvOpConfig(op, subgroupSize, bestTilingFactor);
       })
       .Default([](Operation *) { return success(); });
 }

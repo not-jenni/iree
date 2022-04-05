@@ -45,17 +45,17 @@ iree_bytecode_module(
   PUBLIC
 )
 
-iree_run_binary_test(
+iree_native_test(
   NAME
     "simple_embedding_vmvx_sync_test"
-  TEST_BINARY
+  SRC
     ::simple_embedding_vmvx_sync
 )
 
 endif()
 
 if((${IREE_HAL_DRIVER_DYLIB} OR ${IREE_HAL_DRIVER_DYLIB_SYNC})
-   AND (${IREE_TARGET_BACKEND_DYLIB-LLVM-AOT} OR DEFINED IREE_HOST_BINARY_ROOT))
+   AND (${IREE_TARGET_BACKEND_DYLIB_LLVM_AOT} OR DEFINED IREE_HOST_BINARY_ROOT))
 
 iree_cc_binary(
   NAME
@@ -91,7 +91,6 @@ iree_bytecode_module(
     "-iree-mlir-to-vm-bytecode-module"
     "-iree-hal-target-backends=dylib-llvm-aot"
     "-iree-llvm-target-triple=x86_64-pc-linux-elf"
-    "-iree-llvm-link-embedded=true"
     "-iree-llvm-debug-symbols=false"
     "-iree-vm-bytecode-module-strip-source-map=true"
     "-iree-vm-emit-polyglot-zip=false"
@@ -113,7 +112,6 @@ iree_bytecode_module(
     "-iree-llvm-target-cpu=generic-rv32"
     "-iree-llvm-target-cpu-features=+m,+f"
     "-iree-llvm-target-abi=ilp32"
-    "-iree-llvm-link-embedded=true"
     "-iree-llvm-debug-symbols=false"
     "-iree-vm-bytecode-module-strip-source-map=true"
     "-iree-vm-emit-polyglot-zip=false"
@@ -135,7 +133,6 @@ iree_bytecode_module(
     "-iree-llvm-target-cpu=generic-rv64"
     "-iree-llvm-target-cpu-features=+m,+a,+f,+d,+c"
     "-iree-llvm-target-abi=lp64d"
-    "-iree-llvm-link-embedded=true"
     "-iree-llvm-debug-symbols=false"
     "-iree-vm-bytecode-module-strip-source-map=true"
     "-iree-vm-emit-polyglot-zip=false"
@@ -155,7 +152,6 @@ iree_bytecode_module(
     "-iree-hal-target-backends=dylib-llvm-aot"
     "-iree-llvm-target-triple=armv7a-pc-linux-elf"
     "-iree-llvm-target-float-abi=hard"
-    "-iree-llvm-link-embedded=true"
     "-iree-llvm-debug-symbols=false"
     "-iree-vm-bytecode-module-strip-source-map=true"
     "-iree-vm-emit-polyglot-zip=false"
@@ -174,17 +170,16 @@ iree_bytecode_module(
     "-iree-mlir-to-vm-bytecode-module"
     "-iree-hal-target-backends=dylib-llvm-aot"
     "-iree-llvm-target-triple=aarch64-pc-linux-elf"
-    "-iree-llvm-link-embedded=true"
     "-iree-llvm-debug-symbols=false"
     "-iree-vm-bytecode-module-strip-source-map=true"
     "-iree-vm-emit-polyglot-zip=false"
   PUBLIC
 )
 
-iree_run_binary_test(
+iree_native_test(
   NAME
     "simple_embedding_embedded_sync_test"
-  TEST_BINARY
+  SRC
     ::simple_embedding_embedded_sync
 )
 
@@ -211,10 +206,10 @@ iree_cc_binary(
     iree::vm::bytecode_module
 )
 
-iree_run_binary_test(
+iree_native_test(
   NAME
     "simple_embedding_dylib_test"
-  TEST_BINARY
+  SRC
     ::simple_embedding_dylib
 )
 
@@ -222,7 +217,7 @@ endif()
 
 endif()
 
-if(${IREE_HAL_DRIVER_VULKAN} AND (${IREE_TARGET_BACKEND_VULKAN-SPIRV} OR DEFINED IREE_HOST_BINARY_ROOT))
+if(${IREE_HAL_DRIVER_VULKAN} AND (${IREE_TARGET_BACKEND_VULKAN_SPIRV} OR DEFINED IREE_HOST_BINARY_ROOT))
 
 iree_cc_binary(
   NAME
@@ -255,55 +250,11 @@ iree_bytecode_module(
   PUBLIC
 )
 
-iree_run_binary_test(
+iree_native_test(
   NAME
     "simple_embedding_vulkan_test"
-  TEST_BINARY
-    ::simple_embedding_vulkan
-)
-
-endif()
-
-if(${IREE_HAL_DRIVER_CUDA} AND (${IREE_TARGET_BACKEND_CUDA} OR DEFINED IREE_HOST_BINARY_ROOT))
-
-iree_cc_binary(
-  NAME
-    simple_embedding_cuda
-  SRCS
-    "device_cuda.c"
-    "simple_embedding.c"
-  DEPS
-    ::simple_embedding_test_bytecode_module_cuda_c
-    iree::base
-    iree::hal
-    iree::hal::cuda::registration
-    iree::modules::hal
-    iree::vm
-    iree::vm::bytecode_module
-)
-
-iree_bytecode_module(
-  NAME
-    simple_embedding_test_bytecode_module_cuda
   SRC
-    "simple_embedding_test.mlir"
-  C_IDENTIFIER
-    "iree_samples_simple_embedding_test_module_cuda"
-  FLAGS
-    "-iree-input-type=mhlo"
-    "-iree-mlir-to-vm-bytecode-module"
-    "-iree-hal-target-backends=cuda"
-    "-iree-llvm-debug-symbols=false"
-  PUBLIC
-)
-
-iree_run_binary_test(
-  NAME
-    "simple_embedding_cuda_test"
-  LABELS
-    "driver=cuda"
-  TEST_BINARY
-    ::simple_embedding_cuda
+    ::simple_embedding_vulkan
 )
 
 endif()

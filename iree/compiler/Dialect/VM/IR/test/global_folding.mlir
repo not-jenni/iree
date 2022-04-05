@@ -1,13 +1,13 @@
 // Tests folding and canonicalization of global ops.
 
-// RUN: iree-opt -split-input-file -pass-pipeline='vm.module(canonicalize)' %s | IreeFileCheck %s
+// RUN: iree-opt -split-input-file -pass-pipeline="vm.module(canonicalize)" %s | FileCheck %s
 
 // CHECK-LABEL: @global_i32_folds
 vm.module @global_i32_folds {
   // CHECK: vm.global.i32 public mutable @g0 = 123 : i32
   vm.global.i32 mutable @g0 : i32
   vm.initializer {
-    %c123 = vm.const.i32 123 : i32
+    %c123 = vm.const.i32 123
     vm.global.store.i32 %c123, @g0 : i32
     vm.return
   }
@@ -20,7 +20,7 @@ vm.module @global_i32_folds {
   // CHECK: vm.global.i32 public mutable @g3 : i32
   vm.global.i32 mutable @g3 : i32
   vm.initializer {
-    %c0 = vm.const.i32 0 : i32
+    %c0 = vm.const.i32 0
     vm.global.store.i32 %c0, @g3 : i32
     vm.return
   }
@@ -46,7 +46,7 @@ vm.module @global_load_i32_folds {
   vm.global.i32 @g0 = 123 : i32
   // CHECK-LABEL: @inline_const_value
   vm.func @inline_const_value() -> i32 {
-    // CHECK-NEXT: %c123 = vm.const.i32 123 : i32
+    // CHECK-NEXT: %c123 = vm.const.i32 123
     // CHECK-NEXT: vm.return %c123 : i32
     %g0 = vm.global.load.i32 @g0 : i32
     vm.return %g0 : i32

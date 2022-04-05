@@ -18,8 +18,10 @@ iree_cc_library(
   SRCS
     "ConvertTensorToFlow.cpp"
   DEPS
+    MLIRFunc
     MLIRIR
-    MLIRStandard
+    MLIRLinalg
+    MLIRMemRefTransforms
     MLIRTensor
     iree::compiler::Dialect::Flow::IR
   PUBLIC

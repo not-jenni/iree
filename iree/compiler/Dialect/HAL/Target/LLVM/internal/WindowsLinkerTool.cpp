@@ -21,13 +21,14 @@ class WindowsLinkerTool : public LinkerTool {
  public:
   using LinkerTool::LinkerTool;
 
-  std::string getToolPath() const override {
+  std::string getSystemToolPath() const override {
     // First check for setting the linker explicitly.
-    auto toolPath = LinkerTool::getToolPath();
+    auto toolPath = LinkerTool::getSystemToolPath();
     if (!toolPath.empty()) return toolPath;
 
-    // No explicit linker specified, search the environment for common tools.
-    toolPath = findToolInEnvironment({"lld-link"});
+    // No explicit linker specified, search the executable directory (i.e. our
+    // own build or install directories) for common tools.
+    toolPath = findToolFromExecutableDir({"lld-link"});
     if (!toolPath.empty()) return toolPath;
 
     llvm::errs() << "No Windows linker tool specified or discovered\n";
@@ -73,7 +74,7 @@ class WindowsLinkerTool : public LinkerTool {
       func->setCallingConv(llvm::CallingConv::X86_StdCall);
       func->setDLLStorageClass(
           llvm::GlobalValue::DLLStorageClassTypes::DLLExportStorageClass);
-      func->addFnAttr(llvm::Attribute::UWTable);
+      func->setUWTableKind(llvm::UWTableKind::Default);
     }
 
     return success();
@@ -101,7 +102,7 @@ class WindowsLinkerTool : public LinkerTool {
     llvm::sys::path::replace_extension(pdbPath, "pdb");
 
     SmallVector<std::string, 8> flags = {
-        getToolPath(),
+        getSystemToolPath(),
 
         // Hide the linker banner message printed each time.
         "/nologo",
@@ -113,7 +114,7 @@ class WindowsLinkerTool : public LinkerTool {
         // Builds a DLL and exports functions with the dllexport storage class.
         "/dll",
 
-        // Forces a fixed timestamp to ensure files are reproducable across
+        // Forces a fixed timestamp to ensure files are reproducible across
         // builds. Undocumented but accepted by both link and lld-link.
         // https://blog.conan.io/2019/09/02/Deterministic-builds-with-C-C++.html
         "/Brepro",

@@ -28,12 +28,8 @@ typedef struct iree_hal_local_executable_t {
   // of memory required by the function.
   const iree_hal_executable_dispatch_attrs_v0_t* dispatch_attrs;
 
-  // Thunk function for calling imports. All calls must be made through this.
-  iree_hal_executable_import_thunk_v0_t import_thunk;
-  // Optional imported functions available for use within the executable.
-  // Contains one entry per imported function. If an import was marked as weak
-  // then the corresponding entry may be NULL.
-  const iree_hal_executable_import_v0_t* imports;
+  // Execution environment.
+  iree_hal_executable_environment_v0_t environment;
 } iree_hal_local_executable_t;
 
 typedef struct iree_hal_local_executable_vtable_t {
@@ -42,7 +38,7 @@ typedef struct iree_hal_local_executable_vtable_t {
   iree_status_t(IREE_API_PTR* issue_call)(
       iree_hal_local_executable_t* executable, iree_host_size_t ordinal,
       const iree_hal_executable_dispatch_state_v0_t* dispatch_state,
-      const iree_hal_vec3_t* workgroup_id, iree_byte_span_t local_memory);
+      const iree_hal_executable_workgroup_state_v0_t* workgroup_state);
 } iree_hal_local_executable_vtable_t;
 
 // Initializes the local executable base type.
@@ -66,12 +62,12 @@ iree_hal_local_executable_t* iree_hal_local_executable_cast(
 iree_status_t iree_hal_local_executable_issue_call(
     iree_hal_local_executable_t* executable, iree_host_size_t ordinal,
     const iree_hal_executable_dispatch_state_v0_t* dispatch_state,
-    const iree_hal_vec3_t* workgroup_id, iree_byte_span_t local_memory);
+    const iree_hal_executable_workgroup_state_v0_t* workgroup_state);
 
 iree_status_t iree_hal_local_executable_issue_dispatch_inline(
     iree_hal_local_executable_t* executable, iree_host_size_t ordinal,
     const iree_hal_executable_dispatch_state_v0_t* dispatch_state,
-    iree_byte_span_t local_memory);
+    uint32_t processor_id, iree_byte_span_t local_memory);
 
 #ifdef __cplusplus
 }  // extern "C"

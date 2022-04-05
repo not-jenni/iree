@@ -9,7 +9,7 @@
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/HAL/Transforms/Passes.h"
 #include "llvm/ADT/StringSet.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -42,8 +42,10 @@ class MemoizeDeviceQueriesPass
     // This lets us easily replace all usages of a match with a single variable.
     SmallVector<Attribute, 4> deviceQueryKeys;
     DenseMap<Attribute, std::vector<IREE::HAL::DeviceQueryOp>> deviceQueryOps;
-    for (auto funcOp : moduleOp.getOps<FuncOp>()) {
-      funcOp.walk([&](IREE::HAL::DeviceQueryOp queryOp) {
+    for (Operation &funcLikeOp : moduleOp.getOps()) {
+      auto funcOp = llvm::dyn_cast<FunctionOpInterface>(funcLikeOp);
+      if (!funcOp) continue;
+      funcLikeOp.walk([&](IREE::HAL::DeviceQueryOp queryOp) {
         auto fullKey = ArrayAttr::get(
             moduleOp.getContext(),
             {

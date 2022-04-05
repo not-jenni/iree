@@ -17,7 +17,7 @@
 #include "iree/compiler/Dialect/VM/Conversion/TypeConverter.h"
 #include "iree/compiler/Dialect/VM/Conversion/UtilToVM/ConvertUtilToVM.h"
 #include "iree/compiler/Dialect/VM/IR/VMOps.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -28,39 +28,41 @@
 namespace mlir {
 namespace iree_compiler {
 
-extern void populateHALAllocatorToVMPatterns(
-    MLIRContext *context, SymbolTable &importSymbols,
-    TypeConverter &typeConverter, OwningRewritePatternList &patterns);
+extern void populateHALAllocatorToVMPatterns(MLIRContext *context,
+                                             SymbolTable &importSymbols,
+                                             TypeConverter &typeConverter,
+                                             RewritePatternSet &patterns);
 extern void populateHALBufferToVMPatterns(MLIRContext *context,
                                           SymbolTable &importSymbols,
                                           TypeConverter &typeConverter,
-                                          OwningRewritePatternList &patterns);
-extern void populateHALBufferViewToVMPatterns(
-    MLIRContext *context, SymbolTable &importSymbols,
-    TypeConverter &typeConverter, OwningRewritePatternList &patterns);
-extern void populateHALCommandBufferToVMPatterns(
-    MLIRContext *context, SymbolTable &importSymbols,
-    TypeConverter &typeConverter, OwningRewritePatternList &patterns);
-extern void populateHALConstantToVMPatterns(MLIRContext *context,
-                                            SymbolTable &importSymbols,
-                                            TypeConverter &typeConverter,
-                                            OwningRewritePatternList &patterns);
+                                          RewritePatternSet &patterns);
+extern void populateHALBufferViewToVMPatterns(MLIRContext *context,
+                                              SymbolTable &importSymbols,
+                                              TypeConverter &typeConverter,
+                                              RewritePatternSet &patterns);
+extern void populateHALCommandBufferToVMPatterns(MLIRContext *context,
+                                                 SymbolTable &importSymbols,
+                                                 TypeConverter &typeConverter,
+                                                 RewritePatternSet &patterns);
 extern void populateHALDeviceToVMPatterns(MLIRContext *context,
                                           SymbolTable &importSymbols,
                                           TypeConverter &typeConverter,
-                                          OwningRewritePatternList &patterns);
-extern void populateHALExecutableToVMPatterns(
-    MLIRContext *context, SymbolTable &importSymbols,
-    TypeConverter &typeConverter, OwningRewritePatternList &patterns);
-extern void populateHALExperimentalToVMPatterns(
-    MLIRContext *context, SymbolTable &importSymbols,
-    TypeConverter &typeConverter, OwningRewritePatternList &patterns);
-extern void populateHALSemaphoreToVMPatterns(
-    MLIRContext *context, SymbolTable &importSymbols,
-    TypeConverter &typeConverter, OwningRewritePatternList &patterns);
+                                          RewritePatternSet &patterns);
+extern void populateHALExecutableToVMPatterns(MLIRContext *context,
+                                              SymbolTable &importSymbols,
+                                              TypeConverter &typeConverter,
+                                              RewritePatternSet &patterns);
+extern void populateHALExperimentalToVMPatterns(MLIRContext *context,
+                                                SymbolTable &importSymbols,
+                                                TypeConverter &typeConverter,
+                                                RewritePatternSet &patterns);
+extern void populateHALSemaphoreToVMPatterns(MLIRContext *context,
+                                             SymbolTable &importSymbols,
+                                             TypeConverter &typeConverter,
+                                             RewritePatternSet &patterns);
 
 void populateHALToVMPatterns(MLIRContext *context, SymbolTable &importSymbols,
-                             OwningRewritePatternList &patterns,
+                             RewritePatternSet &patterns,
                              TypeConverter &typeConverter) {
   populateHALAllocatorToVMPatterns(context, importSymbols, typeConverter,
                                    patterns);
@@ -70,8 +72,6 @@ void populateHALToVMPatterns(MLIRContext *context, SymbolTable &importSymbols,
                                     patterns);
   populateHALCommandBufferToVMPatterns(context, importSymbols, typeConverter,
                                        patterns);
-  populateHALConstantToVMPatterns(context, importSymbols, typeConverter,
-                                  patterns);
   populateHALDeviceToVMPatterns(context, importSymbols, typeConverter,
                                 patterns);
   populateHALExecutableToVMPatterns(context, importSymbols, typeConverter,
@@ -116,7 +116,7 @@ class ConvertHALToVMPass
                                        iree_hal_imports_create()->size),
                              innerModuleOp);
 
-    OwningRewritePatternList conversionPatterns(&getContext());
+    RewritePatternSet conversionPatterns(&getContext());
     populateStandardToVMPatterns(context, typeConverter, conversionPatterns);
     populateUtilToVMPatterns(context, conversionTarget, typeConverter,
                              conversionPatterns);
@@ -144,7 +144,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertHALToVMPass(
 }
 
 static PassRegistration<ConvertHALToVMPass> pass([] {
-  auto options = IREE::VM::getTargetOptionsFromFlags();
+  auto options = IREE::VM::TargetOptions::FromFlags::get();
   return std::make_unique<ConvertHALToVMPass>(options);
 });
 

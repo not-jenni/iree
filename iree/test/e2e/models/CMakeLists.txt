@@ -21,8 +21,9 @@ iree_lit_test_suite(
     "mnist_fake_weights.mlir"
     "resnet50_fake_weights.mlir"
     "unidirectional_lstm.mlir"
-  DATA
-    iree::tools::IreeFileCheck
+  TOOLS
+    ${IREE_LLD_TARGET}
+    FileCheck
     iree::tools::iree-run-mlir
   LABELS
     "hostonly"

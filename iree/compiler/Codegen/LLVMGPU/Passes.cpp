@@ -6,13 +6,16 @@
 
 #include "iree/compiler/Codegen/Passes.h"
 
+#include "iree-dialects/Dialect/LinalgExt/Passes/Passes.h"
 #include "iree/compiler/Codegen/PassDetail.h"
-#include "iree/compiler/Dialect/LinalgExt/Transforms/Passes.h"
-#include "iree/compiler/Dialect/Shape/Transforms/Passes.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
-#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
+#include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Conversion/VectorToGPU/VectorToGPU.h"
+#include "mlir/Dialect/Arithmetic/Transforms/Passes.h"
+#include "mlir/Dialect/Func/Transforms/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
-#include "mlir/Dialect/StandardOps/Transforms/Passes.h"
+#include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassOptions.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -20,6 +23,11 @@
 
 namespace mlir {
 namespace iree_compiler {
+
+// TODO(thomasraoux): Add a new optional attribute to translate info.
+static llvm::cl::opt<unsigned> pipelineDepth("iree-codegen-cuda-pipeline-depth",
+                                             llvm::cl::desc("Pipeline depth"),
+                                             llvm::cl::init(4));
 
 static Value gpuAllocationFunction(OpBuilder &builder, Location loc,
                                    ArrayRef<int64_t> staticShape,
@@ -29,65 +37,113 @@ static Value gpuAllocationFunction(OpBuilder &builder, Location loc,
   return builder.create<memref::AllocOp>(loc, allocType, dynamicSizes);
 }
 
-void addGPUVectorizationPassPipeline(OpPassManager &pm) {
-  //===--------------------------------------------------------------------===//
-  // Initial clean up.
-  //===--------------------------------------------------------------------===//
+static void tileAndBufferize(OpPassManager &pm) {
+  pm.addNestedPass<func::FuncOp>(createInsertDistributionInfoPass());
+  pm.addNestedPass<func::FuncOp>(createTileAndDistributeToWorkgroupsPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
+
+  addLinalgBufferizePasses(pm, gpuAllocationFunction);
+
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+}
+
+//===---------------------------------------------------------------------===//
+// Codegen pipelines.
+//===---------------------------------------------------------------------===//
+
+void addGPUVectorizationPassPipeline(OpPassManager &pm) {
+  tileAndBufferize(pm);
 
   // Distribute linalg onto threads within the workgroup.
-  pm.addNestedPass<FuncOp>(createLLVMGPUTileAndDistributeToThreads());
+  pm.addNestedPass<func::FuncOp>(createLLVMGPUTileAndDistribute());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
 
-  pm.addNestedPass<FuncOp>(createLLVMGPURemoveSingleIterationLoopPass());
+  pm.addNestedPass<func::FuncOp>(createRemoveSingleIterationLoopPass());
 
   // Linalg -> vector
-  pm.addNestedPass<FuncOp>(createLLVMGPUVectorizationPass());
-  pm.addNestedPass<FuncOp>(createCanonicalizerPass());
-  pm.addNestedPass<FuncOp>(createCSEPass());
-  pm.addNestedPass<FuncOp>(createOptimizeVectorTransferPass());
+  pm.addNestedPass<func::FuncOp>(createLLVMGPUVectorizationPass());
+  pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  pm.addNestedPass<func::FuncOp>(createCSEPass());
+  pm.addNestedPass<func::FuncOp>(createOptimizeVectorTransferPass());
 }
 
 void addGPUMatmulSimtPassPipeline(OpPassManager &pm) {
-  //===--------------------------------------------------------------------===//
-  // Initial clean up.
-  //===--------------------------------------------------------------------===//
+  pm.addNestedPass<func::FuncOp>(createInsertDistributionInfoPass());
+  pm.addNestedPass<func::FuncOp>(createTileAndDistributeToWorkgroupsPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+
+  addLinalgBufferizePasses(pm, gpuAllocationFunction);
+
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
 
   // Distribute linalg onto threads within the workgroup.
-  pm.addNestedPass<FuncOp>(createLLVMGPUTileAndDistributeToThreads());
-  pm.addNestedPass<FuncOp>(createLLVMGPUDistributeSharedMemoryCopy());
+  pm.addNestedPass<func::FuncOp>(createLLVMGPUTileAndDistribute());
+  pm.addNestedPass<func::FuncOp>(createMemrefCopyToLinalgPass());
+  pm.addNestedPass<func::FuncOp>(createLLVMGPUDistributeSharedMemoryCopy());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
 
-  pm.addNestedPass<FuncOp>(createLLVMGPURemoveSingleIterationLoopPass());
+  pm.addNestedPass<func::FuncOp>(
+      createLLVMGPUReduceSharedMemoryBankConflicts());
+  pm.addNestedPass<func::FuncOp>(createRemoveSingleIterationLoopPass());
 
   // Linalg -> vector
-  pm.addNestedPass<FuncOp>(createLLVMGPUVectorizationPass());
-  pm.addNestedPass<FuncOp>(createCanonicalizerPass());
-  pm.addNestedPass<FuncOp>(createCSEPass());
-  pm.addNestedPass<FuncOp>(createOptimizeVectorTransferPass());
+  pm.addNestedPass<func::FuncOp>(createLLVMGPUVectorizationPass());
+  pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  pm.addNestedPass<func::FuncOp>(createCSEPass());
+  pm.addNestedPass<func::FuncOp>(createOptimizeVectorTransferPass());
 
   // Pipeline memory operations.
-  pm.addNestedPass<FuncOp>(createLLVMGPUPipeliningPass());
+  pm.addNestedPass<func::FuncOp>(createLLVMGPUPipeliningPass());
+}
+
+void addGPUMatmulTensorCorePassPipeline(OpPassManager &pm) {
+  tileAndBufferize(pm);
+
+  // Distribute linalg onto warps within the workgroup.
+  pm.addNestedPass<func::FuncOp>(
+      createLLVMGPUTileAndDistribute(/*distributeToWarp=*/true));
+  if (pipelineDepth > 1)
+    pm.addNestedPass<func::FuncOp>(createLLVMGPUMultiBuffering(pipelineDepth));
+  pm.addNestedPass<func::FuncOp>(createMemrefCopyToLinalgPass());
+  pm.addNestedPass<func::FuncOp>(createLLVMGPUDistributeSharedMemoryCopy());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+
+  pm.addNestedPass<func::FuncOp>(
+      createLLVMGPUReduceSharedMemoryBankConflicts());
+  pm.addNestedPass<func::FuncOp>(createRemoveSingleIterationLoopPass());
+
+  // Linalg -> vector
+  pm.addNestedPass<func::FuncOp>(createLLVMGPUTensorCoreVectorizationPass());
+  pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  pm.addNestedPass<func::FuncOp>(createCSEPass());
+  pm.addNestedPass<func::FuncOp>(createOptimizeVectorTransferPass());
+
+  // Vector -> MMA ops
+  pm.addNestedPass<func::FuncOp>(memref::createFoldSubViewOpsPass());
+  pm.addNestedPass<func::FuncOp>(createLLVMGPUVectorToGPU());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+
+  // Pipeline memory operations.
+  pm.addNestedPass<func::FuncOp>(createLLVMGPUPipeliningPass(pipelineDepth));
 }
 
 void addGPUSimpleDistributePassPipeline(OpPassManager &pm) {
-  //===--------------------------------------------------------------------===//
-  // Initial clean up.
-  //===--------------------------------------------------------------------===//
-  pm.addPass(createCanonicalizerPass());
-  pm.addPass(createCSEPass());
+  tileAndBufferize(pm);
 
   // Distribute linalg onto threads within the workgroup.
-  pm.addNestedPass<FuncOp>(createLLVMGPUTileAndDistributeToThreads());
+  pm.addNestedPass<func::FuncOp>(createLLVMGPUTileAndDistribute());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
 
-  pm.addNestedPass<FuncOp>(createLLVMGPURemoveSingleIterationLoopPass());
+  pm.addNestedPass<func::FuncOp>(createRemoveSingleIterationLoopPass());
 }
 
 static void addLowerToLLVMGPUPasses(OpPassManager &pm, bool useROCM) {
@@ -96,25 +152,30 @@ static void addLowerToLLVMGPUPasses(OpPassManager &pm, bool useROCM) {
   pm.addPass(createCSEPass());
 
   // LinalgExt -> SCF
-  pm.addNestedPass<FuncOp>(linalg_ext::createLinalgExtToLoopsPass());
+  pm.addNestedPass<func::FuncOp>(IREE::LinalgExt::createLinalgExtToLoopsPass());
 
   // Linalg -> SCF
-  pm.addNestedPass<FuncOp>(createConvertLinalgToLoopsPass());
-  pm.addNestedPass<FuncOp>(createCanonicalizerPass());
-  pm.addNestedPass<FuncOp>(createCSEPass());
+  pm.addNestedPass<func::FuncOp>(createMemrefCopyToLinalgPass());
+  pm.addNestedPass<func::FuncOp>(createConvertLinalgToLoopsPass());
+  pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  pm.addNestedPass<func::FuncOp>(createCSEPass());
 
   // Handled tensor-type constants.
-  pm.addPass(createTensorConstantBufferizePass());
+  pm.addPass(arith::createConstantBufferizePass());
   pm.addPass(createFoldTensorExtractOpPass());
 
-  pm.addNestedPass<FuncOp>(createLLVMGPUVectorLoweringPass());
+  pm.addNestedPass<func::FuncOp>(createLLVMGPUVectorLoweringPass());
 
   // SCF -> STD
-  pm.addNestedPass<FuncOp>(createLowerToCFGPass());
-  pm.addNestedPass<FuncOp>(createCanonicalizerPass());
-  pm.addNestedPass<FuncOp>(createCSEPass());
+  pm.addNestedPass<func::FuncOp>(createConvertSCFToCFPass());
+  pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  pm.addNestedPass<func::FuncOp>(createCSEPass());
 
-  pm.addNestedPass<FuncOp>(createStdExpandOpsPass());
+  // math dialect elementry functions -> polynomial form.
+  pm.addNestedPass<func::FuncOp>(createPolynomialApproximationPass());
+
+  pm.addNestedPass<func::FuncOp>(arith::createArithmeticExpandOpsPass());
+  pm.addNestedPass<func::FuncOp>(memref::createExpandOpsPass());
   pm.addPass(createLowerAffinePass());
 
   // Strip out the debug info for the kernel as CUDA driver doesn't diggest PTX
@@ -130,8 +191,8 @@ static void addLowerToLLVMGPUPasses(OpPassManager &pm, bool useROCM) {
 }
 
 void buildLLVMGPUTransformPassPipeline(OpPassManager &pm, bool useROCM) {
-  OpPassManager &bufferizePassPM = pm.nest<ModuleOp>();
-  addLinalgBufferizePasses(bufferizePassPM, gpuAllocationFunction);
+  pm.nest<ModuleOp>().nest<func::FuncOp>().addPass(createTypePropagationPass());
+  pm.nest<ModuleOp>().addPass(createBufferizeCopyOnlyDispatchesPass());
   pm.addPass(createLLVMGPULowerExecutableTargetPass());
   OpPassManager &nestedModulePM = pm.nest<ModuleOp>();
   //===--------------------------------------------------------------------===//

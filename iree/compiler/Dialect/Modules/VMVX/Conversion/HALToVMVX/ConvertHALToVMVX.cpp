@@ -12,8 +12,8 @@
 #include "iree/compiler/Dialect/Modules/VMVX/IR/VMVXTypes.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "iree/compiler/Dialect/Util/IR/UtilTypes.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -46,16 +46,16 @@ enum EntryArgOrdinals {
 /// workgroup ID. The runtime will provide these values during invocation.
 ///
 /// Source:
-///   func @entry()
+///   func.func @entry()
 ///
 /// Target:
-///   func @entry(
+///   func.func @entry(
 ///       %local_memory: !vmvx.buffer,
 ///       %constants: !vmvx.buffer,
 ///       %bindings: !util.list<!vmvx.buffer>,
-///       %workgroup_x: index,
-///       %workgroup_y: index,
-///       %workgroup_z: index,
+///       %workgroup_id_x: index,
+///       %workgroup_id_y: index,
+///       %workgroup_id_z: index,
 ///       %workgroup_size_x: index,
 ///       %workgroup_size_y: index,
 ///       %workgroup_size_z: index,
@@ -63,9 +63,9 @@ enum EntryArgOrdinals {
 ///       %workgroup_count_y: index,
 ///       %workgroup_count_z: index
 ///   )
-LogicalResult updateHALToVMVXEntryFuncOp(FuncOp funcOp,
+LogicalResult updateHALToVMVXEntryFuncOp(func::FuncOp funcOp,
                                          TypeConverter &typeConverter) {
-  auto originalType = funcOp.getType();
+  auto originalType = funcOp.getFunctionType();
   if (originalType.getNumInputs() != 0 || originalType.getNumResults() != 0) {
     return funcOp.emitError() << "exported functions must have no I/O";
   }
@@ -81,9 +81,9 @@ LogicalResult updateHALToVMVXEntryFuncOp(FuncOp funcOp,
                                        /*local_memory=*/memRefI8Type,
                                        /*constants=*/memRefI32Type,
                                        /*bindings=*/bindingsType,
-                                       /*workgroup_x=*/indexType,
-                                       /*workgroup_y=*/indexType,
-                                       /*workgroup_z=*/indexType,
+                                       /*workgroup_id_x=*/indexType,
+                                       /*workgroup_id_y=*/indexType,
+                                       /*workgroup_id_z=*/indexType,
                                        /*workgroup_size_x=*/indexType,
                                        /*workgroup_size_y=*/indexType,
                                        /*workgroup_size_z=*/indexType,
@@ -94,7 +94,8 @@ LogicalResult updateHALToVMVXEntryFuncOp(FuncOp funcOp,
                                    {});
 
   funcOp.setType(newType);
-  funcOp.front().addArguments(newType.getInputs());
+  SmallVector<Location> locs(newType.getNumInputs(), funcOp.getLoc());
+  funcOp.front().addArguments(newType.getInputs(), locs);
 
   return success();
 }
@@ -109,7 +110,7 @@ class ConvertHALInterfaceWorkgroupIDOp
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
-      IREE::HAL::InterfaceWorkgroupIDOp op, ArrayRef<Value> operands,
+      IREE::HAL::InterfaceWorkgroupIDOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     uint64_t dim = op.dimension().getZExtValue();
     if (dim >= 3) {
@@ -117,7 +118,7 @@ class ConvertHALInterfaceWorkgroupIDOp
     }
 
     // Get the argument to the function corresponding to the workgroup dim.
-    auto workgroupDim = op->getParentOfType<mlir::FuncOp>().getArgument(
+    auto workgroupDim = op->getParentOfType<mlir::func::FuncOp>().getArgument(
         kEntryArgWorkgroupX + dim);
     rewriter.replaceOp(op, workgroupDim);
     return success();
@@ -132,7 +133,7 @@ class ConvertHALInterfaceWorkgroupSizeOp
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
-      IREE::HAL::InterfaceWorkgroupSizeOp op, ArrayRef<Value> operands,
+      IREE::HAL::InterfaceWorkgroupSizeOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     uint64_t dim = op.dimension().getZExtValue();
     if (dim >= 3) {
@@ -140,7 +141,7 @@ class ConvertHALInterfaceWorkgroupSizeOp
     }
 
     // Get the argument to the function corresponding to the workgroup dim.
-    auto workgroupDim = op->getParentOfType<mlir::FuncOp>().getArgument(
+    auto workgroupDim = op->getParentOfType<mlir::func::FuncOp>().getArgument(
         kEntryArgWorkgroupSizeX + dim);
     rewriter.replaceOp(op, workgroupDim);
     return success();
@@ -155,7 +156,7 @@ class ConvertHALInterfaceWorkgroupCountOp
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
-      IREE::HAL::InterfaceWorkgroupCountOp op, ArrayRef<Value> operands,
+      IREE::HAL::InterfaceWorkgroupCountOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     uint64_t dim = op.dimension().getZExtValue();
     if (dim >= 3) {
@@ -163,37 +164,37 @@ class ConvertHALInterfaceWorkgroupCountOp
     }
 
     // Get the argument to the function corresponding to the workgroup dim.
-    auto workgroupDim = op->getParentOfType<mlir::FuncOp>().getArgument(
+    auto workgroupDim = op->getParentOfType<mlir::func::FuncOp>().getArgument(
         kEntryArgWorkgroupCountX + dim);
     rewriter.replaceOp(op, workgroupDim);
     return success();
   }
 };
 
-/// Rewrites hal.interface.load.constant to ops loading from the ABI structs.
-class ConvertHALInterfaceLoadConstantOp
-    : public OpConversionPattern<IREE::HAL::InterfaceLoadConstantOp> {
+/// Rewrites hal.interface.constant.load to ops loading from the ABI structs.
+class ConvertHALInterfaceConstantLoadOp
+    : public OpConversionPattern<IREE::HAL::InterfaceConstantLoadOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
-      IREE::HAL::InterfaceLoadConstantOp op, ArrayRef<Value> operands,
+      IREE::HAL::InterfaceConstantLoadOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     // Find the vmvx.interface argument to the function.
-    auto constantsArg =
-        op->getParentOfType<mlir::FuncOp>().getArgument(kEntryArgConstants);
+    auto constantsArg = op->getParentOfType<mlir::func::FuncOp>().getArgument(
+        kEntryArgConstants);
     assert(constantsArg && "entry point not conforming to requirements");
     auto constantType =
         constantsArg.getType().cast<MemRefType>().getElementType();
 
     auto resultType = getTypeConverter()->convertType(op.result().getType());
 
-    auto constantOrdinal = rewriter.createOrFold<arith::ConstantIndexOp>(
-        op.getLoc(), op.offset().getZExtValue());
+    auto constantIndex = rewriter.createOrFold<arith::ConstantIndexOp>(
+        op.getLoc(), op.index().getZExtValue());
     auto loadedValue = rewriter.createOrFold<memref::LoadOp>(
-        op.getLoc(), constantType, constantsArg, ValueRange{constantOrdinal});
-    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, loadedValue,
-                                                    resultType);
+        op.getLoc(), constantType, constantsArg, ValueRange{constantIndex});
+    rewriter.replaceOpWithNewOp<mlir::UnrealizedConversionCastOp>(
+        op, resultType, loadedValue);
     return success();
   }
 };
@@ -205,56 +206,53 @@ class ConvertHALInterfaceBindingSubspanOp
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
-      IREE::HAL::InterfaceBindingSubspanOp op, ArrayRef<Value> operands,
+      IREE::HAL::InterfaceBindingSubspanOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    // NOTE: we expect FoldSubViewOps to have run and zeroed out the offset.
-    APInt byteOffset;
-    if (!matchPattern(op.byte_offset(), m_ConstantInt(&byteOffset))) {
-      return op.emitOpError()
-             << "FoldSubViewOps must have ran prior to conversion";
-    }
-
     // Find the vmvx.interface argument to the function.
-    auto bindingsArg =
-        op->getParentOfType<mlir::FuncOp>().getArgument(kEntryArgBindings);
+    auto bindingsArg = op->getParentOfType<mlir::func::FuncOp>().getArgument(
+        kEntryArgBindings);
     assert(bindingsArg && bindingsArg.getType().isa<IREE::Util::ListType>() &&
            "entry point not conforming to requirements");
 
-    // Lookup the source interface binding.
-    auto interfaceBindingOp = op.queryBindingOp();
-
     // TODO(benvanik): compact the indices - the bindings we have on the ABI
     // interface are dense.
-    if (interfaceBindingOp.set().getZExtValue() != 0) {
+    if (op.set().getZExtValue() != 0) {
       return op.emitOpError() << "sparse binding sets not yet implemented";
     }
 
     auto bindingType =
         bindingsArg.getType().cast<IREE::Util::ListType>().getElementType();
-    auto getOp = rewriter.create<IREE::Util::ListGetOp>(
-        op.getLoc(), bindingType, bindingsArg,
-        rewriter.createOrFold<arith::ConstantIndexOp>(
-            op.getLoc(), interfaceBindingOp.binding().getZExtValue()));
+    auto memrefValue = rewriter
+                           .create<IREE::Util::ListGetOp>(
+                               op.getLoc(), bindingType, bindingsArg,
+                               rewriter.createOrFold<arith::ConstantIndexOp>(
+                                   op.getLoc(), op.binding().getZExtValue()))
+                           .result();
+    if (op.byte_offset() && !matchPattern(op.byte_offset(), m_Zero())) {
+      auto memrefType = op.result().getType().cast<MemRefType>();
+      Value elementCount;
+      if (memrefType.isDynamicDim(0)) {
+        elementCount = op.dynamic_dims().front();
+      } else {
+        elementCount = rewriter.createOrFold<arith::ConstantIndexOp>(
+            op.getLoc(), memrefType.getDimSize(0));
+      }
+      auto byteLength = rewriter.createOrFold<arith::MulIOp>(
+          op.getLoc(),
+          rewriter.createOrFold<arith::ConstantIndexOp>(
+              op.getLoc(), memrefType.getElementTypeBitWidth()),
+          elementCount);
+      memrefValue = rewriter.createOrFold<memref::SubViewOp>(
+          op.getLoc(), memrefValue, ArrayRef<OpFoldResult>{op.byte_offset()},
+          ArrayRef<OpFoldResult>{byteLength},
+          ArrayRef<OpFoldResult>{rewriter.getIndexAttr(1)});
+    }
     rewriter.replaceOpWithNewOp<UnrealizedConversionCastOp>(
         op,
         getTypeConverter()
             ->convertType(op.result().getType())
             .cast<MemRefType>(),
-        getOp.result());
-    return success();
-  }
-};
-
-/// Removes the hal.interface from the IR - it's not used after conversion.
-class RemoveHALInterfaceOpPattern
-    : public OpConversionPattern<IREE::HAL::InterfaceOp> {
- public:
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(
-      IREE::HAL::InterfaceOp op, ArrayRef<Value> operands,
-      ConversionPatternRewriter &rewriter) const override {
-    rewriter.eraseOp(op);
+        memrefValue);
     return success();
   }
 };
@@ -262,14 +260,13 @@ class RemoveHALInterfaceOpPattern
 }  // namespace
 
 void populateHALToVMVXPatterns(MLIRContext *context,
-                               OwningRewritePatternList &patterns,
+                               RewritePatternSet &patterns,
                                TypeConverter &typeConverter) {
   patterns.insert<ConvertHALInterfaceWorkgroupIDOp>(typeConverter, context);
   patterns.insert<ConvertHALInterfaceWorkgroupSizeOp>(typeConverter, context);
   patterns.insert<ConvertHALInterfaceWorkgroupCountOp>(typeConverter, context);
-  patterns.insert<ConvertHALInterfaceLoadConstantOp>(typeConverter, context);
+  patterns.insert<ConvertHALInterfaceConstantLoadOp>(typeConverter, context);
   patterns.insert<ConvertHALInterfaceBindingSubspanOp>(typeConverter, context);
-  patterns.insert<RemoveHALInterfaceOpPattern>(typeConverter, context);
 }
 
 }  // namespace iree_compiler

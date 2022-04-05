@@ -44,7 +44,7 @@ enum ImportType {
 
 }  // namespace
 
-static OwningModuleRef importSavedModelV2(
+static OwningOpRef<mlir::ModuleOp> importSavedModelV2(
     MLIRContext &context, const std::string &inputPath,
     const std::string &savedModelExportedNames) {
   tensorflow::SavedModelV2Bundle bundle;
@@ -76,7 +76,7 @@ static OwningModuleRef importSavedModelV2(
   return loadedModule.ConsumeValueOrDie();
 }
 
-static OwningModuleRef importSavedModelV1(
+static OwningOpRef<mlir::ModuleOp> importSavedModelV1(
     MLIRContext &context, const std::string &inputPath,
     const std::string &savedModelExportedNames,
     const std::string &savedModelTags) {
@@ -182,7 +182,7 @@ int main(int argc, char **argv) {
   llvm::SourceMgr sourceMgr;
   mlir::SourceMgrDiagnosticHandler sourceMgrHandler(sourceMgr, &context);
 
-  OwningModuleRef module;
+  OwningOpRef<mlir::ModuleOp> module;
 
   auto saveToFile = [&](llvm::StringRef savePath) -> LogicalResult {
     auto outputFile = openOutputFile(savePath);
@@ -191,6 +191,9 @@ int main(int argc, char **argv) {
       return failure();
     }
     OpPrintingFlags printFlags;
+    // TODO: Re-enable custom assembly format once fixed:
+    // https://github.com/tensorflow/mlir-hlo/issues/25
+    printFlags.printGenericOpForm();
     module->print(outputFile->os(), printFlags);
     outputFile->os() << "\n";
     outputFile->keep();
@@ -207,7 +210,7 @@ int main(int argc, char **argv) {
                                   savedModelTags);
       break;
     default:
-      llvm_unreachable("unsupported import type enum");
+      assert(false && "unsupported import type enum");
   }
   if (!module) return 1;
 
@@ -233,16 +236,6 @@ int main(int argc, char **argv) {
     }
     if (!saveTempMidLevelImport.empty()) {
       if (failed(saveToFile(saveTempMidLevelImport))) return 10;
-    }
-  }
-  {
-    PassManager pm(&context, PassManager::Nesting::Implicit);
-    applyPassManagerCLOptions(pm);
-    iree_integrations::MHLO::buildMHLOImportPassPipeline(pm);
-    if (failed(pm.run(*module))) {
-      llvm::errs() << "Running iree-import-tf MHLO Import pass pipeline failed "
-                      "(see diagnostics)\n";
-      return 2;
     }
   }
 

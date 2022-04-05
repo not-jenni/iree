@@ -16,14 +16,15 @@ iree_cc_library(
   HDRS
     "ConvertUtilToVM.h"
   SRCS
+    "ConvertAlignmentOps.cpp"
     "ConvertGlobalOps.cpp"
     "ConvertListOps.cpp"
     "ConvertStatusOps.cpp"
     "ConvertUtilToVM.cpp"
   DEPS
+    MLIRFunc
     MLIRIR
     MLIRPass
-    MLIRStandard
     MLIRTransformUtils
     MLIRTransforms
     iree::compiler::Dialect::Util::IR

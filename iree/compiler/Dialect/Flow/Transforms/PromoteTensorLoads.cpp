@@ -8,7 +8,7 @@
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "iree/compiler/Dialect/Flow/Transforms/PassDetail.h"
 #include "iree/compiler/Dialect/Flow/Transforms/Passes.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -56,8 +56,8 @@ void setupStandardToFlowTensorLoadLegality(MLIRContext *context,
   conversionTarget.addIllegalOp<tensor::ExtractOp>();
 }
 
-void populateStandardToFlowTensorLoadPatterns(
-    MLIRContext *context, OwningRewritePatternList &patterns) {
+void populateStandardToFlowTensorLoadPatterns(MLIRContext *context,
+                                              RewritePatternSet &patterns) {
   patterns.insert<ExtractElementOpLowering>(context);
 }
 
@@ -68,18 +68,18 @@ class PromoteTensorLoadsPass
  public:
   void getDependentDialects(DialectRegistry &registry) const override {
     registry
-        .insert<FlowDialect, StandardOpsDialect, mlir::arith::ArithmeticDialect,
+        .insert<FlowDialect, func::FuncDialect, mlir::arith::ArithmeticDialect,
                 mlir::math::MathDialect, tensor::TensorDialect>();
   }
 
   void runOnOperation() override {
     auto *context = &getContext();
     ConversionTarget conversionTarget(*context);
-    OwningRewritePatternList conversionPatterns(&getContext());
+    RewritePatternSet conversionPatterns(&getContext());
 
     conversionTarget.addLegalDialect<IREE::Flow::FlowDialect>();
     conversionTarget
-        .addLegalDialect<StandardOpsDialect, mlir::arith::ArithmeticDialect,
+        .addLegalDialect<func::FuncDialect, mlir::arith::ArithmeticDialect,
                          mlir::math::MathDialect>();
     setupStandardToFlowTensorLoadLegality(context, conversionTarget);
     populateStandardToFlowTensorLoadPatterns(context, conversionPatterns);
@@ -91,7 +91,8 @@ class PromoteTensorLoadsPass
   }
 };
 
-std::unique_ptr<OperationPass<mlir::FuncOp>> createPromoteTensorLoadsPass() {
+std::unique_ptr<OperationPass<mlir::func::FuncOp>>
+createPromoteTensorLoadsPass() {
   return std::make_unique<PromoteTensorLoadsPass>();
 }
 

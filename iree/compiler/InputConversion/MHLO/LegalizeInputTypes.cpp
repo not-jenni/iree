@@ -9,8 +9,9 @@
 #include "iree/compiler/InputConversion/MHLO/PassDetail.h"
 #include "iree/compiler/InputConversion/MHLO/Passes.h"
 #include "mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
-#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Affine/Utils.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -22,10 +23,10 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "mlir/Transforms/Utils.h"
 
 namespace mlir {
 namespace iree_compiler {
+namespace MHLO {
 
 static Attribute convertAttribute(Location loc, Attribute value,
                                   FlowTypeConverter &typeConverter) {
@@ -56,7 +57,7 @@ static Attribute convertAttribute(Location loc, Attribute value,
   } else if (auto attr = value.dyn_cast<SplatElementsAttr>()) {
     return SplatElementsAttr::get(
         newType.cast<ShapedType>(),
-        convertAttribute(loc, attr.getSplatValue(), typeConverter));
+        convertAttribute(loc, attr.getSplatValue<Attribute>(), typeConverter));
   } else if (auto attr = value.dyn_cast<DenseIntElementsAttr>()) {
     auto newElementType = newType.cast<ShapedType>().getElementType();
     auto newElementBitWidth = newElementType.getIntOrFloatBitWidth();
@@ -80,8 +81,8 @@ static LogicalResult convertOperation(Operation *oldOp,
                                       BlockAndValueMapping &mapping,
                                       OpBuilder &builder) {
   if (isa<linalg::LinalgDialect>(oldOp->getDialect()) &&
-      !isa<linalg::TensorCollapseShapeOp>(oldOp) &&
-      !isa<linalg::TensorExpandShapeOp>(oldOp)) {
+      !isa<tensor::CollapseShapeOp>(oldOp) &&
+      !isa<tensor::ExpandShapeOp>(oldOp)) {
     // Currently we assume all Linalg structured ops only contain valid types.
     builder.clone(*oldOp, mapping);
     return success();
@@ -99,12 +100,12 @@ static LogicalResult convertOperation(Operation *oldOp,
       llvm::isa<IREE::Util::GlobalOp>(oldOp)) {
     for (auto attr : oldOp->getAttrs()) {
       auto newAttr =
-          convertAttribute(oldOp->getLoc(), attr.second, typeConverter);
+          convertAttribute(oldOp->getLoc(), attr.getValue(), typeConverter);
       if (!newAttr) {
         return oldOp->emitOpError()
-               << "failed to convert attribute " << attr.first;
+               << "failed to convert attribute " << attr.getName();
       }
-      state.addAttribute(attr.first, newAttr);
+      state.addAttribute(attr.getName(), newAttr);
     }
   } else {
     state.attributes = llvm::to_vector<4>(oldOp->getAttrs());
@@ -126,7 +127,7 @@ static LogicalResult convertOperation(Operation *oldOp,
     }
   }
 
-  auto *newOp = builder.createOperation(state);
+  auto *newOp = builder.create(state);
 
   for (auto oldNewResult :
        llvm::zip(oldOp->getResults(), newOp->getResults())) {
@@ -162,10 +163,12 @@ static LogicalResult convertRegion(Region &oldRegion, Region &newRegion,
       return oldBlock.front().emitError()
              << "unable to legalize block signature";
     }
-    newBlock.addArguments(blockSignature->getConvertedTypes());
-    for (auto oldNewArg :
-         llvm::zip(oldBlock.getArguments(), newBlock.getArguments())) {
-      mapping.map(std::get<0>(oldNewArg), std::get<1>(oldNewArg));
+    for (auto it : llvm::zip(oldBlock.getArguments(),
+                             blockSignature->getConvertedTypes())) {
+      auto oldArg = std::get<0>(it);
+      auto newArgType = std::get<1>(it);
+      auto newArg = newBlock.addArgument(newArgType, oldArg.getLoc());
+      mapping.map(oldArg, newArg);
     }
     mapping.map(&oldBlock, &newBlock);
   }
@@ -178,10 +181,10 @@ static LogicalResult convertRegion(Region &oldRegion, Region &newRegion,
   return success();
 }
 
-static LogicalResult convertFunc(mlir::FuncOp oldFuncOp,
+static LogicalResult convertFunc(mlir::func::FuncOp oldFuncOp,
                                  FlowTypeConverter &typeConverter,
                                  OpBuilder &moduleBuilder) {
-  auto oldType = oldFuncOp.getType();
+  auto oldType = oldFuncOp.getFunctionType();
   TypeConverter::SignatureConversion signature(oldType.getNumInputs());
   for (unsigned i = 0, e = oldType.getNumInputs(); i != e; ++i) {
     if (failed(typeConverter.convertSignatureArg(i, oldType.getInput(i),
@@ -196,7 +199,8 @@ static LogicalResult convertFunc(mlir::FuncOp oldFuncOp,
     return oldFuncOp.emitOpError() << "unable to legalize result types";
   }
 
-  auto newFuncOp = cast<FuncOp>(moduleBuilder.cloneWithoutRegions(*oldFuncOp));
+  auto newFuncOp =
+      cast<func::FuncOp>(moduleBuilder.cloneWithoutRegions(*oldFuncOp));
   newFuncOp.setType(FunctionType::get(
       oldFuncOp.getContext(), signature.getConvertedTypes(), convertedResults));
 
@@ -217,11 +221,11 @@ class LegalizeInputTypesPass
     FlowTypeConverter typeConverter;
 
     auto oldOps = llvm::to_vector<4>(llvm::map_range(
-        moduleOp.body().getOps(), [](Operation &op) { return &op; }));
+        moduleOp.getBodyRegion().getOps(), [](Operation &op) { return &op; }));
     for (auto *oldOp : oldOps) {
       OpBuilder moduleBuilder(moduleOp);
       moduleBuilder.setInsertionPoint(oldOp);
-      if (auto oldFuncOp = dyn_cast<mlir::FuncOp>(oldOp)) {
+      if (auto oldFuncOp = dyn_cast<mlir::func::FuncOp>(oldOp)) {
         if (failed(convertFunc(oldFuncOp, typeConverter, moduleBuilder))) {
           return signalPassFailure();
         }
@@ -253,5 +257,6 @@ std::unique_ptr<OperationPass<ModuleOp>> createLegalizeInputTypesPass() {
   return std::make_unique<LegalizeInputTypesPass>();
 }
 
+}  // namespace MHLO
 }  // namespace iree_compiler
 }  // namespace mlir

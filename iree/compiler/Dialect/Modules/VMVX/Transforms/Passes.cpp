@@ -8,17 +8,17 @@
 
 #include <memory>
 
+#include "iree-dialects/Dialect/LinalgExt/Passes/Passes.h"
 #include "iree/compiler/Codegen/Passes.h"
 #include "iree/compiler/Dialect/HAL/Transforms/Passes.h"
-#include "iree/compiler/Dialect/LinalgExt/Transforms/Passes.h"
-#include "iree/compiler/Dialect/Shape/Transforms/Passes.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
-#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/VectorToSCF/VectorToSCF.h"
 #include "mlir/Dialect/Affine/Passes.h"
+#include "mlir/Dialect/Arithmetic/Transforms/Passes.h"
+#include "mlir/Dialect/Func/Transforms/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
-#include "mlir/Dialect/StandardOps/Transforms/Passes.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -28,10 +28,9 @@ namespace IREE {
 namespace VMVX {
 
 static void buildVectorVMVXTransformPassPipeline(OpPassManager &passManager) {
-  // For now lower using the default CPU pass-pipeline which doesn't
-  // vectorize. When VMVX can lower vector operations, this can be relaxed.
-  passManager.addPass(
-      createLLVMCPULowerExecutableTargetPass(/*lowerToVectors=*/false));
+  passManager.nest<ModuleOp>().nest<func::FuncOp>().addPass(
+      createTypePropagationPass());
+  passManager.addPass(createLLVMCPULowerExecutableTargetPass());
 
   OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
 
@@ -39,48 +38,50 @@ static void buildVectorVMVXTransformPassPipeline(OpPassManager &passManager) {
   // Linalg -> Vectors
   // ---------------------------------------------------------------------------
 
-  nestedModulePM.addNestedPass<FuncOp>(
-      Shape::createCleanupShapePlaceholdersPass());
-
   // Tiling and distribution.
-  nestedModulePM.addNestedPass<FuncOp>(createCanonicalizerPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(createCanonicalizerPass());
   // TODO(#5925): This can also be modified to just use the dynamic pass
   // pipeline like the CPU side.
-  // nestedModulePM.addNestedPass<FuncOp>(
+  // nestedModulePM.addNestedPass<func::FuncOp>(
   //     createLinalgTileAndVectorizeWorkgroupsPass());
 
   // Linalg -> SCF.
-  nestedModulePM.addNestedPass<FuncOp>(
-      linalg_ext::createLinalgExtToLoopsPass());
-  nestedModulePM.addNestedPass<FuncOp>(createConvertLinalgToLoopsPass());
-  nestedModulePM.addNestedPass<FuncOp>(createCanonicalizerPass());
-  nestedModulePM.addNestedPass<FuncOp>(createCSEPass());
-  nestedModulePM.addNestedPass<FuncOp>(createConvertVectorToSCFPass());
-  nestedModulePM.addNestedPass<FuncOp>(createCanonicalizerPass());
-  nestedModulePM.addNestedPass<FuncOp>(createStdExpandOpsPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(
+      IREE::LinalgExt::createLinalgExtToLoopsPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(createMemrefCopyToLinalgPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(createConvertLinalgToLoopsPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(createCSEPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(createConvertVectorToSCFPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(
+      arith::createArithmeticExpandOpsPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(memref::createExpandOpsPass());
 
   // Handle tensor-type constants.
-  nestedModulePM.addPass(createTensorConstantBufferizePass());
+  nestedModulePM.addPass(arith::createConstantBufferizePass());
   nestedModulePM.addPass(createFoldTensorExtractOpPass());
 
   // Flatten and cleanup memrefs.
-  nestedModulePM.addNestedPass<FuncOp>(memref::createFoldSubViewOpsPass());
-  nestedModulePM.addNestedPass<FuncOp>(
-      Shape::createFoldDimOverShapeCarryingOpPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(
+      memref::createFoldSubViewOpsPass());
   nestedModulePM.addPass(createCanonicalizerPass());
   nestedModulePM.addPass(createCSEPass());
   nestedModulePM.addPass(createFlattenMemRefSubspanPass());
-  nestedModulePM.addPass(createNormalizeMemRefsPass());
-  nestedModulePM.addNestedPass<FuncOp>(createAffineScalarReplacementPass());
+  nestedModulePM.addPass(memref::createNormalizeMemRefsPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(
+      createAffineScalarReplacementPass());
+  nestedModulePM.addPass(createCanonicalizerPass());
 }
 
 static void buildLoopOptimizationVMVXTransformPassPipeline(
     OpPassManager &passManager) {
   OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
 
-  nestedModulePM.addNestedPass<FuncOp>(createLowerAffinePass());
-  nestedModulePM.addNestedPass<FuncOp>(createForOpCanonicalizationPass());
-  nestedModulePM.addNestedPass<FuncOp>(createLoopInvariantCodeMotionPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(createLowerAffinePass());
+  nestedModulePM.addNestedPass<func::FuncOp>(createForOpCanonicalizationPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(
+      createLoopInvariantCodeMotionPass());
 }
 
 void buildVMVXTransformPassPipeline(OpPassManager &passManager) {
@@ -97,6 +98,8 @@ void buildVMVXTransformPassPipeline(OpPassManager &passManager) {
   // ---------------------------------------------------------------------------
 
   passManager.addNestedPass<mlir::ModuleOp>(createConversionPass());
+  passManager.nest<mlir::ModuleOp>().addNestedPass<func::FuncOp>(
+      memref::createFoldSubViewOpsPass());
   passManager.addPass(createCanonicalizerPass());
   passManager.addPass(createCSEPass());
 

@@ -15,18 +15,17 @@ iree_cc_library(
     Utils
   HDRS
     "DeviceSwitchBuilder.h"
-    "TypeUtils.h"
+    "InferCustomKernelsTargetInfoFromParent.h"
   SRCS
-    "TypeUtils.cpp"
+    "InferCustomKernelsTargetInfoFromParent.cpp"
   DEPS
     LLVMSupport
+    MLIRFunc
     MLIRIR
-    MLIRStandard
     MLIRSupport
     MLIRTransforms
     iree::compiler::Dialect::HAL::IR
-    iree::compiler::Dialect::Shape::IR
-    iree::compiler::Dialect::Util::IR
+    iree::compiler::Utils
   PUBLIC
 )
 

@@ -5,8 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #include "iree/compiler/Codegen/PassDetail.h"
 #include "iree/compiler/Codegen/Passes.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -35,13 +36,13 @@ namespace {
 ///
 /// On LLVM side, the `std.constant` is handled by the
 /// `TensorConstantBufferizePass`, which creates a global object of `memref`
-/// type. To get the tensor back you get a tensor.load. If the above
-/// canonicalization pattern didnt exist, then a tensor.load would not be
+/// type. To get the tensor back you get a to_tensor. If the above
+/// canonicalization pattern didnt exist, then a to_tensor would not be
 /// needed.
 ///
 /// This pass is specifically undoing the canonicalization by folding
 ///
-/// (tensor_extract (tensor_load (get_global_memref:$value), $indices) to
+/// (tensor_extract (to_tensor (get_global_memref:$value), $indices) to
 ///
 /// (load $value, $indices)
 ///
@@ -55,7 +56,7 @@ class FoldTensorExtractOpPass
 }  // namespace
 
 void FoldTensorExtractOpPass::runOnOperation() {
-  OwningRewritePatternList patterns(&getContext());
+  RewritePatternSet patterns(&getContext());
   populateWithGenerated(patterns);
   if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
     signalPassFailure();

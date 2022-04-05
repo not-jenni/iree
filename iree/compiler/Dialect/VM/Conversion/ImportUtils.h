@@ -7,11 +7,9 @@
 #ifndef IREE_COMPILER_DIALECT_VM_CONVERSION_IMPORTUTILS_H_
 #define IREE_COMPILER_DIALECT_VM_CONVERSION_IMPORTUTILS_H_
 
-#include "iree/compiler/Dialect/Shape/IR/ShapeOps.h"
-#include "iree/compiler/Dialect/Shape/IR/ShapeTypes.h"
 #include "iree/compiler/Dialect/Util/IR/UtilTypes.h"
 #include "iree/compiler/Dialect/VM/IR/VMOps.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
@@ -59,7 +57,7 @@ Optional<SmallVector<Value>> rewriteToCall(
   state.addAttributes(llvm::to_vector<4>(operation->getDialectAttrs()));
   state.addAttribute("callee", SymbolRefAttr::get(importOp));
 
-  auto importType = importOp.getType();
+  auto importType = importOp.getFunctionType();
   for (auto resultType : operation->getResultTypes()) {
     if (failed(typeConverter.convertType(resultType, state.types))) {
       return None;
@@ -89,27 +87,12 @@ Optional<SmallVector<Value>> rewriteToCall(
       auto newOperands =
           llvm::to_vector<4>(adaptor.getODSOperands(inputSetIndex));
       ++inputSetIndex;
-      if (oldOperands.size() == 1 &&
-          oldOperands[0].getType().template isa<Shape::RankedShapeType>()) {
-        // Expand a ranked_shape into its dimensions.
-        // We need to rematerialize the static dimensions and then pass through
-        // the new dynamic dimensions that we have the SSA values for.
-        auto rankedShapeType = oldOperands[0]
-                                   .getType()
-                                   .template dyn_cast<Shape::RankedShapeType>();
-        for (int i = 0; i < rankedShapeType.getRank(); ++i) {
-          auto dimOp = rewriter.createOrFold<Shape::RankedDimOp>(
-              op.getLoc(), oldOperands[0], i);
-          state.addOperands(dimOp);
-        }
-        segmentSizes.push_back(rankedShapeType.getRank());
+
+      state.addOperands(newOperands);
+      if (importOp.isFuncArgumentVariadic(input.index())) {
+        segmentSizes.push_back(newOperands.size());
       } else {
-        state.addOperands(newOperands);
-        if (importOp.isFuncArgumentVariadic(input.index())) {
-          segmentSizes.push_back(newOperands.size());
-        } else {
-          segmentSizes.push_back(kFixedSingleValue);
-        }
+        segmentSizes.push_back(kFixedSingleValue);
       }
     }
   }
@@ -127,7 +110,7 @@ Optional<SmallVector<Value>> rewriteToCall(
                            }))));
   }
 
-  auto *callOp = rewriter.createOperation(state);
+  auto *callOp = rewriter.create(state);
   copyImportAttrs(importOp, callOp);
   return SmallVector<Value>(callOp->getResults());
 }
@@ -144,9 +127,9 @@ class VMImportOpConversion : public OpConversionPattern<T> {
   }
 
   LogicalResult matchAndRewrite(
-      T op, llvm::ArrayRef<Value> operands,
+      T op, typename T::Adaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    auto results = rewriteToCall(op, Adaptor{operands}, importOp,
+    auto results = rewriteToCall(op, adaptor, importOp,
                                  *this->getTypeConverter(), rewriter);
     if (!results.hasValue()) return failure();
     rewriter.replaceOp(op, results.getValue());

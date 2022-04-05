@@ -1,7 +1,7 @@
-// RUN: iree-opt -split-input-file -iree-mhlo-input-transformation-pipeline -iree-flow-transformation-pipeline -iree-flow-export-benchmark-funcs %s | IreeFileCheck %s
+// RUN: iree-opt -split-input-file -iree-mhlo-input-transformation-pipeline -iree-flow-transformation-pipeline -iree-flow-export-benchmark-funcs %s | FileCheck %s
 
 module {
-  func @two_dispatch(%arg0: tensor<5x3xf32>, %arg1: tensor<3x5xf32>) -> (tensor<5x5xf32>, tensor<3x5xf32>) {
+  func.func @two_dispatch(%arg0: tensor<5x3xf32>, %arg1: tensor<3x5xf32>) -> (tensor<5x5xf32>, tensor<3x5xf32>) {
     %0 = "mhlo.dot"(%arg0, %arg1) : (tensor<5x3xf32>, tensor<3x5xf32>) -> tensor<5x5xf32>
     %1 = "mhlo.dot"(%arg1, %0) : (tensor<3x5xf32>, tensor<5x5xf32>) -> tensor<3x5xf32>
     return %0, %1 : tensor<5x5xf32>, tensor<3x5xf32>
@@ -19,15 +19,15 @@ module {
 
 // -----
 
-func @while(%start: tensor<i32>, %bound: tensor<i32>) -> tensor<i32> {
-  br ^bb1(%start : tensor<i32>)
+func.func @while(%start: tensor<i32>, %bound: tensor<i32>) -> tensor<i32> {
+  cf.br ^bb1(%start : tensor<i32>)
 ^bb1(%0: tensor<i32>):
-  %1 = "mhlo.compare"(%0, %bound) {comparison_direction = "LT"} : (tensor<i32>, tensor<i32>) -> tensor<i1>
+  %1 = "mhlo.compare"(%0, %bound) {comparison_direction = #mhlo<"comparison_direction LT">} : (tensor<i32>, tensor<i32>) -> tensor<i1>
   %2 = tensor.extract %1[] : tensor<i1>
-  cond_br %2, ^bb2(%0 : tensor<i32>), ^bb3(%0 : tensor<i32>)
+  cf.cond_br %2, ^bb2(%0 : tensor<i32>), ^bb3(%0 : tensor<i32>)
 ^bb2(%3: tensor<i32>):
   %4 = mhlo.add %3, %3 : tensor<i32>
-  br ^bb1(%4 : tensor<i32>)
+  cf.br ^bb1(%4 : tensor<i32>)
 ^bb3(%5: tensor<i32>):
   return %5 : tensor<i32>
 }

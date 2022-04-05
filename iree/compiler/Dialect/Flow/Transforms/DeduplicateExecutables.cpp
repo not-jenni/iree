@@ -9,7 +9,7 @@
 #include "iree/compiler/Dialect/Flow/Transforms/Passes.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SetVector.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/RegionGraphTraits.h"
@@ -47,12 +47,12 @@ static bool isStructurallyEquivalentTo(Operation &lhs, Operation &rhs,
 // have the same attributes and same use-def structure.
 //
 // Example:
-//   func @lhs(%arg0 : index) -> index {
+//   func.func @lhs(%arg0 : index) -> index {
 //     %c1 = arith.constant 1 : index
 //     %0 = add %arg0, %c1 : index
 //     return %0 : index
 //   }
-//   func @rhs(%arg0 : index) -> index {
+//   func.func @rhs(%arg0 : index) -> index {
 //     %c1 = arith.constant 1 : index
 //     %0 = add %arg0, %c1 : index
 //     return %0 : index
@@ -132,8 +132,8 @@ static bool isStructurallyEquivalentTo(Operation &lhs, Operation &rhs,
   if (!compare_ranges(
           lhs.getAttrs(), rhs.getAttrs(),
           [&](const NamedAttribute &lhs, const NamedAttribute &rhs) {
-            if (lhs.first == "function_ref" ||
-                lhs.first == SymbolTable::getSymbolAttrName()) {
+            if (lhs.getName() == "function_ref" ||
+                lhs.getName() == SymbolTable::getSymbolAttrName()) {
               return true;
             }
             return lhs == rhs;
@@ -207,13 +207,15 @@ bool areExecutablesEquivalent(ExecutableOp lhs, ExecutableOp rhs) {
   }
 
   // Walk all functions and ensure equivalent.
-  if (!compare_ranges(
-          lhsModule.getOps<mlir::FuncOp>(), rhsModule.getOps<mlir::FuncOp>(),
-          [](mlir::FuncOp lhs, mlir::FuncOp rhs) {
-            if (lhs.getType() != rhs.getType()) return false;
-            if (lhs->getAttrs() != rhs->getAttrs()) return false;
-            return isStructurallyEquivalentTo(lhs.getRegion(), rhs.getRegion());
-          })) {
+  if (!compare_ranges(lhsModule.getOps<mlir::func::FuncOp>(),
+                      rhsModule.getOps<mlir::func::FuncOp>(),
+                      [](mlir::func::FuncOp lhs, mlir::func::FuncOp rhs) {
+                        if (lhs.getFunctionType() != rhs.getFunctionType())
+                          return false;
+                        if (lhs->getAttrs() != rhs->getAttrs()) return false;
+                        return isStructurallyEquivalentTo(lhs.getRegion(),
+                                                          rhs.getRegion());
+                      })) {
     return false;  // dispatch entry mismatch
   }
 
@@ -225,8 +227,8 @@ bool areExecutablesEquivalent(ExecutableOp lhs, ExecutableOp rhs) {
 void replaceEntryPointUses(
     mlir::ModuleOp moduleOp,
     const DenseMap<Attribute, SymbolRefAttr> &replacements) {
-  for (auto funcOp : moduleOp.getOps<mlir::FuncOp>()) {
-    funcOp.walk([&](DispatchOp dispatchOp) {
+  for (auto funcLikeOp : moduleOp.getOps<FunctionOpInterface>()) {
+    funcLikeOp->walk([&](DispatchOp dispatchOp) {
       auto it = replacements.find(dispatchOp.entry_point());
       if (it != replacements.end()) {
         dispatchOp.entry_pointAttr(it->second.cast<SymbolRefAttr>());

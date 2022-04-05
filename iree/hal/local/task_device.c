@@ -12,7 +12,6 @@
 
 #include "iree/base/internal/arena.h"
 #include "iree/base/tracing.h"
-#include "iree/hal/local/event_pool.h"
 #include "iree/hal/local/local_descriptor_set.h"
 #include "iree/hal/local/local_descriptor_set_layout.h"
 #include "iree/hal/local/local_executable_cache.h"
@@ -21,8 +20,7 @@
 #include "iree/hal/local/task_event.h"
 #include "iree/hal/local/task_queue.h"
 #include "iree/hal/local/task_semaphore.h"
-
-#define IREE_HAL_LOCAL_TASK_EVENT_POOL_CAPACITY 32
+#include "iree/hal/utils/buffer_transfer.h"
 
 typedef struct iree_hal_task_device_t {
   iree_hal_resource_t resource;
@@ -34,9 +32,6 @@ typedef struct iree_hal_task_device_t {
   // Block pool used for command buffers with a larger block size (as command
   // buffers can contain inlined data uploads).
   iree_arena_block_pool_t large_block_pool;
-
-  // iree_event_t pool for semaphore wait operations.
-  iree_hal_local_event_pool_t* event_pool;
 
   iree_task_executor_t* executor;
 
@@ -80,10 +75,12 @@ static iree_status_t iree_hal_task_device_check_params(
 iree_status_t iree_hal_task_device_create(
     iree_string_view_t identifier, const iree_hal_task_device_params_t* params,
     iree_task_executor_t* executor, iree_host_size_t loader_count,
-    iree_hal_executable_loader_t** loaders, iree_allocator_t host_allocator,
+    iree_hal_executable_loader_t** loaders,
+    iree_hal_allocator_t* device_allocator, iree_allocator_t host_allocator,
     iree_hal_device_t** out_device) {
   IREE_ASSERT_ARGUMENT(params);
   IREE_ASSERT_ARGUMENT(!loader_count || loaders);
+  IREE_ASSERT_ARGUMENT(device_allocator);
   IREE_ASSERT_ARGUMENT(out_device);
   *out_device = NULL;
   IREE_TRACE_ZONE_BEGIN(z0);
@@ -105,11 +102,13 @@ iree_status_t iree_hal_task_device_create(
     iree_string_view_append_to_buffer(identifier, &device->identifier,
                                       (char*)device + struct_size);
     device->host_allocator = host_allocator;
+    device->device_allocator = device_allocator;
+    iree_hal_allocator_retain(device_allocator);
+
     iree_arena_block_pool_initialize(4096, host_allocator,
                                      &device->small_block_pool);
     iree_arena_block_pool_initialize(params->arena_block_size, host_allocator,
                                      &device->large_block_pool);
-    device->event_pool = NULL;
 
     device->executor = executor;
     iree_task_executor_retain(device->executor);
@@ -134,17 +133,6 @@ iree_status_t iree_hal_task_device_create(
   }
 
   if (iree_status_is_ok(status)) {
-    status = iree_hal_allocator_create_heap(identifier, host_allocator,
-                                            &device->device_allocator);
-  }
-
-  if (iree_status_is_ok(status)) {
-    status = iree_hal_local_event_pool_allocate(
-        IREE_HAL_LOCAL_TASK_EVENT_POOL_CAPACITY, host_allocator,
-        &device->event_pool);
-  }
-
-  if (iree_status_is_ok(status)) {
     *out_device = (iree_hal_device_t*)device;
   } else {
     iree_hal_device_release((iree_hal_device_t*)device);
@@ -165,7 +153,6 @@ static void iree_hal_task_device_destroy(iree_hal_device_t* base_device) {
     iree_hal_executable_loader_release(device->loaders[i]);
   }
   iree_task_executor_release(device->executor);
-  iree_hal_local_event_pool_free(device->event_pool);
   iree_arena_block_pool_deinitialize(&device->large_block_pool);
   iree_arena_block_pool_deinitialize(&device->small_block_pool);
   iree_hal_allocator_release(device->device_allocator);
@@ -190,6 +177,14 @@ static iree_hal_allocator_t* iree_hal_task_device_allocator(
     iree_hal_device_t* base_device) {
   iree_hal_task_device_t* device = iree_hal_task_device_cast(base_device);
   return device->device_allocator;
+}
+
+static iree_status_t iree_hal_task_device_trim(iree_hal_device_t* base_device) {
+  iree_hal_task_device_t* device = iree_hal_task_device_cast(base_device);
+  iree_arena_block_pool_trim(&device->small_block_pool);
+  iree_arena_block_pool_trim(&device->large_block_pool);
+  iree_task_executor_trim(device->executor);
+  return iree_hal_allocator_trim(device->device_allocator);
 }
 
 static iree_status_t iree_hal_task_device_query_i32(
@@ -237,7 +232,7 @@ static iree_status_t iree_hal_task_device_create_command_buffer(
   iree_host_size_t queue_index = iree_hal_task_device_select_queue(
       device, command_categories, queue_affinity);
   return iree_hal_task_command_buffer_create(
-      &device->queues[queue_index].scope, mode, command_categories,
+      base_device, &device->queues[queue_index].scope, mode, command_categories,
       queue_affinity, &device->large_block_pool, device->host_allocator,
       out_command_buffer);
 }
@@ -292,8 +287,9 @@ static iree_status_t iree_hal_task_device_create_semaphore(
     iree_hal_device_t* base_device, uint64_t initial_value,
     iree_hal_semaphore_t** out_semaphore) {
   iree_hal_task_device_t* device = iree_hal_task_device_cast(base_device);
-  return iree_hal_task_semaphore_create(device->event_pool, initial_value,
-                                        device->host_allocator, out_semaphore);
+  return iree_hal_task_semaphore_create(
+      iree_task_executor_event_pool(device->executor), initial_value,
+      device->host_allocator, out_semaphore);
 }
 
 static iree_status_t iree_hal_task_device_queue_submit(
@@ -327,9 +323,10 @@ static iree_status_t iree_hal_task_device_wait_semaphores(
     iree_hal_device_t* base_device, iree_hal_wait_mode_t wait_mode,
     const iree_hal_semaphore_list_t* semaphore_list, iree_timeout_t timeout) {
   iree_hal_task_device_t* device = iree_hal_task_device_cast(base_device);
-  return iree_hal_task_semaphore_multi_wait(wait_mode, semaphore_list, timeout,
-                                            device->event_pool,
-                                            &device->large_block_pool);
+  return iree_hal_task_semaphore_multi_wait(
+      wait_mode, semaphore_list, timeout,
+      iree_task_executor_event_pool(device->executor),
+      &device->large_block_pool);
 }
 
 static iree_status_t iree_hal_task_device_wait_idle(
@@ -350,6 +347,7 @@ static const iree_hal_device_vtable_t iree_hal_task_device_vtable = {
     .id = iree_hal_task_device_id,
     .host_allocator = iree_hal_task_device_host_allocator,
     .device_allocator = iree_hal_task_device_allocator,
+    .trim = iree_hal_task_device_trim,
     .query_i32 = iree_hal_task_device_query_i32,
     .create_command_buffer = iree_hal_task_device_create_command_buffer,
     .create_descriptor_set = iree_hal_task_device_create_descriptor_set,
@@ -359,6 +357,7 @@ static const iree_hal_device_vtable_t iree_hal_task_device_vtable = {
     .create_executable_cache = iree_hal_task_device_create_executable_cache,
     .create_executable_layout = iree_hal_task_device_create_executable_layout,
     .create_semaphore = iree_hal_task_device_create_semaphore,
+    .transfer_range = iree_hal_device_transfer_mappable_range,
     .queue_submit = iree_hal_task_device_queue_submit,
     .submit_and_wait = iree_hal_task_device_submit_and_wait,
     .wait_semaphores = iree_hal_task_device_wait_semaphores,

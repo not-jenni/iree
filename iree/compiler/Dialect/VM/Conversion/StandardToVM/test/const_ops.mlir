@@ -1,12 +1,12 @@
-// RUN: iree-opt -split-input-file -pass-pipeline='test-iree-convert-std-to-vm' %s | IreeFileCheck %s
+// RUN: iree-opt -split-input-file -pass-pipeline="test-iree-convert-std-to-vm" %s | FileCheck %s
 
 // -----
 // CHECK-LABEL: @t001_const.i32.nonzero
 module @t001_const.i32.nonzero {
 
 module {
-  func @non_zero() -> (i32) {
-    // CHECK: vm.const.i32 1 : i32
+  func.func @non_zero() -> (i32) {
+    // CHECK: vm.const.i32 1
     %1 = arith.constant 1 : i32
     return %1 : i32
   }
@@ -19,8 +19,8 @@ module {
 module @t001_const.i32.zero {
 
 module {
-  func @zero() -> (i32) {
-    // CHECK: vm.const.i32.zero : i32
+  func.func @zero() -> (i32) {
+    // CHECK: vm.const.i32.zero
     %1 = arith.constant 0 : i32
     return %1 : i32
   }
@@ -33,8 +33,8 @@ module {
 module @t002_const.f32.nonzero {
 
 module {
-  func @non_zero() -> (f32) {
-    // CHECK: vm.const.f32 1.000000e+00 : f32
+  func.func @non_zero() -> (f32) {
+    // CHECK: vm.const.f32 1.000000e+00
     %1 = arith.constant 1. : f32
     return %1 : f32
   }
@@ -47,8 +47,8 @@ module {
 module @t003_const.f32.zero {
 
 module {
-  func @zero() -> (f32) {
-    // CHECK: vm.const.f32.zero : f32
+  func.func @zero() -> (f32) {
+    // CHECK: vm.const.f32.zero
     %1 = arith.constant 0. : f32
     return %1 : f32
   }

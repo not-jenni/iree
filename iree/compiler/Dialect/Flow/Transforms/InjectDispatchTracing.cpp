@@ -9,7 +9,7 @@
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "iree/compiler/Dialect/Flow/Transforms/PassDetail.h"
 #include "iree/compiler/Dialect/Flow/Transforms/Passes.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
@@ -34,7 +34,8 @@ class InjectDispatchTracingPass
   InjectDispatchTracingPass() = default;
 
   void runOnOperation() override {
-    for (auto dispatchOp : getOperation().getOps<DispatchOp>()) {
+    auto funcOp = getOperation();
+    for (auto dispatchOp : funcOp.getBody().getOps<DispatchOp>()) {
       std::string entryPointName =
           dispatchOp.entry_point().getRootReference().getValue().str();
       for (FlatSymbolRefAttr nestedRef :
@@ -59,7 +60,8 @@ class InjectDispatchTracingPass
   }
 };
 
-std::unique_ptr<OperationPass<mlir::FuncOp>> createInjectDispatchTracingPass() {
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createInjectDispatchTracingPass() {
   return std::make_unique<InjectDispatchTracingPass>();
 }
 

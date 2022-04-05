@@ -19,11 +19,11 @@ function(iree_bytecode_module_for_iree_check_test_and_friends)
     _RULE
     ""
     "MODULE_NAME;SRC;TARGET_BACKEND;OPT_TOOL;MODULE_FILE_NAME"
-    "FLAGS;OPT_FLAGS"
+    "FLAGS;OPT_FLAGS;TARGET_CPU_FEATURES"
     ${ARGN}
   )
 
-  if(ANDROID)
+  if(ANDROID AND NOT _RULE_FLAGS MATCHES "iree-llvm-target-triple")
     # Android's CMake toolchain defines some variables that we can use to infer
     # the appropriate target triple from the configured settings:
     # https://developer.android.com/ndk/guides/cmake#android_platform
@@ -35,6 +35,16 @@ function(iree_bytecode_module_for_iree_check_test_and_friends)
     # should pretty consistently be just a number we can use for target triple.
     set(_TARGET_TRIPLE "aarch64-none-linux-android${ANDROID_PLATFORM_LEVEL}")
     list(APPEND _RULE_FLAGS "--iree-llvm-target-triple=${_TARGET_TRIPLE}")
+  endif()
+
+  if(_RULE_TARGET_CPU_FEATURES)
+    if(NOT _RULE_TARGET_BACKEND STREQUAL "dylib-llvm-aot")
+      message(SEND_ERROR "TARGET_CPU_FEATURES should be empty when \
+TARGET_BACKEND is not dylib-llvm-aot. Actual values: \
+TARGET_CPU_FEATURES=${_RULE_TARGET_CPU_FEATURES}, \
+TARGET_BACKEND=${_RULE_TARGET_BACKEND}.")
+    endif()
+    list(APPEND _RULE_FLAGS "--iree-llvm-target-cpu-features=${_RULE_TARGET_CPU_FEATURES}")
   endif()
 
   iree_bytecode_module(
@@ -67,7 +77,9 @@ endfunction()
 #   NAME: Name of the target
 #   SRC: mlir source file to be compiled to an IREE module.
 #   TARGET_BACKEND: target backend to compile for.
-#   DRIVER: driver to run the module with.
+#   DRIVER: driver to run the module with. This can be omitted to test only
+#       compilation, but consider omiting the driver as a hacky abuse of the
+#       rule since compilation on its own not use iree-check-module.
 #   COMPILER_FLAGS: additional flags to pass to the compiler. Bytecode
 #       translation and backend flags are passed automatically.
 #   RUNNER_ARGS: additional args to pass to iree-check-module. The driver
@@ -80,6 +92,8 @@ endfunction()
 #       these flags.
 #   MODULE_FILE_NAME: Optional, specifies the absolute path to the filename
 #       to use for the generated IREE module (.vmfb).
+#   TARGET_CPU_FEATURES: If specified, a string passed as argument to
+#       --iree-llvm-target-cpu-features.
 function(iree_check_test)
   if(NOT IREE_BUILD_TESTS)
     return()
@@ -109,9 +123,13 @@ function(iree_check_test)
     _RULE
     ""
     "NAME;SRC;TARGET_BACKEND;DRIVER;OPT_TOOL;MODULE_FILE_NAME"
-    "COMPILER_FLAGS;RUNNER_ARGS;LABELS;OPT_FLAGS"
+    "COMPILER_FLAGS;RUNNER_ARGS;LABELS;OPT_FLAGS;TARGET_CPU_FEATURES"
     ${ARGN}
   )
+
+  if(CMAKE_CROSSCOMPILING AND "hostonly" IN_LIST _RULE_LABELS)
+    return()
+  endif()
 
   iree_package_name(_PACKAGE_NAME)
   set(_NAME "${_PACKAGE_NAME}_${_RULE_NAME}")
@@ -139,6 +157,8 @@ function(iree_check_test)
       ${_RULE_OPT_TOOL}
     OPT_FLAGS
       ${_RULE_OPT_FLAGS}
+    TARGET_CPU_FEATURES
+      ${_RULE_TARGET_CPU_FEATURES}
   )
 
   # iree_bytecode_module does not define a target, only a custom command.
@@ -164,12 +184,18 @@ function(iree_check_test)
     "${_RUNNER_TARGET}"
   )
 
-  iree_run_binary_test(
+  add_dependencies(iree-test-deps "${_NAME}")
+
+  if(NOT DEFINED _RULE_DRIVER)
+    return()
+  endif()
+
+  iree_native_test(
     NAME
       "${_RULE_NAME}"
     DRIVER
       "${_RULE_DRIVER}"
-    TEST_BINARY
+    SRC
       "${_RUNNER_TARGET}"
     TEST_INPUT_FILE_ARG
       "${_MODULE_FILE_NAME}"
@@ -177,6 +203,7 @@ function(iree_check_test)
       ${_RULE_RUNNER_ARGS}
     LABELS
       ${_RULE_LABELS}
+      ${_RULE_TARGET_CPU_FEATURES}
   )
 endfunction()
 
@@ -191,7 +218,9 @@ endfunction()
 #   NAME: name of the generated test suite.
 #   SRCS: source mlir files containing the module.
 #   TARGET_BACKEND: target backend to compile for.
-#   DRIVER: driver to run the module with.
+#   DRIVER: driver to run the module with. This can be omitted to test only
+#       compilation, but consider omiting the driver as a hacky abuse of the
+#       rule since compilation on its own not use iree-check-module.
 #   COMPILER_FLAGS: additional flags to pass to the compiler. Bytecode
 #       translation and backend flags are passed automatically.
 #   RUNNER_ARGS: additional args to pass to the underlying iree-check-module
@@ -203,6 +232,8 @@ endfunction()
 #       if OPT_FLAGS is specified.
 #   OPT_FLAGS: If specified, source files are preprocessed with OPT_TOOL with
 #       these flags.
+#   TARGET_CPU_FEATURES: If specified, a string passed as argument to
+#       --iree-llvm-target-cpu-features.
 function(iree_check_single_backend_test_suite)
   if(NOT IREE_BUILD_TESTS)
     return()
@@ -216,22 +247,29 @@ function(iree_check_single_backend_test_suite)
     _RULE
     ""
     "NAME;TARGET_BACKEND;DRIVER;OPT_TOOL"
-    "SRCS;COMPILER_FLAGS;RUNNER_ARGS;LABELS;OPT_FLAGS"
+    "SRCS;COMPILER_FLAGS;RUNNER_ARGS;LABELS;OPT_FLAGS;TARGET_CPU_FEATURES"
     ${ARGN}
   )
 
   # Omit tests for which the specified driver or target backend is not enabled.
   # This overlaps with directory exclusions and other filtering mechanisms.
-  string(TOUPPER ${_RULE_DRIVER} _UPPERCASE_DRIVER)
-  if(NOT DEFINED IREE_HAL_DRIVER_${_UPPERCASE_DRIVER})
-    message(SEND_ERROR "Unknown driver '${_RULE_DRIVER}'. Check IREE_ALL_HAL_DRIVERS.")
-  endif()
-  if(NOT IREE_HAL_DRIVER_${_UPPERCASE_DRIVER})
-    return()
+  #
+  # Note: omitting the DRIVER arg is allowed (though it is a hack). If it is
+  # omitted, we don't need to test for a driver being enabled.
+  if(DEFINED _RULE_DRIVER)
+    string(TOUPPER ${_RULE_DRIVER} _UPPERCASE_DRIVER)
+    string(REPLACE "-" "_" _NORMALIZED_DRIVER ${_UPPERCASE_DRIVER})
+    if(NOT DEFINED IREE_HAL_DRIVER_${_NORMALIZED_DRIVER})
+      message(SEND_ERROR "Unknown driver '${_RULE_DRIVER}'. Check IREE_HAL_DRIVER_* options.")
+    endif()
+    if(NOT IREE_HAL_DRIVER_${_NORMALIZED_DRIVER})
+      return()
+    endif()
   endif()
   string(TOUPPER ${_RULE_TARGET_BACKEND} _UPPERCASE_TARGET_BACKEND)
-  if(NOT DEFINED IREE_TARGET_BACKEND_${_UPPERCASE_TARGET_BACKEND})
-    message(SEND_ERROR "Unknown backend '${_RULE_TARGET_BACKEND}'. Check IREE_ALL_TARGET_BACKENDS.")
+  string(REPLACE "-" "_" _NORMALIZED_TARGET_BACKEND ${_UPPERCASE_TARGET_BACKEND})
+  if(NOT DEFINED IREE_TARGET_BACKEND_${_NORMALIZED_TARGET_BACKEND})
+    message(SEND_ERROR "Unknown backend '${_RULE_TARGET_BACKEND}'. Check IREE_TARGET_BACKEND_* options.")
   endif()
   if(DEFINED IREE_HOST_BINARY_ROOT)
     # If we're not building the host tools from source under this configuration,
@@ -240,7 +278,7 @@ function(iree_check_single_backend_test_suite)
     # rely on the runtime HAL driver check above for filtering.
   else()
     # We are building the host tools, so check enabled compiler target backends.
-    if(NOT IREE_TARGET_BACKEND_${_UPPERCASE_TARGET_BACKEND})
+    if(NOT IREE_TARGET_BACKEND_${_NORMALIZED_TARGET_BACKEND})
       return()
     endif()
   endif()
@@ -266,10 +304,89 @@ function(iree_check_single_backend_test_suite)
         ${_RULE_OPT_TOOL}
       OPT_FLAGS
         ${_RULE_OPT_FLAGS}
+      TARGET_CPU_FEATURES
+        ${_RULE_TARGET_CPU_FEATURES}
     )
   endforeach()
 endfunction()
 
+# Helper function parsing a string occurring as an entry in TARGET_CPU_FEATURES_VARIANTS.
+#
+# This function has 3 output-params: variables that it sets with PARENT_SCOPE:
+# _ENABLED, _TARGET_CPU_FEATURES, _TARGET_CPU_FEATURES_SUFFIX, _TARGET_PASS_OPTIONS.
+#
+# "default" is handled specially. _ENABLED is always set to "TRUE" and
+# _TARGET_CPU_FEATURES, _TARGET_CPU_FEATURES_SUFFIX and _TARGET_PASS_OPTIONS are set to
+# the empty string.
+#
+# Other values are parsed as "arch:features", the parsed arch is matched with
+# `CMAKE_SYSTEM_PROCESSOR`, `_ENABLED` is set to "TRUE" if and only if they
+# match, `_TARGET_CPU_FEATURES_SUFFIX` is set to a string based on the
+# features that is appropriate to include in a CMake target or test name, and
+# `_TARGET_PASS_OPTIONS` is formatted to be passed as options to certain passes that
+# expect "arch=<arch> features=<+feature1,...>".
+# More than one target cpu feature is currently unsupported.
+#
+# aarch64:+dotprod ->_ENABLED="TRUE" if the target architecture is aarch64,
+#                    _TARGET_CPU_FEATURES="+dotprod",
+#                    _TARGET_CPU_FEATURES_SUFFIX="_dotprod",
+#                    _TARGET_PASS_OPTIONS="arch=aarch64 features=+dotprod"
+# default -> _ENABLED="TRUE" unconditionally,
+#            _TARGET_PASS_OPTIONS="arch=${CMAKE_SYSTEM_PROCESSOR}"
+#            other output strings are "".
+function(process_target_cpu_features _INPUT_TARGET_CPU_FEATURES _ENABLED
+         _TARGET_CPU_FEATURES _TARGET_CPU_FEATURES_SUFFIX _TARGET_PASS_OPTIONS)
+  set(_TARGET_CPU_FEATURES "" PARENT_SCOPE)
+  set(_TARGET_CPU_FEATURES_SUFFIX "" PARENT_SCOPE)
+  set(_TARGET_PASS_OPTIONS "" PARENT_SCOPE)
+  if ("${_INPUT_TARGET_CPU_FEATURES}" STREQUAL "default")
+    set(_ENABLED "TRUE" PARENT_SCOPE)
+    set(_TARGET_PASS_OPTIONS "arch=${CMAKE_SYSTEM_PROCESSOR}" PARENT_SCOPE)
+    return()
+  endif()
+  string(REGEX MATCHALL "[^:]+" _COMPONENTS "${_INPUT_TARGET_CPU_FEATURES}")
+  list(LENGTH _COMPONENTS _NUM_COMPONENTS)
+  if (NOT _NUM_COMPONENTS EQUAL 2)
+    message (SEND_ERROR "TARGET_CPU_FEATURES should be of the form \
+_FILTER_ARCH:_TARGET_CPU_FEATURES. Got: ${_INPUT_TARGET_CPU_FEATURES}")
+    return()
+  endif()
+  # TARGET_CPU_FEATURES_VARIANT is of the form _FILTER_ARCH:_TARGET_CPU_FEATURE.
+  list(GET _COMPONENTS 0 _FILTER_ARCH)
+  list(GET _COMPONENTS 1 _TARGET_CPU_FEATURES)
+  if (_FILTER_ARCH STREQUAL CMAKE_SYSTEM_PROCESSOR)
+    set(_ENABLED "TRUE" PARENT_SCOPE)
+    set(_TARGET_CPU_FEATURES "${_TARGET_CPU_FEATURES}" PARENT_SCOPE)
+    # TODO: the logic to generate the suffix from the list of target CPU features
+    # will need to be generalized when the lists have more than 1 element, when
+    # some features are being disabled by a "-" sign, and if some features involve
+    # any character that's not wanted in a cmake rule name.
+    # For now, let's just generate errors in those cases:
+    list(LENGTH _TARGET_CPU_FEATURES _NUM_TARGET_CPU_FEATURES)
+    if (NOT _NUM_TARGET_CPU_FEATURES EQUAL 1)
+      message(SEND_ERROR "Current limitation: \
+TARGET_CPU_FEATURES should have length 1")
+    endif()
+    string(SUBSTRING "${_TARGET_CPU_FEATURES}" 0 1 _TARGET_CPU_FEATURES_FIRST_CHAR)
+    string(SUBSTRING "${_TARGET_CPU_FEATURES}" 1 -1 _TARGET_CPU_FEATURES_AFTER_FIRST_CHAR)
+    if (NOT _TARGET_CPU_FEATURES_FIRST_CHAR STREQUAL "+")
+      message(SEND_ERROR "Current limitation: \
+TARGET_CPU_FEATURES should start with a +. Got: ${_TARGET_CPU_FEATURES}.")
+    endif()
+    if (NOT _TARGET_CPU_FEATURES_AFTER_FIRST_CHAR MATCHES "[a-zA-Z0-9_]+")
+      message(SEND_ERROR "Current limitation: \
+TARGET_CPU_FEATURES should match [a-zA-Z0-9]+ after the initial +. \
+Got: ${_TARGET_CPU_FEATURES}.")
+    endif()
+    # Generate the target cpu features suffix string with underscores ('_')
+    # separating the features.
+    string(REPLACE "+" "_" _TARGET_CPU_FEATURES_SUFFIX_LOCAL "${_TARGET_CPU_FEATURES}")
+    set(_TARGET_CPU_FEATURES_SUFFIX "${_TARGET_CPU_FEATURES_SUFFIX_LOCAL}" PARENT_SCOPE)
+    set(_TARGET_PASS_OPTIONS "arch=${_FILTER_ARCH} features=${_TARGET_CPU_FEATURES}" PARENT_SCOPE)
+  else()
+    set(_ENABLED "FALSE" PARENT_SCOPE)
+  endif()
+endfunction()
 
 # iree_check_test_suite()
 #
@@ -298,6 +415,12 @@ endfunction()
 #       if OPT_FLAGS is specified.
 #   OPT_FLAGS: If specified, source files are preprocessed with OPT_TOOL with
 #       these flags.
+#   TARGET_CPU_FEATURES_VARIANTS: list of target cpu features variants. Only used
+#       for drivers that vary based on the target CPU features. For each list
+#       element, a separate test is created, with the list element passed as
+#       argument to --iree-llvm-target-cpu-features. The special value "default"
+#       is interpreted as no --iree-llvm-target-cpu-features flag to work around
+#       corner cases with empty entries in CMake lists.
 function(iree_check_test_suite)
   if(NOT IREE_BUILD_TESTS)
     return()
@@ -307,7 +430,7 @@ function(iree_check_test_suite)
     _RULE
     ""
     "NAME"
-    "SRCS;TARGET_BACKENDS;DRIVERS;RUNNER_ARGS;LABELS"
+    "SRCS;TARGET_BACKENDS;DRIVERS;RUNNER_ARGS;LABELS;TARGET_CPU_FEATURES_VARIANTS"
     ${ARGN}
   )
 
@@ -328,26 +451,41 @@ function(iree_check_test_suite)
   foreach(_INDEX RANGE "${_MAX_INDEX}")
     list(GET _RULE_TARGET_BACKENDS ${_INDEX} _TARGET_BACKEND)
     list(GET _RULE_DRIVERS ${_INDEX} _DRIVER)
-    set(_SUITE_NAME "${_RULE_NAME}_${_TARGET_BACKEND}_${_DRIVER}")
-    iree_check_single_backend_test_suite(
-      NAME
-        ${_SUITE_NAME}
-      SRCS
-        ${_RULE_SRCS}
-      TARGET_BACKEND
-        ${_TARGET_BACKEND}
-      DRIVER
-        ${_DRIVER}
-      COMPILER_FLAGS
-        ${_RULE_COMPILER_FLAGS}
-      RUNNER_ARGS
-        ${_RULE_RUNNER_ARGS}
-      LABELS
-        ${_RULE_LABELS}
-      OPT_TOOL
-        ${_RULE_OPT_TOOL}
-      OPT_FLAGS
-        ${_RULE_OPT_FLAGS}
-    )
+    if (_TARGET_BACKEND STREQUAL "dylib-llvm-aot" AND _RULE_TARGET_CPU_FEATURES_VARIANTS)
+      set(_TARGET_CPU_FEATURES_VARIANTS "${_RULE_TARGET_CPU_FEATURES_VARIANTS}")
+    else()
+      set(_TARGET_CPU_FEATURES_VARIANTS "default")
+    endif()
+    foreach(_TARGET_CPU_FEATURES_LIST_ELEM IN LISTS _TARGET_CPU_FEATURES_VARIANTS)
+      process_target_cpu_features("${_TARGET_CPU_FEATURES_LIST_ELEM}" _ENABLED _TARGET_CPU_FEATURES _TARGET_CPU_FEATURES_SUFFIX _TARGET_PASS_OPTIONS)
+      string(REPLACE "#pass_options_variant#" "${_TARGET_PASS_OPTIONS}" _PROCESSED_OPT_FLAGS "${_RULE_OPT_FLAGS}")
+      string(REPLACE "#pass_options_variant#" "${_TARGET_PASS_OPTIONS}" _PROCESSED_COMPILER_FLAGS "${_RULE_COMPILER_FLAGS}")
+      if (NOT _ENABLED)
+        # The current entry is disabled on the target CPU architecture.
+        continue()
+      endif()
+      iree_check_single_backend_test_suite(
+        NAME
+          "${_RULE_NAME}_${_TARGET_BACKEND}_${_DRIVER}${_TARGET_CPU_FEATURES_SUFFIX}"
+        SRCS
+          ${_RULE_SRCS}
+        TARGET_BACKEND
+          ${_TARGET_BACKEND}
+        DRIVER
+          ${_DRIVER}
+        COMPILER_FLAGS
+          ${_PROCESSED_COMPILER_FLAGS}
+        RUNNER_ARGS
+          ${_RULE_RUNNER_ARGS}
+        LABELS
+          ${_RULE_LABELS}
+        OPT_TOOL
+          ${_RULE_OPT_TOOL}
+        OPT_FLAGS
+          ${_PROCESSED_OPT_FLAGS}
+        TARGET_CPU_FEATURES
+          ${_TARGET_CPU_FEATURES}
+      )
+    endforeach()
   endforeach()
 endfunction()

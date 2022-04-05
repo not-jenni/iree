@@ -11,32 +11,34 @@ package(
 )
 
 cc_library(
-    name = "IREEVM",
-    srcs = [
-        "IREEVM.cpp",
-    ],
-    hdrs = ["IREEVM.h"],
+    name = "HALExecutable",
+    srcs = ["HALExecutable.cpp"],
+    hdrs = ["HALExecutable.h"],
     deps = [
-        "//iree/compiler/Bindings/Native/Transforms",
-        "//iree/compiler/Bindings/TFLite/Transforms",
-        "//iree/compiler/Dialect/Flow/IR",
-        "//iree/compiler/Dialect/Flow/Transforms",
-        "//iree/compiler/Dialect/HAL/Conversion/HALToVM",
         "//iree/compiler/Dialect/HAL/Target",
         "//iree/compiler/Dialect/HAL/Transforms",
-        "//iree/compiler/Dialect/Util/Transforms",
-        "//iree/compiler/Dialect/VM/Conversion",
-        "//iree/compiler/Dialect/VM/Conversion/StandardToVM",
-        "//iree/compiler/Dialect/VM/Target/Bytecode",
-        "//iree/compiler/Dialect/VM/Transforms",
-        "//iree/compiler/InputConversion/Common",
-        "//iree/compiler/InputConversion/MHLO",
-        "//iree/compiler/InputConversion/TOSA",
         "//iree/compiler/Utils",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:Translation",
+    ],
+)
+
+cc_library(
+    name = "IREEVM",
+    srcs = ["IREEVM.cpp"],
+    hdrs = ["IREEVM.h"],
+    deps = [
+        "//iree/compiler/ConstEval",
+        "//iree/compiler/Dialect/Flow/IR",
+        "//iree/compiler/Dialect/HAL/Target",
+        "//iree/compiler/Dialect/VM/Target/C",
+        "//iree/compiler/Pipelines",
+        "//iree/compiler/Pipelines:Options",
+        "//iree/compiler/Utils",
+        "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Translation",
     ],
 )

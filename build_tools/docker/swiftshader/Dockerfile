@@ -4,25 +4,21 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-FROM gcr.io/iree-oss/cmake@sha256:37ddc553262f28a4c290eb3ccda5e50ef1115209fbb62a44a85165e7b6f7d514 AS install-swiftshader
+FROM gcr.io/iree-oss/base@sha256:7f448eb27d25642aaf033652fe2aec34165c7547f60f71384b4192d3937bede3 AS install-swiftshader
 WORKDIR /install-swiftshader
 
 RUN apt-get update && apt-get install -y git
 
-ARG SWIFTSHADER_COMMIT=755b78dc66b2362621a78b6964a9df3af94e960c
+ARG SWIFTSHADER_COMMIT=57eca9df5dc56d290f662ace7481ed758618d559
 
-# zlib is needed for compiling SwiftShader.
-RUN apt-get update && apt-get install -y zlib1g-dev
+# zlib and xcb/shm.h are needed for compiling SwiftShader.
+RUN apt-get update && apt-get install -y zlib1g-dev libxcb-shm0-dev
+
 RUN git clone https://github.com/google/swiftshader
 RUN cd swiftshader && git checkout "${SWIFTSHADER_COMMIT?}" && cd ..
 # Only build SwiftShader Vulkan ICD.
 RUN cmake -S swiftshader/ -B build-swiftshader/ \
            -GNinja \
-           -DSWIFTSHADER_BUILD_VULKAN=ON \
-           -DSWIFTSHADER_BUILD_EGL=OFF \
-           -DSWIFTSHADER_BUILD_GLESv2=OFF \
-           -DSWIFTSHADER_BUILD_GLES_CM=OFF \
-           -DSWIFTSHADER_BUILD_PVR=OFF \
            -DSWIFTSHADER_BUILD_TESTS=OFF
 RUN cmake --build build-swiftshader/ \
            --config Release \
@@ -33,5 +29,8 @@ RUN cp -rf build-swiftshader/Linux /swiftshader
 RUN echo "${SWIFTSHADER_COMMIT?}" > /swiftshader/git-commit
 
 # Ubuntu 18.04
-FROM ubuntu@sha256:fd25e706f3dea2a5ff705dbc3353cf37f08307798f3e360a13e9385840f73fb3 AS final
+FROM gcr.io/iree-oss/base@sha256:7f448eb27d25642aaf033652fe2aec34165c7547f60f71384b4192d3937bede3 AS final
 COPY --from=install-swiftshader /swiftshader /swiftshader
+
+# Set VK_ICD_FILENAMES so Vulkan loader can find the SwiftShader ICD.
+ENV VK_ICD_FILENAMES /swiftshader/vk_swiftshader_icd.json

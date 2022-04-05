@@ -5,60 +5,58 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 // A example of static library loading in IREE. See the README.md for more info.
-// Note: this demo requires artifacts from iree-translate before it will run.
-
-#include <stdio.h>
+// Note: this demo requires artifacts from iree-compile before it will run.
 
 #include "iree/hal/local/loaders/static_library_loader.h"
-#include "iree/hal/local/task_device.h"
+#include "iree/hal/local/sync_device.h"
 #include "iree/modules/hal/module.h"
 #include "iree/runtime/api.h"
-#include "iree/samples/static_library/simple_mul_c.h"
-#include "iree/task/api.h"
-#include "iree/vm/bytecode_module.h"
 
-// Compiled static library module here to avoid IO:
-#include "iree/samples/static_library/simple_mul.h"
+extern const iree_hal_executable_library_header_t**
+simple_mul_dispatch_0_library_query(
+    iree_hal_executable_library_version_t max_version,
+    const iree_hal_executable_environment_v0_t* environment);
+// A function to create the bytecode or C module.
+extern iree_status_t create_module(iree_vm_module_t** module);
+
+extern void print_success();
 
 // A function to create the HAL device from the different backend targets.
 // The HAL device is returned based on the implementation, and it must be
 // released by the caller.
-iree_status_t create_device_with_static_loader(iree_hal_device_t** device) {
-  iree_status_t status = iree_ok_status();
-
+iree_status_t create_device_with_static_loader(iree_allocator_t host_allocator,
+                                               iree_hal_device_t** out_device) {
   // Set paramters for the device created in the next step.
-  iree_hal_task_device_params_t params;
-  iree_hal_task_device_params_initialize(&params);
+  iree_hal_sync_device_params_t params;
+  iree_hal_sync_device_params_initialize(&params);
 
-  // Load the statically embedded library
-  const iree_hal_executable_library_header_t** static_library =
-      simple_mul_dispatch_0_library_query(
-          IREE_HAL_EXECUTABLE_LIBRARY_LATEST_VERSION, /*reserved=*/NULL);
-  const iree_hal_executable_library_header_t** libraries[1] = {static_library};
-
+  // Register the statically linked executable library.
+  const iree_hal_executable_library_query_fn_t libraries[] = {
+      simple_mul_dispatch_0_library_query,
+  };
   iree_hal_executable_loader_t* library_loader = NULL;
-  if (iree_status_is_ok(status)) {
-    status = iree_hal_static_library_loader_create(
-        IREE_ARRAYSIZE(libraries), libraries,
-        iree_hal_executable_import_provider_null(), iree_allocator_system(),
-        &library_loader);
-  }
+  iree_status_t status = iree_hal_static_library_loader_create(
+      IREE_ARRAYSIZE(libraries), libraries,
+      iree_hal_executable_import_provider_null(), host_allocator,
+      &library_loader);
 
-  iree_task_executor_t* executor = NULL;
+  // Use the default host allocator for buffer allocations.
+  iree_string_view_t identifier = iree_make_cstring_view("sync");
+  iree_hal_allocator_t* device_allocator = NULL;
   if (iree_status_is_ok(status)) {
-    status = iree_task_executor_create_from_flags(iree_allocator_system(),
-                                                  &executor);
+    status = iree_hal_allocator_create_heap(identifier, host_allocator,
+                                            host_allocator, &device_allocator);
   }
 
   // Create the device and release the executor and loader afterwards.
   if (iree_status_is_ok(status)) {
-    status = iree_hal_task_device_create(iree_make_cstring_view("dylib"),
-                                         &params, executor, 1, &library_loader,
-                                         iree_allocator_system(), device);
+    status = iree_hal_sync_device_create(
+        identifier, &params, /*loader_count=*/1, &library_loader,
+        device_allocator, host_allocator, out_device);
   }
-  iree_task_executor_release(executor);
-  iree_hal_executable_loader_release(library_loader);
 
+  iree_hal_allocator_release(device_allocator);
+  iree_hal_executable_loader_release(library_loader);
   return status;
 }
 
@@ -80,7 +78,7 @@ iree_status_t Run() {
   // Create dylib device with static loader.
   iree_hal_device_t* device = NULL;
   if (iree_status_is_ok(status)) {
-    status = create_device_with_static_loader(&device);
+    status = create_device_with_static_loader(iree_allocator_system(), &device);
   }
 
   // Session configuration (one per loaded module to hold module state).
@@ -94,18 +92,14 @@ iree_status_t Run() {
   }
 
   // Load bytecode module from the embedded data. Append to the session.
-  const struct iree_file_toc_t* module_file_toc =
-      iree_samples_static_library_simple_mul_create();
-  iree_const_byte_span_t module_data =
-      iree_make_const_byte_span(module_file_toc->data, module_file_toc->size);
-  iree_vm_module_t* bytecode_module = NULL;
+  iree_vm_module_t* module = NULL;
+
   if (iree_status_is_ok(status)) {
-    status = iree_vm_bytecode_module_create(module_data, iree_allocator_null(),
-                                            iree_allocator_system(),
-                                            &bytecode_module);
+    status = create_module(&module);
   }
+
   if (iree_status_is_ok(status)) {
-    status = iree_runtime_session_append_module(session, bytecode_module);
+    status = iree_runtime_session_append_module(session, module);
   }
 
   // Lookup the entry point function call.
@@ -125,22 +119,28 @@ iree_status_t Run() {
   float kFloat4[] = {4.0f, 4.0f, 4.0f, 4.0f};
   float kFloat2[] = {2.0f, 2.0f, 2.0f, 2.0f};
 
-  iree_hal_memory_type_t input_memory_type =
-      IREE_HAL_MEMORY_TYPE_HOST_LOCAL | IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE;
   if (iree_status_is_ok(status)) {
-    status = iree_hal_buffer_view_clone_heap_buffer(
+    status = iree_hal_buffer_view_allocate_buffer(
         iree_hal_device_allocator(device), shape, IREE_ARRAYSIZE(shape),
         IREE_HAL_ELEMENT_TYPE_FLOAT_32, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
-        input_memory_type, IREE_HAL_BUFFER_USAGE_ALL,
+        (iree_hal_buffer_params_t){
+            .type = IREE_HAL_MEMORY_TYPE_HOST_LOCAL |
+                    IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE,
+            .usage = IREE_HAL_BUFFER_USAGE_ALL,
+        },
         iree_make_const_byte_span((void*)kFloat4,
                                   sizeof(float) * kElementCount),
         &arg0_buffer_view);
   }
   if (iree_status_is_ok(status)) {
-    status = iree_hal_buffer_view_clone_heap_buffer(
+    status = iree_hal_buffer_view_allocate_buffer(
         iree_hal_device_allocator(device), shape, IREE_ARRAYSIZE(shape),
         IREE_HAL_ELEMENT_TYPE_FLOAT_32, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
-        input_memory_type, IREE_HAL_BUFFER_USAGE_ALL,
+        (iree_hal_buffer_params_t){
+            .type = IREE_HAL_MEMORY_TYPE_HOST_LOCAL |
+                    IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE,
+            .usage = IREE_HAL_BUFFER_USAGE_ALL,
+        },
         iree_make_const_byte_span((void*)kFloat2,
                                   sizeof(float) * kElementCount),
         &arg1_buffer_view);
@@ -172,31 +172,23 @@ iree_status_t Run() {
   }
 
   // Read back the results and ensure we got the right values.
-  iree_hal_buffer_mapping_t mapped_memory;
-  memset(&mapped_memory, 0, sizeof(mapped_memory));
+  float results[] = {0.0f, 0.0f, 0.0f, 0.0f};
   if (iree_status_is_ok(status)) {
-    status = iree_hal_buffer_map_range(
-        iree_hal_buffer_view_buffer(ret_buffer_view),
-        IREE_HAL_MEMORY_ACCESS_READ, 0, IREE_WHOLE_BUFFER, &mapped_memory);
+    status = iree_hal_device_transfer_d2h(
+        device, iree_hal_buffer_view_buffer(ret_buffer_view), 0, results,
+        sizeof(results), IREE_HAL_TRANSFER_BUFFER_FLAG_DEFAULT,
+        iree_infinite_timeout());
   }
   if (iree_status_is_ok(status)) {
-    if (mapped_memory.contents.data_length / sizeof(float) != kElementCount) {
-      status = iree_make_status(IREE_STATUS_UNKNOWN,
-                                "result does not match element count ");
-    }
-  }
-  if (iree_status_is_ok(status)) {
-    const float* data = (const float*)mapped_memory.contents.data;
-    for (iree_host_size_t i = 0;
-         i < mapped_memory.contents.data_length / sizeof(float); ++i) {
-      if (data[i] != 8.0f) {
+    for (iree_host_size_t i = 0; i < IREE_ARRAYSIZE(results); ++i) {
+      if (results[i] != 8.0f) {
         status = iree_make_status(IREE_STATUS_UNKNOWN, "result mismatches");
+        break;
       }
     }
   }
 
   // Cleanup call and buffers.
-  iree_hal_buffer_unmap_range(&mapped_memory);
   iree_hal_buffer_view_release(ret_buffer_view);
   iree_runtime_call_deinitialize(&call);
 
@@ -204,6 +196,7 @@ iree_status_t Run() {
   iree_hal_device_release(device);
   iree_runtime_session_release(session);
   iree_runtime_instance_release(instance);
+  iree_vm_module_release(module);
 
   return status;
 }
@@ -215,6 +208,6 @@ int main() {
     iree_status_free(result);
     return -1;
   }
-  printf("static_library_run passed\n");
+  print_success();
   return 0;
 }

@@ -7,7 +7,7 @@
 #include "iree/compiler/Dialect/Util/IR/ClosureOpUtils.h"
 
 #include "iree/compiler/Dialect/Util/IR/UtilTypes.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -126,7 +126,7 @@ static bool isConstantSmall(arith::ConstantOp constantOp) {
   // constants or inlining megabytes.
   static constexpr int kMaxInlinedConstantBytes = 256;
 
-  auto constantValueAttr = constantOp.value();
+  auto constantValueAttr = constantOp.getValue();
   auto constantType = constantOp.getType();
   if (constantValueAttr.isa<SplatElementsAttr>()) {
     // Splats are always small and can often have special handling when we
@@ -137,7 +137,8 @@ static bool isConstantSmall(arith::ConstantOp constantOp) {
     // Smallish constants are worth moving inside.
     auto shapedType = constantType.cast<ShapedType>();
     uint64_t estimatedByteLength =
-        (shapedType.getNumElements() * shapedType.getElementTypeBitWidth()) / 8;
+        shapedType.getNumElements() *
+        getRoundedElementByteWidth(shapedType.getElementType());
     return denseAttr.isSplat() ||
            estimatedByteLength <= kMaxInlinedConstantBytes;
   } else if (constantType.isIntOrIndexOrFloat()) {

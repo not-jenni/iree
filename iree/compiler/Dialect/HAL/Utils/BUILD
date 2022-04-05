@@ -13,19 +13,18 @@ package(
 cc_library(
     name = "Utils",
     srcs = [
-        "TypeUtils.cpp",
+        "InferCustomKernelsTargetInfoFromParent.cpp",
     ],
     hdrs = [
         "DeviceSwitchBuilder.h",
-        "TypeUtils.h",
+        "InferCustomKernelsTargetInfoFromParent.h",
     ],
     deps = [
         "//iree/compiler/Dialect/HAL/IR",
-        "//iree/compiler/Dialect/Shape/IR",
-        "//iree/compiler/Dialect/Util/IR",
+        "//iree/compiler/Utils",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Support",
         "@llvm-project//mlir:Transforms",
     ],

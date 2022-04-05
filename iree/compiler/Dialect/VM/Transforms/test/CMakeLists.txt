@@ -15,12 +15,13 @@ iree_lit_test_suite(
     lit
   SRCS
     "deduplicate_rodata.mlir"
+    "drop_empty_module_initializers.mlir"
     "global_initialization.mlir"
     "hoist_inlined_rodata.mlir"
     "ordinal_allocation.mlir"
     "sink_defining_ops.mlir"
-  DATA
-    iree::tools::IreeFileCheck
+  TOOLS
+    FileCheck
     iree::tools::iree-opt
 )
 

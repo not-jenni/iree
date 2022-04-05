@@ -15,6 +15,7 @@
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Pass/AnalysisManager.h"
 #include "mlir/Support/LLVM.h"
 
 namespace mlir {
@@ -119,6 +120,9 @@ class Explorer {
   // been specified.
   void initialize();
 
+  // Returns a cached analysis manager for the root op.
+  AnalysisManager getAnalysisManager() { return analysisManager; }
+
   // Cached information about a global variable.
   struct GlobalInfo {
     // Global variable definition.
@@ -131,6 +135,9 @@ class Explorer {
     SmallVector<Operation *> uses;
   };
 
+  // Gets analyzed global information for the given global operation.
+  const GlobalInfo *getGlobalInfo(IREE::Util::GlobalOp globalOp);
+
   // Queries memoized information about a global variable, returning nullptr if
   // not found.
   const GlobalInfo *queryGlobalInfoFrom(StringRef globalName, Operation *from);
@@ -142,7 +149,7 @@ class Explorer {
   // Conservative: returns true if value usage cannot be tracked.
   //
   // Example:
-  //  func @root(%arg0: index) -> index {
+  //  func.func @root(%arg0: index) -> index {
   //    %0 = some.region(%arg0 as %innerArg : index) -> index {
   //      %1 = some.tied_op(%innerArg) : (index) -> %innerArg
   //      yield %1 : index
@@ -209,6 +216,12 @@ class Explorer {
                                Block::BlockArgListType args)>
           fn);
 
+  // Walks all successors of |branchOp| and provides the successor block
+  // argument corresponding to the given branch |operandIdx|.
+  TraversalResult walkOutgoingBranchOperandArguments(
+      mlir::BranchOpInterface branchOp, unsigned operandIdx,
+      std::function<WalkResult(Block *targetBlock, BlockArgument arg)> fn);
+
   // Walks all potential defining ops of |value|.
   // The defining ops may come from any part of the program. There may be
   // multiple defining ops in cases of arguments that may come from multiple
@@ -218,12 +231,12 @@ class Explorer {
   // only a partial walk could be performed due to incomplete information.
   //
   // Example:
-  //  func @root(%arg0: index) -> index
+  //  func.func @root(%arg0: index) -> index
   //    %0 = producer.a %arg0 : index
   //    %1 = call @some_user(%0) : (index) -> index
   //    return %1 : index
   //  }
-  //  func @some_user(%arg0: index) -> index {
+  //  func.func @some_user(%arg0: index) -> index {
   //    %2 = producer.b %arg0 : index
   //    return %2 : index
   //  }
@@ -241,12 +254,12 @@ class Explorer {
   // if only a partial walk could be performed due to incomplete information.
   //
   // Example:
-  //  func @root(%arg0: index) -> index
+  //  func.func @root(%arg0: index) -> index
   //    %0 = producer.a %arg0 : index
   //    %1 = call @some_user(%0) : (index) -> index
   //    return %1 : index
   //  }
-  //  func @some_user(%arg0: index) -> index {
+  //  func.func @some_user(%arg0: index) -> index {
   //    %2 = producer.b %arg0 : index
   //    return %2 : index
   //  }
@@ -288,6 +301,7 @@ class Explorer {
   DenseMap<OperationName, TraversalAction> opActions;
 
   DenseMap<Operation *, GlobalInfo> globalInfos;
+  ModuleAnalysisManager analysisManager;
 };
 
 }  // namespace iree_compiler

@@ -7,7 +7,7 @@
 #include "iree/compiler/Dialect/VM/Conversion/StandardToVM/ConvertStandardToVM.h"
 #include "iree/compiler/Dialect/VM/Conversion/TypeConverter.h"
 #include "iree/compiler/Dialect/VM/IR/VMDialect.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 
@@ -36,13 +36,13 @@ class ConvertStandardToVMTestPass
   void runOnOperation() override {
     ConversionTarget target(getContext());
     target.addLegalDialect<IREE::VM::VMDialect>();
-    target.addIllegalDialect<StandardOpsDialect,
-                             mlir::arith::ArithmeticDialect>();
+    target
+        .addIllegalDialect<func::FuncDialect, mlir::arith::ArithmeticDialect>();
 
     IREE::VM::TypeConverter typeConverter(
-        IREE::VM::getTargetOptionsFromFlags());
+        IREE::VM::TargetOptions::FromFlags::get());
 
-    OwningRewritePatternList patterns(&getContext());
+    RewritePatternSet patterns(&getContext());
     populateStandardToVMPatterns(&getContext(), typeConverter, patterns);
 
     // NOTE: we allow other dialects besides just VM during this pass as we are

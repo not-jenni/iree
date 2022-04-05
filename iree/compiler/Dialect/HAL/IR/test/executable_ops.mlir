@@ -1,27 +1,21 @@
-// RUN: iree-opt -split-input-file %s | IreeFileCheck %s
+// RUN: iree-opt -split-input-file %s | FileCheck %s
+
 
 #executable_target_format = #hal.executable.target<"backend", "format">
-
 // CHECK-LABEL: @ex
 hal.executable @ex {
   // CHECK: hal.executable.variant public @backend, target = #executable_target_format
   hal.executable.variant @backend, target = #executable_target_format {
-    // CHECK-DAG: hal.executable.entry_point public @entry0 attributes {
-    // CHECK-SAME:     interface = @interface
-    // CHECK-SAME:     ordinal = 0 : index
+    // CHECK-DAG: hal.executable.entry_point public @entry0 ordinal(0) layout(#executable_layout) {
     // CHECK-SAME:     workgroup_size = [4 : index, 1 : index, 1 : index]
-    hal.executable.entry_point @entry0 attributes {
-      interface = @interface,
-      ordinal = 0 : index,
+    hal.executable.entry_point @entry0 ordinal(0) layout(#hal.executable.layout<push_constants = 0, sets = [
+      #hal.descriptor_set.layout<0, bindings = [
+        #hal.descriptor_set.binding<0, storage_buffer>,
+        #hal.descriptor_set.binding<1, storage_buffer>
+      ]>
+    ]>) {
       workgroup_size = [4 : index, 1 : index, 1 : index]
     }
-  }
-  // CHECK-DAG: hal.interface public @interface
-  hal.interface @interface {
-    // CHECK-NEXT: hal.interface.binding public @s0b0, set=0, binding=0, type="StorageBuffer", access="Read"
-    hal.interface.binding @s0b0, set=0, binding=0, type="StorageBuffer", access="Read"
-    // CHECK-NEXT: hal.interface.binding public @s0b1, set=0, binding=1, type="StorageBuffer", access="Read|Write"
-    hal.interface.binding @s0b1, set=0, binding=1, type="StorageBuffer", access="Read|Write"
   }
   // CHECK: hal.executable.binary
   hal.executable.binary @backend_binary attributes {
@@ -40,25 +34,19 @@ hal.executable @ex {
 hal.executable @ex_with_workgroup_count_region {
   // CHECK: hal.executable.variant public @backend, target = #executable_target_format
   hal.executable.variant @backend, target = #executable_target_format {
-    // CHECK-DAG: hal.executable.entry_point public @entry0 attributes {
-    // CHECK-SAME:     interface = @interface
-    // CHECK-SAME:     ordinal = 0 : index
+    // CHECK-DAG: hal.executable.entry_point public @entry0 ordinal(0) layout(#executable_layout) {
     // CHECK-SAME:     workgroup_size = [4 : index, 1 : index, 1 : index]
-    hal.executable.entry_point @entry0 attributes {
-      interface = @interface,
-      ordinal = 0 : index,
+    hal.executable.entry_point @entry0 ordinal(0) layout(#hal.executable.layout<push_constants = 0, sets = [
+      #hal.descriptor_set.layout<0, bindings = [
+        #hal.descriptor_set.binding<0, storage_buffer>,
+        #hal.descriptor_set.binding<1, storage_buffer>
+      ]>
+    ]>) {
       workgroup_size = [4 : index, 1 : index, 1 : index]
     } {
     ^bb0(%arg0: index, %arg1: index, %arg2: index):
       hal.return %arg0, %arg1, %arg2 : index, index, index
     }
-  }
-  // CHECK-DAG: hal.interface public @interface
-  hal.interface @interface {
-    // CHECK-NEXT: hal.interface.binding public @s0b0, set=0, binding=0, type="StorageBuffer", access="Read"
-    hal.interface.binding @s0b0, set=0, binding=0, type="StorageBuffer", access="Read"
-    // CHECK-NEXT: hal.interface.binding public @s0b1, set=0, binding=1, type="StorageBuffer", access="Read|Write"
-    hal.interface.binding @s0b1, set=0, binding=1, type="StorageBuffer", access="Read|Write"
   }
   // CHECK: hal.executable.binary
   hal.executable.binary @backend_binary attributes {
@@ -75,7 +63,7 @@ hal.executable @ex_with_workgroup_count_region {
 // CHECK-SAME: %[[DEVICE:.+]]: !hal.device,
 // CHECK-SAME: %[[LAYOUT0:.+]]: !hal.executable_layout,
 // CHECK-SAME: %[[LAYOUT1:.+]]: !hal.executable_layout
-func @executable_create(%device: !hal.device,
+func.func @executable_create(%device: !hal.device,
                         %layout0: !hal.executable_layout,
                         %layout1: !hal.executable_layout) {
   //      CHECK: = hal.executable.create
@@ -94,7 +82,7 @@ func @executable_create(%device: !hal.device,
 // CHECK-SAME: %[[DEVICE:.+]]: !hal.device,
 // CHECK-SAME: %[[LAYOUT0:.+]]: !hal.descriptor_set_layout,
 // CHECK-SAME: %[[LAYOUT1:.+]]: !hal.descriptor_set_layout
-func @executable_layout_create(%device: !hal.device,
+func.func @executable_layout_create(%device: !hal.device,
                                %layout0: !hal.descriptor_set_layout,
                                %layout1: !hal.descriptor_set_layout) {
   // CHECK: hal.executable_layout.create

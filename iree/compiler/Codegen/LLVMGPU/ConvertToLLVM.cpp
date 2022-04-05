@@ -13,16 +13,81 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/Passes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
-#include "mlir/Dialect/Vector/VectorOps.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir {
 namespace iree_compiler {
+
+void ConvertToDynamicSharedMemory(ModuleOp moduleOp) {
+  // Collect all the adressOfOps to static shared memory globals.
+  SmallVector<LLVM::AddressOfOp> addressOfOps;
+  moduleOp.walk([&](LLVM::AddressOfOp addressOfOp) {
+    // Check that the global associated with this addressOfOp has shared memory
+    // space.
+    if (addressOfOp.getGlobal().getAddrSpace() == 3)
+      addressOfOps.push_back(addressOfOp);
+  });
+  if (addressOfOps.size() == 0) return;
+  OpBuilder builder(moduleOp);
+  builder.setInsertionPoint(&moduleOp.front());
+  auto type =
+      LLVM::LLVMArrayType::get(IntegerType::get(builder.getContext(), 8), 0);
+  LLVM::GlobalOp global = builder.create<LLVM::GlobalOp>(
+      moduleOp.getLoc(), type, /*isConstant=*/false, LLVM::Linkage::External,
+      "__dynamic_shared_memory__", Attribute(),
+      /*alignment=*/16, /*addr_space=*/3);
+  uint32_t numberOfBytes = 0;
+  // Replace the addressOfOps with correctly offseted pointers to dynamic
+  // shared memory.
+  llvm::SmallDenseMap<LLVM::GlobalOp, uint32_t> globalMemoryOffsetMap;
+  for (auto addressOfOpsIt : llvm::enumerate(addressOfOps)) {
+    uint32_t offset = 0;
+    auto addressOfOp = addressOfOpsIt.value();
+    auto globalOp = addressOfOp.getGlobal();
+    if (globalMemoryOffsetMap.count(globalOp)) {
+      offset = globalMemoryOffsetMap[globalOp];
+    } else {
+      offset = numberOfBytes;
+      globalMemoryOffsetMap[globalOp] = offset;
+      auto thisarray = globalOp.getType();
+      DataLayout dataLayout = DataLayout::closest(addressOfOp);
+      numberOfBytes += dataLayout.getTypeSizeInBits(thisarray) / 8;
+    }
+    auto loc = addressOfOp.getLoc();
+    builder.setInsertionPoint(addressOfOp);
+    LLVM::AddressOfOp globalPtr =
+        builder.create<LLVM::AddressOfOp>(loc, global);
+    Value zero = builder.create<LLVM::ConstantOp>(
+        loc, IntegerType::get(builder.getContext(), 64),
+        builder.getI64IntegerAttr(0));
+    Value offsetValue = builder.create<LLVM::ConstantOp>(
+        loc, IntegerType::get(builder.getContext(), 64),
+        builder.getI64IntegerAttr(offset));
+    Value shiftedPtr = builder.create<LLVM::GEPOp>(
+        loc, globalPtr.getType(), globalPtr, ValueRange({zero, offsetValue}));
+    Value castPtr = builder.create<LLVM::BitcastOp>(
+        loc,
+        LLVM::LLVMPointerType::get(globalOp.getType(), global.getAddrSpace()),
+        shiftedPtr);
+    addressOfOp.replaceAllUsesWith(castPtr);
+    addressOfOp.erase();
+  }
+  // Add the amount of shared memory required as an attribute.
+  auto variantOp = moduleOp->getParentOfType<IREE::HAL::ExecutableVariantOp>();
+  if (variantOp != nullptr) {
+    for (auto entryPointOp :
+         variantOp.getOps<IREE::HAL::ExecutableEntryPointOp>()) {
+      entryPointOp->setAttr(entryPointOp.workgroup_local_memoryAttrName(),
+                            builder.getIndexAttr(numberOfBytes));
+    }
+  }
+}
 
 namespace {
 
@@ -69,12 +134,14 @@ struct ConvertSharedMemAllocOp : public OpRewritePattern<memref::AllocOp> {
                                 PatternRewriter &rewriter) const override {
     if (allocOp.getType().getMemorySpaceAsInt() != 3) return failure();
     ArrayRef<int64_t> shape = allocOp.getType().getShape();
-    if (llvm::any_of(
-            shape, [](int64_t dim) { return dim == ShapedType::kDynamicSize; }))
+    if (llvm::any_of(shape, [](int64_t dim) {
+          return dim == ShapedType::kDynamicSize;
+        })) {
       return failure();
+    }
     // In CUDA workgroup memory is represented by a global variable.
     MemRefType allocType = allocOp.getType();
-    auto funcOp = allocOp->getParentOfType<FuncOp>();
+    auto funcOp = allocOp->getParentOfType<func::FuncOp>();
     auto moduleOp = funcOp->getParentOfType<ModuleOp>();
     SymbolTable symbolTable(moduleOp);
     OpBuilder::InsertionGuard guard(rewriter);
@@ -102,12 +169,17 @@ class TestLLVMGPULegalizeOpPass
     registry.insert<vector::VectorDialect>();
   }
   void runOnOperation() override {
-    OwningRewritePatternList patterns(&getContext());
+    RewritePatternSet patterns(&getContext());
     populateScalarizeMathOps(patterns);
     populateConvertSharedMemoryAllocOps(patterns);
-    (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+    if (failed(applyPatternsAndFoldGreedily(getOperation(),
+                                            std::move(patterns)))) {
+      return signalPassFailure();
+    }
   }
 };
+
+using SetBinding = std::pair<APInt, APInt>;
 
 /// Convention with the HAL side to pass kernel arguments.
 /// The bindings are ordered based on binding set and binding index then
@@ -116,33 +188,20 @@ class TestLLVMGPULegalizeOpPass
 /// InterfaceBindingOp and kernel argument index.
 /// For instance if the kernel has (set, bindings) A(0, 1), B(1, 5), C(0, 6) it
 /// will return the mapping [A, 0], [C, 1], [B, 2]
-static llvm::SmallDenseMap<Operation *, size_t> getKernelArgMapping(
-    Operation *func) {
-  llvm::SmallDenseMap<Operation *, size_t> mapBindingArgIndex;
-  llvm::SmallVector<IREE::HAL::InterfaceBindingOp> bindingUsed;
-  Operation *symbolTableOp = SymbolTable::getNearestSymbolTable(func);
-  SymbolTable::walkSymbolTables(symbolTableOp, true, [&](Operation *op, bool) {
-    if (auto interface = dyn_cast<IREE::HAL::InterfaceOp>(op)) {
-      interface.walk([&](Operation *symbolOp) {
-        if (auto binding = dyn_cast<IREE::HAL::InterfaceBindingOp>(symbolOp)) {
-          bindingUsed.push_back(binding);
-        }
-      });
-    }
+static llvm::SmallDenseMap<SetBinding, size_t> getKernelArgMapping(
+    Operation *funcOp) {
+  llvm::SetVector<SetBinding> usedBindingSet;
+  funcOp->walk([&](IREE::HAL::InterfaceBindingSubspanOp subspanOp) {
+    usedBindingSet.insert(SetBinding(subspanOp.set(), subspanOp.binding()));
   });
-
-  std::sort(bindingUsed.begin(), bindingUsed.end(),
-            [](IREE::HAL::InterfaceBindingOp bindingA,
-               IREE::HAL::InterfaceBindingOp bindingB) {
-              uint64_t bindingAIndex = bindingA.binding().getZExtValue();
-              uint64_t bindingASet = bindingA.set().getZExtValue();
-              uint64_t bindingBIndex = bindingB.binding().getZExtValue();
-              uint64_t bindingBSet = bindingB.set().getZExtValue();
-              if (bindingASet == bindingBSet)
-                return bindingAIndex < bindingBIndex;
-              return bindingASet < bindingBSet;
+  auto sparseBindings = usedBindingSet.takeVector();
+  std::sort(sparseBindings.begin(), sparseBindings.end(),
+            [](SetBinding lhs, SetBinding rhs) {
+              if (lhs.first == rhs.first) return lhs.second.ult(rhs.second);
+              return lhs.first.ult(rhs.first);
             });
-  for (auto binding : llvm::enumerate(bindingUsed)) {
+  llvm::SmallDenseMap<SetBinding, size_t> mapBindingArgIndex;
+  for (auto binding : llvm::enumerate(sparseBindings)) {
     mapBindingArgIndex[binding.value()] = binding.index();
   }
   return mapBindingArgIndex;
@@ -151,13 +210,13 @@ static llvm::SmallDenseMap<Operation *, size_t> getKernelArgMapping(
 class ConvertFunc : public ConvertToLLVMPattern {
  public:
   explicit ConvertFunc(MLIRContext *context, LLVMTypeConverter &converter)
-      : ConvertToLLVMPattern(mlir::FuncOp::getOperationName(), context,
+      : ConvertToLLVMPattern(mlir::func::FuncOp::getOperationName(), context,
                              converter, 100) {}
   LogicalResult matchAndRewrite(
       Operation *op, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
-    auto funcOp = cast<FuncOp>(op);
-    FunctionType fnType = funcOp.getType();
+    auto funcOp = cast<func::FuncOp>(op);
+    FunctionType fnType = funcOp.getFunctionType();
     (void)fnType;
     if (!funcOp.isPublic()) return failure();
 
@@ -165,35 +224,34 @@ class ConvertFunc : public ConvertToLLVMPattern {
     assert(fnType.getNumInputs() == 0 && fnType.getNumResults() == 0);
 
     TypeConverter::SignatureConversion signatureConverter(/*numOrigInputs=*/0);
-    llvm::SmallDenseMap<Operation *, size_t> argMapping =
-        getKernelArgMapping(funcOp);
+    auto argMapping = getKernelArgMapping(funcOp);
     // There may be dead symbols, we pick i32 pointer as default argument type.
     SmallVector<Type, 8> llvmInputTypes(
         argMapping.size(), LLVM::LLVMPointerType::get(rewriter.getI32Type()));
-    funcOp.walk([&](IREE::HAL::InterfaceBindingSubspanOp input) {
-      auto memrefType = input.getType().cast<MemRefType>();
+    funcOp.walk([&](IREE::HAL::InterfaceBindingSubspanOp subspanOp) {
+      auto memrefType = subspanOp.getType().cast<MemRefType>();
       Type elType = memrefType.getElementType();
       auto llvmType =
           LLVM::LLVMPointerType::get(elType, memrefType.getMemorySpaceAsInt());
-      IREE::HAL::InterfaceBindingOp binding = input.queryBindingOp();
-      llvmInputTypes[argMapping[binding]] = llvmType;
+      llvmInputTypes[argMapping[SetBinding(subspanOp.set(),
+                                           subspanOp.binding())]] = llvmType;
     });
     // As a convention with HAL, push constants are appended as kernel arguments
     // after all the binding inputs.
     uint64_t numConstants = 0;
-    funcOp.walk([&](IREE::HAL::InterfaceLoadConstantOp constant) {
+    funcOp.walk([&](IREE::HAL::InterfaceConstantLoadOp constantOp) {
       numConstants =
-          std::max(constant.offset().getZExtValue() + 1, numConstants);
+          std::max(constantOp.index().getZExtValue() + 1, numConstants);
     });
     llvmInputTypes.resize(argMapping.size() + numConstants,
                           rewriter.getI32Type());
-    signatureConverter.addInputs(llvmInputTypes);
+    if (!llvmInputTypes.empty()) signatureConverter.addInputs(llvmInputTypes);
 
     // Construct newFunc with all attributes except return type & symbol name.
     SmallVector<NamedAttribute, 4> funcAttrs;
     for (auto attr : funcOp->getAttrs()) {
-      if (attr.first == SymbolTable::getSymbolAttrName() ||
-          attr.first == mlir::function_like_impl::getTypeAttrName()) {
+      if (attr.getName() == SymbolTable::getSymbolAttrName() ||
+          attr.getName() == mlir::function_interface_impl::getTypeAttrName()) {
         continue;
       }
       funcAttrs.push_back(attr);
@@ -210,18 +268,19 @@ class ConvertFunc : public ConvertToLLVMPattern {
     rewriter.inlineRegionBefore(funcOp.getBody(), newFuncOp.getBody(),
                                 newFuncOp.end());
     if (failed(rewriter.convertRegionTypes(&newFuncOp.getBody(), *typeConverter,
-                                           &signatureConverter)))
+                                           &signatureConverter))) {
       return failure();
+    }
 
     rewriter.eraseOp(funcOp);
     return success();
   }
 };
 
-class ConvertIREEBindingOp : public ConvertToLLVMPattern {
+class ConvertIREEBindingSubspanOp : public ConvertToLLVMPattern {
  public:
-  explicit ConvertIREEBindingOp(MLIRContext *context,
-                                LLVMTypeConverter &converter)
+  explicit ConvertIREEBindingSubspanOp(MLIRContext *context,
+                                       LLVMTypeConverter &converter)
       : ConvertToLLVMPattern(
             IREE::HAL::InterfaceBindingSubspanOp::getOperationName(), context,
             converter) {}
@@ -233,19 +292,17 @@ class ConvertIREEBindingOp : public ConvertToLLVMPattern {
     if (!llvmFuncOp) return failure();
     assert(llvmFuncOp.getNumArguments() > 0);
 
-    llvm::SmallDenseMap<Operation *, size_t> argMapping =
-        getKernelArgMapping(llvmFuncOp);
+    auto argMapping = getKernelArgMapping(llvmFuncOp);
     Location loc = op->getLoc();
-    auto ireeBindingOp = cast<IREE::HAL::InterfaceBindingSubspanOp>(op);
+    auto subspanOp = cast<IREE::HAL::InterfaceBindingSubspanOp>(op);
     IREE::HAL::InterfaceBindingSubspanOpAdaptor adaptor(
         operands, op->getAttrDictionary());
     MemRefType memrefType =
-        ireeBindingOp.getResult().getType().dyn_cast<MemRefType>();
-    IREE::HAL::InterfaceBindingOp binding = ireeBindingOp.queryBindingOp();
-    mlir::BlockArgument llvmBufferArg =
-        llvmFuncOp.getArgument(argMapping[binding]);
+        subspanOp.getResult().getType().dyn_cast<MemRefType>();
+    mlir::BlockArgument llvmBufferArg = llvmFuncOp.getArgument(
+        argMapping[SetBinding(subspanOp.set(), subspanOp.binding())]);
     // As a convention with HAL all the kernel argument pointers are 16Bytes
-    // aliigned.
+    // aligned.
     llvmFuncOp.setArgAttr(llvmBufferArg.getArgNumber(),
                           LLVM::LLVMDialect::getAlignAttrName(),
                           rewriter.getI32IntegerAttr(16));
@@ -257,9 +314,11 @@ class ConvertIREEBindingOp : public ConvertToLLVMPattern {
                                        .cast<LLVM::LLVMPointerType>()
                                        .getAddressSpace()),
         llvmBufferArg);
-    llvmBufferBasei8Ptr = rewriter.create<LLVM::GEPOp>(
-        loc, llvmBufferBasei8Ptr.getType(), llvmBufferBasei8Ptr,
-        adaptor.byte_offset());
+    if (adaptor.byte_offset()) {
+      llvmBufferBasei8Ptr = rewriter.create<LLVM::GEPOp>(
+          loc, llvmBufferBasei8Ptr.getType(), llvmBufferBasei8Ptr,
+          adaptor.byte_offset());
+    }
     auto llvmPtrType = LLVM::LLVMPointerType::get(
         memrefType.getElementType(), memrefType.getMemorySpaceAsInt());
     Value llvmBufferBasePtr =
@@ -313,7 +372,7 @@ class ConvertIREEConstantOp : public ConvertToLLVMPattern {
   explicit ConvertIREEConstantOp(MLIRContext *context,
                                  LLVMTypeConverter &converter)
       : ConvertToLLVMPattern(
-            IREE::HAL::InterfaceLoadConstantOp::getOperationName(), context,
+            IREE::HAL::InterfaceConstantLoadOp::getOperationName(), context,
             converter) {}
   LogicalResult matchAndRewrite(
       Operation *op, ArrayRef<Value> operands,
@@ -323,11 +382,10 @@ class ConvertIREEConstantOp : public ConvertToLLVMPattern {
     if (!llvmFuncOp) return failure();
     assert(llvmFuncOp.getNumArguments() > 0);
 
-    llvm::SmallDenseMap<Operation *, size_t> argMapping =
-        getKernelArgMapping(llvmFuncOp);
-    auto ireeConstantOp = cast<IREE::HAL::InterfaceLoadConstantOp>(op);
+    auto argMapping = getKernelArgMapping(llvmFuncOp);
+    auto ireeConstantOp = cast<IREE::HAL::InterfaceConstantLoadOp>(op);
     mlir::BlockArgument llvmBufferArg = llvmFuncOp.getArgument(
-        argMapping.size() + ireeConstantOp.offset().getZExtValue());
+        argMapping.size() + ireeConstantOp.index().getZExtValue());
     assert(llvmBufferArg.getType().isInteger(32));
     Type dstType = getTypeConverter()->convertType(ireeConstantOp.getType());
     rewriter.replaceOpWithNewOp<LLVM::ZExtOp>(op, dstType, llvmBufferArg);
@@ -336,36 +394,19 @@ class ConvertIREEConstantOp : public ConvertToLLVMPattern {
 };
 
 /// A pattern to convert hal.interface.workgroup.id/count/size into
-/// corresponding NVVM/ROCDL ops.
-template <typename InterfaceOpTy, typename XOp, typename YOp, typename ZOp>
+/// corresponding GPU ops.
+template <typename InterfaceOpTy, typename NewOpTy>
 struct HALInterfaceWorkgroupOpsConverter final
     : public OpConversionPattern<InterfaceOpTy> {
   using OpConversionPattern<InterfaceOpTy>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
-      InterfaceOpTy op, ArrayRef<Value> operands,
+      InterfaceOpTy op, typename InterfaceOpTy::Adaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    Type i32Type = rewriter.getI32Type();
-    Value newOp;
     int32_t index = static_cast<int32_t>(op.dimension().getSExtValue());
-    switch (index) {
-      case 0:
-        newOp = rewriter.create<XOp>(loc, i32Type);
-        break;
-      case 1:
-        newOp = rewriter.create<YOp>(loc, i32Type);
-        break;
-      case 2:
-        newOp = rewriter.create<ZOp>(loc, i32Type);
-        break;
-      default:
-        return failure();
-    }
-
-    newOp =
-        rewriter.create<LLVM::SExtOp>(loc, rewriter.getIntegerType(64), newOp);
-    rewriter.replaceOp(op, {newOp});
+    std::array<gpu::Dimension, 3> dimAttr{gpu::Dimension::x, gpu::Dimension::y,
+                                          gpu::Dimension::z};
+    rewriter.replaceOpWithNewOp<NewOpTy>(op, op.getType(), dimAttr[index]);
     return success();
   }
 };
@@ -373,32 +414,11 @@ struct HALInterfaceWorkgroupOpsConverter final
 }  // anonymous namespace
 
 void populateLLVMConversionPatterns(MLIRContext *context,
-                                    OwningRewritePatternList &patterns,
-                                    LLVMTypeConverter &converter,
-                                    bool useROCM) {
-  patterns.insert<ConvertFunc, ConvertIREEBindingOp, ConvertIREEConstantOp>(
-      context, converter);
-  if (useROCM) {
-    patterns.insert<HALInterfaceWorkgroupOpsConverter<
-                        IREE::HAL::InterfaceWorkgroupIDOp, ROCDL::BlockIdXOp,
-                        ROCDL::BlockIdYOp, ROCDL::BlockIdZOp>,
-                    HALInterfaceWorkgroupOpsConverter<
-                        IREE::HAL::InterfaceWorkgroupCountOp, ROCDL::GridDimXOp,
-                        ROCDL::GridDimYOp, ROCDL::GridDimZOp>,
-                    HALInterfaceWorkgroupOpsConverter<
-                        IREE::HAL::InterfaceWorkgroupSizeOp, ROCDL::BlockDimXOp,
-                        ROCDL::BlockDimYOp, ROCDL::BlockDimZOp>>(context);
-  } else {
-    patterns.insert<HALInterfaceWorkgroupOpsConverter<
-                        IREE::HAL::InterfaceWorkgroupIDOp, NVVM::BlockIdXOp,
-                        NVVM::BlockIdYOp, NVVM::BlockIdZOp>,
-                    HALInterfaceWorkgroupOpsConverter<
-                        IREE::HAL::InterfaceWorkgroupCountOp, NVVM::GridDimXOp,
-                        NVVM::GridDimYOp, NVVM::GridDimZOp>,
-                    HALInterfaceWorkgroupOpsConverter<
-                        IREE::HAL::InterfaceWorkgroupSizeOp, NVVM::BlockDimXOp,
-                        NVVM::BlockDimYOp, NVVM::BlockDimZOp>>(context);
-  }
+                                    RewritePatternSet &patterns,
+                                    LLVMTypeConverter &converter) {
+  patterns
+      .insert<ConvertFunc, ConvertIREEBindingSubspanOp, ConvertIREEConstantOp>(
+          context, converter);
 }
 
 void populateScalarizeMathOps(RewritePatternSet &patterns) {
@@ -416,6 +436,14 @@ void populateScalarizeMathOps(RewritePatternSet &patterns) {
 
 void populateConvertSharedMemoryAllocOps(RewritePatternSet &patterns) {
   patterns.add<ConvertSharedMemAllocOp>(patterns.getContext());
+}
+
+void populateLowerHALInterfaceOp(RewritePatternSet &patterns) {
+  patterns.insert<HALInterfaceWorkgroupOpsConverter<
+                      IREE::HAL::InterfaceWorkgroupIDOp, gpu::BlockIdOp>,
+                  HALInterfaceWorkgroupOpsConverter<
+                      IREE::HAL::InterfaceWorkgroupCountOp, gpu::GridDimOp>>(
+      patterns.getContext());
 }
 
 std::unique_ptr<OperationPass<ModuleOp>> createTestLLVMGPULegalizePass() {

@@ -41,7 +41,6 @@ iree_cc_library(
   DEPS
     iree::base
     iree::base::cc
-    iree::base::internal::file_io
     iree::base::internal::span
     iree::base::logging
     iree::base::tracing
@@ -52,6 +51,8 @@ iree_cc_library(
     iree::vm::cc
   PUBLIC
 )
+
+if(${IREE_HAL_DRIVER_VMVX})
 
 iree_cc_test(
   NAME
@@ -70,6 +71,8 @@ iree_cc_test(
     iree::vm::cc
 )
 
+endif()
+
 iree_cc_library(
   NAME
     yaml_util
@@ -80,6 +83,19 @@ iree_cc_library(
   DEPS
     iree::base
     yaml
+  PUBLIC
+)
+
+iree_cc_library(
+  NAME
+    cpu_features
+  HDRS
+    "cpu_features.h"
+  SRCS
+    "cpu_features.c"
+  DEPS
+    iree::base
+    iree::base::target_platform
   PUBLIC
 )
 

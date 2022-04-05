@@ -1,19 +1,18 @@
 // TODO(antiagainst): Fix promotion to workgroup and enable the test.
-// RUN: iree-opt -split-input-file -pass-pipeline='hal.executable(hal.executable.variant(builtin.module(builtin.func(iree-spirv-tile-and-distribute,iree-spirv-vectorize,canonicalize,cse))))' | IreeFileCheck %s
+// RUN: iree-opt -split-input-file -pass-pipeline='hal.executable(hal.executable.variant(builtin.module(func.func(iree-spirv-tile-and-distribute,iree-spirv-vectorize,canonicalize,cse))))' | FileCheck %s
 
 hal.executable private @matmul_promote_workgroup_memory  {
   hal.interface @io {
-    hal.interface.binding @s0b0_ro_external, set=0, binding=0, type="StorageBuffer", access="Read"
-    hal.interface.binding @s0b1_ro_external, set=0, binding=1, type="StorageBuffer", access="Read"
-    hal.interface.binding @s0b2_xw_external, set=0, binding=2, type="StorageBuffer", access="Write|Discard"
+    hal.interface.binding @s0b0_ro_external, set=0, binding=0, type="StorageBuffer"
+    hal.interface.binding @s0b1_ro_external, set=0, binding=1, type="StorageBuffer"
+    hal.interface.binding @s0b2_xw_external, set=0, binding=2, type="StorageBuffer"
   }
-  hal.executable.variant @vulkan, target = #hal.executable.target<"vulkan-spirv", "vulkan-spirv-fb"> {
-    hal.executable.entry_point @matmul_promote_workgroup_memory attributes {
-      interface = @io, ordinal = 0 : index,
+  hal.executable.variant @vulkan, target = <"vulkan-spirv", "vulkan-spirv-fb"> {
+    hal.executable.entry_point @matmul_promote_workgroup_memory interface(@io) {
       workgroup_size = [16: index, 8: index, 1: index]
     }
     builtin.module {
-      func @matmul_promote_workgroup_memory() {
+      func.func @matmul_promote_workgroup_memory() {
         %c32 = arith.constant 32 : index
         %c50 = arith.constant 50 : index
         %c0 = arith.constant 0 : index
@@ -36,16 +35,16 @@ hal.executable private @matmul_promote_workgroup_memory  {
           %15 = affine.apply affine_map<()[s0] -> (s0 * 16)>()[%3]
           %16 = affine.min affine_map<()[s0] -> (16, s0 * -16 + 75)>()[%3]
           %17 = memref.subview %2[%13, %15] [%14, %16] [1, 1] : memref<25x75xf32> to memref<?x?xf32, affine_map<(d0, d1)[s0] -> (d0 * 75 + s0 + d1)>>
-          linalg.matmul {__internal_linalg_transform__ = "workgroup", lowering.config = {tileSizes = [[8, 16, 32], [], [1, 1, 0]]}}
+          linalg.matmul {__internal_linalg_transform__ = "workgroup", lowering_config = {tileSizes = [[8, 16, 32], [], [1, 1, 0]]}}
             ins(%8, %12 : memref<?x?xf32, affine_map<(d0, d1)[s0] -> (d0 * 50 + s0 + d1)>>, memref<?x?xf32, affine_map<(d0, d1)[s0] -> (d0 * 75 + s0 + d1)>>)
             outs(%17 : memref<?x?xf32, affine_map<(d0, d1)[s0] -> (d0 * 75 + s0 + d1)>>)
         }
         return
       }
       hal.interface private @io  {
-        hal.interface.binding @s0b0_ro_external, set=0, binding=0, type="StorageBuffer", access="Read"
-        hal.interface.binding @s0b1_ro_external, set=0, binding=1, type="StorageBuffer", access="Read"
-        hal.interface.binding @s0b2_xw_external, set=0, binding=2, type="StorageBuffer", access="Write|Discard"
+        hal.interface.binding @s0b0_ro_external, set=0, binding=0, type="StorageBuffer"
+        hal.interface.binding @s0b1_ro_external, set=0, binding=1, type="StorageBuffer"
+        hal.interface.binding @s0b2_xw_external, set=0, binding=2, type="StorageBuffer"
       }
     }
   }
@@ -63,9 +62,9 @@ hal.executable private @matmul_promote_workgroup_memory  {
 //       CHECK:     %[[RET0SV:.+]] = memref.subview %[[RET0]]
 //       CHECK:     %[[SUBVIEW1:.+]] = memref.subview %[[ALLOC1]]
 //       CHECK:     %[[SUBVIEW2:.+]] = memref.subview %[[ALLOC2]]
-//       CHECK:     linalg.copy(%[[ARG0SV]], %[[SUBVIEW1]])
+//       CHECK:     linalg.generic(%[[ARG0SV]], %[[SUBVIEW1]])
 //  CHECK-SAME:       "copy_to_workgroup_memory"
-//       CHECK:     linalg.copy(%[[ARG1SV]], %[[SUBVIEW2]])
+//       CHECK:     linalg.generic(%[[ARG1SV]], %[[SUBVIEW2]])
 //  CHECK-SAME:       "copy_to_workgroup_memory"
 //       CHECK:     scf.for
 //       CHECK:       scf.for
@@ -77,17 +76,16 @@ hal.executable private @matmul_promote_workgroup_memory  {
 
 hal.executable private @conv_promote_workgroup_memory  {
   hal.interface @io {
-    hal.interface.binding @s0b0_ro_external, set=0, binding=0, type="StorageBuffer", access="Read"
-    hal.interface.binding @s0b1_ro_external, set=0, binding=1, type="StorageBuffer", access="Read"
-    hal.interface.binding @s0b2_xw_external, set=0, binding=2, type="StorageBuffer", access="Write|Discard"
+    hal.interface.binding @s0b0_ro_external, set=0, binding=0, type="StorageBuffer"
+    hal.interface.binding @s0b1_ro_external, set=0, binding=1, type="StorageBuffer"
+    hal.interface.binding @s0b2_xw_external, set=0, binding=2, type="StorageBuffer"
   }
-  hal.executable.variant @vulkan, target = #hal.executable.target<"vulkan-spirv", "vulkan-spirv-fb"> {
-    hal.executable.entry_point @conv_promote_workgroup_memory attributes {
-      interface = @io, ordinal = 0 : index,
+  hal.executable.variant @vulkan, target = <"vulkan-spirv", "vulkan-spirv-fb"> {
+    hal.executable.entry_point @conv_promote_workgroup_memory interface(@io) {
       workgroup_size = [32: index, 4: index, 1: index]
     }
     builtin.module {
-      func @conv_promote_workgroup_memory() {
+      func.func @conv_promote_workgroup_memory() {
         %c0 = arith.constant 0 : index
         %0 = hal.interface.binding.subspan @io::@s0b0_ro_external[%c0] : memref<3x4x6x14xf32>
         %1 = hal.interface.binding.subspan @io::@s0b1_ro_external[%c0] : memref<2x15x14x6xf32>
@@ -105,15 +103,15 @@ hal.executable private @conv_promote_workgroup_memory  {
         %13 = affine.apply affine_map<()[s0] -> (s0 * 32)>()[%3]
         %14 = affine.min affine_map<()[s0] -> (32, s0 * -32 + 11)>()[%3]
         %15 = memref.subview %2[%5, %11, %13, 0] [1, %12, %14, 14] [1, 1, 1, 1] : memref<2x13x11x14xf32> to memref<1x?x?x14xf32, affine_map<(d0, d1, d2, d3)[s0] -> (d0 * 2002 + s0 + d1 * 154 + d2 * 14 + d3)>>
-        linalg.conv_2d_nhwc_hwcf {__internal_linalg_transform__ = "workgroup", lowering.config = {tileSizes = [[0, 1, 4, 32], [], [0, 1, 1, 1]]}, dilations = dense<1> : vector<2xi64>, strides = dense<1> : vector<2xi64>}
+        linalg.conv_2d_nhwc_hwcf {__internal_linalg_transform__ = "workgroup", lowering_config = {tileSizes = [[0, 1, 4, 32], [], [0, 1, 1, 1]]}, dilations = dense<1> : vector<2xi64>, strides = dense<1> : vector<2xi64>}
           ins(%10, %0 : memref<1x?x?x6xf32, affine_map<(d0, d1, d2, d3)[s0] -> (d0 * 1260 + s0 + d1 * 84 + d2 * 6 + d3)>>, memref<3x4x6x14xf32>)
           outs(%15 : memref<1x?x?x14xf32, affine_map<(d0, d1, d2, d3)[s0] -> (d0 * 2002 + s0 + d1 * 154 + d2 * 14 + d3)>>)
         return
       }
       hal.interface private @io  {
-        hal.interface.binding @s0b0_ro_external, set=0, binding=0, type="StorageBuffer", access="Read"
-        hal.interface.binding @s0b1_ro_external, set=0, binding=1, type="StorageBuffer", access="Read"
-        hal.interface.binding @s0b2_xw_external, set=0, binding=2, type="StorageBuffer", access="Write|Discard"
+        hal.interface.binding @s0b0_ro_external, set=0, binding=0, type="StorageBuffer"
+        hal.interface.binding @s0b1_ro_external, set=0, binding=1, type="StorageBuffer"
+        hal.interface.binding @s0b2_xw_external, set=0, binding=2, type="StorageBuffer"
       }
     }
   }
@@ -127,7 +125,7 @@ hal.executable private @conv_promote_workgroup_memory  {
 //       CHECK:   %[[ARG1SV:.+]] = memref.subview %[[ARG1]]
 //       CHECK:   %[[RET0SV:.+]] = memref.subview %[[RET0]]
 //       CHECK:   %[[SUBVIEW1:.+]] = memref.subview %[[ALLOC1]]
-//       CHECK:   linalg.copy(%[[ARG1SV]], %[[SUBVIEW1]])
+//       CHECK:   linalg.generic(%[[ARG1SV]], %[[SUBVIEW1]])
 //  CHECK-SAME:      "copy_to_workgroup_memory"
 //       CHECK:   scf.for
 //       CHECK:     scf.for

@@ -8,21 +8,29 @@
 
 #include <cstdlib>
 
+#include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtDialect.h"
+#include "iree-dialects/Dialect/LinalgTransform/LinalgTransformOps.h"
 #include "iree/compiler/Codegen/Dialect/IREECodegenDialect.h"
 #include "iree/compiler/Codegen/Passes.h"
+#include "iree/compiler/Dialect/HAL/Target/LLVM/Builtins/Device.h"
+#include "iree/compiler/Dialect/HAL/Target/LLVM/Builtins/Musl.h"
 #include "iree/compiler/Dialect/HAL/Target/LLVM/LLVMIRPasses.h"
 #include "iree/compiler/Dialect/HAL/Target/LLVM/LibraryBuilder.h"
 #include "iree/compiler/Dialect/HAL/Target/LLVM/LinkerTool.h"
 #include "iree/compiler/Dialect/HAL/Target/LLVM/StaticLibraryGenerator.h"
-#include "iree/compiler/Dialect/HAL/Target/LLVM/librt/librt.h"
 #include "iree/compiler/Dialect/HAL/Target/TargetRegistry.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Linker/Linker.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/TargetSelect.h"
+#include "mlir/Dialect/ArmNeon/ArmNeonDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/PDL/IR/PDL.h"
+#include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 
@@ -98,6 +106,36 @@ static LogicalResult appendDebugDatabase(std::vector<int8_t> &baseFile,
   return success();
 }
 
+// Verifies builtin bitcode is loaded correctly and appends it to |linker|.
+//
+// Example:
+//  if (failed(linkBuiltinLibrary(loc, linker, linkerFlag, targetMachine,
+//  "libfoo", loadLibFoo(...))))
+static LogicalResult linkBuiltinLibrary(
+    Location loc, llvm::Linker &linker, llvm::Linker::Flags linkerFlag,
+    llvm::TargetMachine *targetMachine, StringRef name,
+    llvm::Expected<std::unique_ptr<llvm::Module>> bitcodeModuleValue) {
+  // Ensure the bitcode loaded correctly. It may fail if the LLVM version is
+  // incompatible.
+  if (!bitcodeModuleValue) {
+    return mlir::emitError(loc)
+           << "failed to parse " << name
+           << " bitcode: " << llvm::toString(bitcodeModuleValue.takeError())
+           << " (possible LLVM bitcode incompatibility?)";
+  }
+  auto bitcodeModule = std::move(bitcodeModuleValue.get());
+  bitcodeModule->setDataLayout(targetMachine->createDataLayout());
+  bitcodeModule->setTargetTriple(targetMachine->getTargetTriple().str());
+
+  // Link the bitcode into the base module. This will merge in any required
+  // symbols and override declarations that may exist.
+  if (linker.linkInModule(std::move(bitcodeModule), linkerFlag)) {
+    return mlir::emitError(loc) << "failed to link " << name << " bitcode";
+  }
+
+  return success();
+}
+
 class LLVMAOTTargetBackend final : public TargetBackend {
  public:
   explicit LLVMAOTTargetBackend(LLVMTargetOptions options)
@@ -111,7 +149,15 @@ class LLVMAOTTargetBackend final : public TargetBackend {
 
   void getDependentDialects(DialectRegistry &registry) const override {
     mlir::registerLLVMDialectTranslation(registry);
-    registry.insert<IREE::Codegen::IREECodegenDialect>();
+    // TODO: make inclusion of ArmNeon conditional?
+    // clang-format off
+    registry.insert<IREE::Codegen::IREECodegenDialect,
+                    IREE::LinalgExt::IREELinalgExtDialect,
+                    linalg::transform::LinalgTransformDialect,
+                    pdl::PDLDialect,
+                    pdl_interp::PDLInterpDialect,
+                    arm_neon::ArmNeonDialect>();
+    // clang-format on
   }
 
   IREE::HAL::DeviceTargetAttr getDefaultDeviceTarget(
@@ -119,7 +165,7 @@ class LLVMAOTTargetBackend final : public TargetBackend {
     Builder b(context);
     SmallVector<NamedAttribute> configItems;
 
-    configItems.emplace_back(b.getIdentifier("executable_targets"),
+    configItems.emplace_back(b.getStringAttr("executable_targets"),
                              getExecutableTargets(context));
 
     auto configAttr = b.getDictionaryAttr(configItems);
@@ -222,11 +268,11 @@ class LLVMAOTTargetBackend final : public TargetBackend {
 
     // Build the IREE HAL executable library metadata. The runtime uses this to
     // find the entry point functions and their information.
-    // TODO(benvanik): add a flag for this (adds a few KB/binary).
     LibraryBuilder::Mode libraryBuilderMode =
-        LibraryBuilder::Mode::INCLUDE_REFLECTION_ATTRS;
+        options_.debugSymbols ? LibraryBuilder::Mode::INCLUDE_REFLECTION_ATTRS
+                              : LibraryBuilder::Mode::NONE;
     LibraryBuilder libraryBuilder(llvmModule.get(), libraryBuilderMode,
-                                  LibraryBuilder::Version::V_0);
+                                  LibraryBuilder::Version::LATEST);
     switch (options_.sanitizerKind) {
       case SanitizerKind::kNone: {
         libraryBuilder.setSanitizerKind(LibraryBuilder::SanitizerKind::NONE);
@@ -238,13 +284,33 @@ class LLVMAOTTargetBackend final : public TargetBackend {
           function.addFnAttr(llvm::Attribute::SanitizeAddress);
         }
       } break;
+      case SanitizerKind::kThread: {
+        libraryBuilder.setSanitizerKind(LibraryBuilder::SanitizerKind::THREAD);
+        for (auto &function : llvmModule->getFunctionList()) {
+          function.addFnAttr(llvm::Attribute::SanitizeThread);
+        }
+      } break;
     }
+    auto align16 = llvm::Attribute::getWithAlignment(context, llvm::Align(16));
     for (auto entryPointOp :
          variantOp.getBlock().getOps<ExecutableEntryPointOp>()) {
       // Find the matching function in the LLVM module.
       auto *llvmFunc = llvmModule->getFunction(entryPointOp.getName());
       llvmFunc->setLinkage(llvm::GlobalValue::LinkageTypes::InternalLinkage);
       llvmFunc->setDSOLocal(true);
+
+      // Tag the function parameters in case they got removed during conversion.
+      // (%arg0: environment, %arg1: dispatch_state, %arg2: workgroup_state)
+      for (unsigned i = 0; i <= 2; ++i) {
+        llvmFunc->addParamAttr(
+            i, llvm::Attribute::getWithByRefType(
+                   context, llvmFunc->getArg(i)
+                                ->getType()
+                                ->getNonOpaquePointerElementType()));
+        llvmFunc->addParamAttr(i, llvm::Attribute::NonNull);
+        llvmFunc->addParamAttr(i, llvm::Attribute::NoAlias);
+        llvmFunc->addParamAttr(i, align16);
+      }
 
       // Optionally entry points may specify that they require workgroup local
       // memory. We fetch that value here and plumb it through so the runtime
@@ -271,25 +337,30 @@ class LLVMAOTTargetBackend final : public TargetBackend {
         llvm::GlobalValue::VisibilityTypes::DefaultVisibility);
     queryLibraryFunc->setLinkage(
         llvm::GlobalValue::LinkageTypes::ExternalLinkage);
+    queryLibraryFunc->setDSOLocal(false);
 
-    // Try to grab a linker tool based on the options (and target environment).
-    auto linkerTool = LinkerTool::getForTarget(targetTriple, options_);
-    if (!linkerTool) {
-      return mlir::emitError(variantOp.getLoc())
-             << "failed to find a target linker for the given target triple '"
-             << options_.targetTriple << "'";
+    // If linking dynamically, find a suitable linker tool and configure the
+    // module with any options that tool requires.
+    std::unique_ptr<LinkerTool> linkerTool;
+    if (!options_.linkStatic) {
+      // Grab a linker tool based on the options (and target environment).
+      linkerTool = LinkerTool::getForTarget(targetTriple, options_);
+      if (!linkerTool) {
+        return mlir::emitError(variantOp.getLoc())
+               << "failed to find a target linker for the given target triple '"
+               << options_.targetTriple << "'";
+      }
+
+      // Configure the module with any code generation options required later by
+      // linking (such as initializer functions).
+      if (failed(linkerTool->configureModule(llvmModule.get(),
+                                             {queryLibraryFunc}))) {
+        return variantOp.emitError()
+               << "failed to configure LLVM module for target linker";
+      }
     }
 
-    // Configure the module with any code generation options required later by
-    // linking (such as initializer functions).
-    if (failed(linkerTool->configureModule(llvmModule.get(),
-                                           {queryLibraryFunc}))) {
-      return variantOp.emitError()
-             << "failed to configure LLVM module for target linker";
-    }
-
-    // LLVM opt passes that perform code generation optimizations/transformation
-    // similar to what a frontend would do before passing to linking.
+    // Specialize the module to our target machine.
     auto targetMachine = createTargetMachine(options_);
     if (!targetMachine) {
       return mlir::emitError(variantOp.getLoc())
@@ -298,12 +369,64 @@ class LLVMAOTTargetBackend final : public TargetBackend {
     }
     llvmModule->setDataLayout(targetMachine->createDataLayout());
     llvmModule->setTargetTriple(targetMachine->getTargetTriple().str());
+
+    // Statically link libraries into our module.
+    // Note that if producing a static library then the symbols we add must be
+    // weak such that we don't trigger ODR issues.
+    llvm::Linker moduleLinker(*llvmModule);
+
+    llvm::Linker::Flags linkerFlag = llvm::Linker::OverrideFromSrc;
+    if (options_.linkStatic) linkerFlag = llvm::Linker::LinkOnlyNeeded;
+
+    if (failed(linkBuiltinLibrary(
+            variantOp.getLoc(), moduleLinker, linkerFlag, targetMachine.get(),
+            "libdevice", loadDeviceBitcode(targetMachine.get(), context)))) {
+      return mlir::emitError(variantOp.getLoc())
+             << "failed linking in builtin library for target triple '"
+             << options_.targetTriple << "'";
+    }
+    if (failed(linkBuiltinLibrary(
+            variantOp.getLoc(), moduleLinker, linkerFlag, targetMachine.get(),
+            "libmusl", loadMuslBitcode(targetMachine.get(), context)))) {
+      return mlir::emitError(variantOp.getLoc())
+             << "failed linking in builtin library for target triple '"
+             << options_.targetTriple << "'";
+    }
+
+    // Strip any compiler identifiers that may have snuck in. We let the linker
+    // tag the module.
+    auto *llvmIdent = llvmModule->getNamedMetadata("llvm.ident");
+    if (llvmIdent) llvmIdent->clearOperands();
+
+    // LLVM opt passes that perform code generation optimizations/transformation
+    // similar to what a frontend would do.
     if (failed(
             runLLVMIRPasses(options_, targetMachine.get(), llvmModule.get()))) {
       return variantOp.emitError()
              << "failed to run LLVM-IR opt passes for IREE::HAL::ExecutableOp "
                 "targeting '"
              << options_.targetTriple << "'";
+    }
+
+    // Fixup visibility from any symbols we may link in - we want to hide all
+    // but the query entry point.
+    for (auto &func : *llvmModule) {
+      if (&func == queryLibraryFunc) {
+        // Leave our library query function as public/external so that it is
+        // exported from shared objects and available for linking in static
+        // objects.
+        continue;
+      } else if (func.isDeclaration()) {
+        // Declarations must have their original visibility/linkage; they most
+        // often come from declared llvm builtin ops (llvm.memcpy/etc).
+        continue;
+      }
+      func.setDSOLocal(true);
+      func.setLinkage(llvm::GlobalValue::LinkageTypes::InternalLinkage);
+    }
+    for (auto &global : llvmModule->getGlobalList()) {
+      global.setDSOLocal(true);
+      global.setLinkage(llvm::GlobalValue::LinkageTypes::InternalLinkage);
     }
 
     SmallVector<Artifact> objectFiles;
@@ -318,7 +441,7 @@ class LLVMAOTTargetBackend final : public TargetBackend {
       // object file per library).
       std::string objectData;
       if (failed(runEmitObjFilePasses(targetMachine.get(), llvmModule.get(),
-                                      &objectData))) {
+                                      llvm::CGFT_ObjectFile, &objectData))) {
         return variantOp.emitError()
                << "failed to compile LLVM-IR module to an object file";
       }
@@ -330,53 +453,83 @@ class LLVMAOTTargetBackend final : public TargetBackend {
       objectFiles.push_back(std::move(objectFile));
     }
 
-    // Optionally append additional object files that provide functionality that
-    // may otherwise have been runtime-dynamic (like libc/libm calls).
-    // For now we only do this for embedded uses.
-    if (options_.linkEmbedded) {
-      if (failed(buildLibraryObjects(variantOp.getLoc(), targetMachine.get(),
-                                     objectFiles, context))) {
-        return variantOp.emitError() << "failed generating library objects";
-      }
-    }
-
-    // If we are keeping artifacts then let's also add the bitcode for easier
-    // debugging (vs just the binary object file).
+    // If we are keeping artifacts then let's also add the bitcode and
+    // assembly listing for easier debugging (vs just the binary object file).
     if (options_.keepLinkerArtifacts) {
-      auto bitcodeFile =
-          Artifact::createVariant(objectFiles.front().path, "bc");
-      auto &os = bitcodeFile.outputFile->os();
-      llvm::WriteBitcodeToFile(*llvmModule, os);
-      os.flush();
-      os.close();
-      bitcodeFile.outputFile->keep();
-    }
-
-    if (!options_.staticLibraryOutput.empty()) {
-      if (objectFiles.size() != 1) {
-        // Static library output only supports single object libraries.
+      std::string asmData;
+      if (failed(runEmitObjFilePasses(targetMachine.get(), llvmModule.get(),
+                                      llvm::CGFT_AssemblyFile, &asmData))) {
         return variantOp.emitError()
-               << "generating static libraries from "
-                  "multiple object files is not supported";
+               << "failed to compile LLVM-IR module to an assembly file";
       }
-
-      // Copy the static object file to the specified output along with
-      // generated header file.
-      const std::string &libraryPath = options_.staticLibraryOutput;
-      if (!outputStaticLibrary(libraryName, queryFunctionName, libraryPath,
-                               objectFiles[0].path)) {
-        return variantOp.emitError() << "static library generation failed";
+      {
+        auto asmFile = Artifact::createVariant(objectFiles.front().path, "s");
+        auto &os = asmFile.outputFile->os();
+        os << asmData;
+        os.flush();
+        os.close();
+        asmFile.outputFile->keep();
+      }
+      {
+        auto bitcodeFile =
+            Artifact::createVariant(objectFiles.front().path, "bc");
+        auto &os = bitcodeFile.outputFile->os();
+        llvm::WriteBitcodeToFile(*llvmModule, os);
+        os.flush();
+        os.close();
+        bitcodeFile.outputFile->keep();
       }
     }
+    if (options_.linkStatic) {
+      return serializeStaticLibraryExecutable(variantOp, executableBuilder,
+                                              libraryName, queryFunctionName,
+                                              objectFiles);
+    } else {
+      return serializeDynamicLibraryExecutable(variantOp, executableBuilder,
+                                               libraryName, objectFiles,
+                                               linkerTool.get());
+    }
+  }
 
+  LogicalResult serializeStaticLibraryExecutable(
+      IREE::HAL::ExecutableVariantOp variantOp, OpBuilder &executableBuilder,
+      const std::string &libraryName, const std::string &queryFunctionName,
+      const SmallVector<Artifact> &objectFiles) {
+    if (objectFiles.size() != 1) {
+      // Static library output only supports single object libraries.
+      return variantOp.emitError() << "generating static libraries from "
+                                      "multiple object files is not supported";
+    }
+
+    // Copy the static object file to the specified output along with
+    // generated header file.
+    if (!outputStaticLibrary(libraryName, queryFunctionName,
+                             options_.staticLibraryOutput,
+                             objectFiles[0].path)) {
+      return variantOp.emitError() << "static library generation failed";
+    }
+
+    // Embed the library name in the executable binary op. This informs the
+    // loader which static library to load for the target binary.
+    std::vector<uint8_t> libraryNameVector(libraryName.begin(),
+                                           libraryName.end());
+    executableBuilder.create<IREE::HAL::ExecutableBinaryOp>(
+        variantOp.getLoc(), variantOp.sym_name(), "static", libraryNameVector);
+
+    return success();
+  }
+
+  LogicalResult serializeDynamicLibraryExecutable(
+      IREE::HAL::ExecutableVariantOp variantOp, OpBuilder &executableBuilder,
+      const std::string &libraryName, const SmallVector<Artifact> &objectFiles,
+      LinkerTool *linkerTool) {
     // Link the generated object files into a dylib.
     auto linkArtifactsOr =
         linkerTool->linkDynamicLibrary(libraryName, objectFiles);
     if (!linkArtifactsOr.hasValue()) {
       return mlir::emitError(variantOp.getLoc())
-             << "failed to link executable and generate target dylib using "
-                "linker toolchain "
-             << linkerTool->getToolPath();
+             << "failed to link executable and generate target dylib (check "
+                "above for more specific error messages)";
     }
     auto &linkArtifacts = linkArtifactsOr.getValue();
     if (options_.keepLinkerArtifacts) {
@@ -389,15 +542,7 @@ class LLVMAOTTargetBackend final : public TargetBackend {
       }
     }
 
-    if (options_.linkStatic) {
-      // Embed the library name in the executable binary op. This informs the
-      // loader which static library to load for the target binary.
-      std::vector<uint8_t> libraryNameVector(libraryName.begin(),
-                                             libraryName.end());
-      executableBuilder.create<IREE::HAL::ExecutableBinaryOp>(
-          variantOp.getLoc(), variantOp.sym_name(), "static",
-          libraryNameVector);
-    } else if (options_.linkEmbedded) {
+    if (options_.linkEmbedded) {
       // Load the linked ELF file and pack into an attr.
       auto elfFile = linkArtifacts.libraryFile.read();
       if (!elfFile.hasValue()) {
@@ -444,6 +589,7 @@ class LLVMAOTTargetBackend final : public TargetBackend {
           variantOp.getLoc(), variantOp.sym_name(),
           variantOp.target().getFormat(), bufferAttr);
       const char *mimeType = nullptr;
+      llvm::Triple targetTriple(options_.targetTriple);
       switch (targetTriple.getObjectFormat()) {
         case llvm::Triple::ObjectFormatType::COFF:
           mimeType = "application/x-msdownload";
@@ -463,6 +609,7 @@ class LLVMAOTTargetBackend final : public TargetBackend {
       }
       binaryOp.mime_typeAttr(executableBuilder.getStringAttr(mimeType));
     }
+
     return success();
   }
 
@@ -542,8 +689,7 @@ class LLVMAOTTargetBackend final : public TargetBackend {
     // Add some configurations to the `hal.executable.target` attribute.
     SmallVector<NamedAttribute> config;
     auto addConfig = [&](StringRef name, Attribute value) {
-      config.emplace_back(
-          std::make_pair(Identifier::get(name, context), value));
+      config.emplace_back(StringAttr::get(context, name), value);
     };
 
     // Set target triple.
@@ -557,79 +703,13 @@ class LLVMAOTTargetBackend final : public TargetBackend {
     addConfig("native_vector_size",
               IntegerAttr::get(IndexType::get(context), config_.vectorSize));
 
+    // Set target CPU features.
+    addConfig("cpu_features",
+              StringAttr::get(context, options_.targetCPUFeatures));
+
     return IREE::HAL::ExecutableTargetAttr::get(
         context, StringAttr::get(context, "llvm"),
         StringAttr::get(context, format), DictionaryAttr::get(context, config));
-  }
-
-  static void overridePlatformGlobal(llvm::Module &module, StringRef globalName,
-                                     uint32_t newValue) {
-    // NOTE: the global will not be defined if it is not used in the module.
-    auto *globalValue = module.getNamedGlobal(globalName);
-    if (!globalValue) return;
-    globalValue->setLinkage(llvm::GlobalValue::PrivateLinkage);
-    globalValue->setDSOLocal(true);
-    globalValue->setConstant(true);
-    globalValue->setInitializer(llvm::ConstantInt::get(
-        globalValue->getValueType(), APInt(32, newValue)));
-  }
-
-  // Builds an object file for the librt embedded runtime library.
-  // This is done per link operation so that we can match the precise target
-  // configuration. Since we (mostly) link once per user-level compilation
-  // this is fine today. If in the future we invoke the compiler for thousands
-  // of modules we'd want to (carefully) cache this.
-  LogicalResult buildLibraryObjects(Location loc,
-                                    llvm::TargetMachine *targetMachine,
-                                    SmallVector<Artifact> &objectFiles,
-                                    llvm::LLVMContext &context) {
-    assert(!objectFiles.empty() && "libraries must come after the base object");
-
-    // Load the generic bitcode file contents.
-    llvm::MemoryBufferRef bitcodeBufferRef(
-        llvm::StringRef(iree_compiler_librt_create()->data,
-                        iree_compiler_librt_create()->size),
-        "librt.bc");
-    auto bitcodeModuleValue = llvm::parseBitcodeFile(bitcodeBufferRef, context);
-    if (!bitcodeModuleValue) {
-      return mlir::emitError(loc)
-             << "failed to parse librt bitcode: "
-             << llvm::toString(bitcodeModuleValue.takeError());
-    }
-    auto bitcodeModule = std::move(bitcodeModuleValue.get());
-    bitcodeModule->setDataLayout(targetMachine->createDataLayout());
-    bitcodeModule->setTargetTriple(targetMachine->getTargetTriple().str());
-
-    // Inject target-specific flags.
-    // TODO(benvanik): move this entire function to another file that can do
-    // more complex logic cleanly. This is just an example.
-    overridePlatformGlobal(*bitcodeModule, "librt_platform_example_flag", 0u);
-
-    // Run the LLVM passes to optimize it for the current target.
-    if (failed(runLLVMIRPasses(options_, targetMachine, bitcodeModule.get()))) {
-      return mlir::emitError(loc)
-             << "failed to run librt LLVM-IR opt passes targeting '"
-             << options_.targetTriple << "'";
-    }
-
-    // Emit an object file we can pass to the linker.
-    std::string objectData;
-    if (failed(runEmitObjFilePasses(targetMachine, bitcodeModule.get(),
-                                    &objectData))) {
-      return mlir::emitError(loc)
-             << "failed to compile librt LLVM-IR module to an object file";
-    }
-
-    // Write the object file to disk with a similar name to the base file.
-    auto objectFile =
-        Artifact::createVariant(objectFiles.front().path, ".librt.o");
-    auto &os = objectFile.outputFile->os();
-    os << objectData;
-    os.flush();
-    os.close();
-    objectFiles.push_back(std::move(objectFile));
-
-    return success();
   }
 
   void initConfiguration() {
@@ -667,9 +747,9 @@ class LLVMAOTTargetBackend final : public TargetBackend {
 
   LLVMTargetOptions options_;
 
-  // Configuration to be set on each `hal.executable.variant` that only depend
-  // on the `options_`.
-  struct ConfigurationValues {
+  // Additional target information besides that is contained in
+  // LLVMTargetOptions options_.
+  struct AdditionalConfigurationValues {
     std::string dataLayoutStr;
     int64_t vectorSize;
   } config_;
@@ -679,19 +759,51 @@ void registerLLVMAOTTargetBackends(
     std::function<LLVMTargetOptions()> queryOptions) {
   getLLVMTargetOptionsFromFlags();
 
-#define INIT_LLVM_TARGET(TargetName)        \
+// Dynamically do preprocessor dispatch to initialize only targets that we
+// care about if they are enabled. Unfortunately, the way the LLVM macros
+// for this are set up and the inability to do a conditional within a macro
+// means that we have to syntactically have a macro for every possible
+// target we care about. There are more robust ways to do this but they all
+// require build support, which is a pain to manage across platforms.
+//
+// See comments below.
+#define LLVM_INITIALIZE_GENERIC(TargetName) \
   LLVMInitialize##TargetName##Target();     \
   LLVMInitialize##TargetName##TargetMC();   \
   LLVMInitialize##TargetName##TargetInfo(); \
   LLVMInitialize##TargetName##AsmPrinter(); \
   LLVMInitialize##TargetName##AsmParser();
 
+// CPU targets that we care about and have hard-linked against are here.
+// They delegate to the generic initialize above. These must all be added
+// to the build file or you will get undefined symbol errors at link time.
+#define LLVM_INITIALIZE_TARGET_AArch64() LLVM_INITIALIZE_GENERIC(AArch64)
+#define LLVM_INITIALIZE_TARGET_ARM() LLVM_INITIALIZE_GENERIC(ARM)
+#define LLVM_INITIALIZE_TARGET_RISCV() LLVM_INITIALIZE_GENERIC(RISCV)
+#define LLVM_INITIALIZE_TARGET_X86() LLVM_INITIALIZE_GENERIC(X86)
+#define LLVM_INITIALIZE_TARGET_WebAssembly() \
+  LLVM_INITIALIZE_GENERIC(WebAssembly)
+
+// We must no-op the name of each target we don't care about. This is annoying,
+// but targets aren't created every day and isn't the end of the world. The
+// error messages when missing are quite clear and you just add a line here.
+#define LLVM_INITIALIZE_TARGET_AMDGPU()
+#define LLVM_INITIALIZE_TARGET_AVR()
+#define LLVM_INITIALIZE_TARGET_BPF()
+#define LLVM_INITIALIZE_TARGET_Hexagon()
+#define LLVM_INITIALIZE_TARGET_Lanai()
+#define LLVM_INITIALIZE_TARGET_Mips()
+#define LLVM_INITIALIZE_TARGET_MSP430()
+#define LLVM_INITIALIZE_TARGET_NVPTX()
+#define LLVM_INITIALIZE_TARGET_PowerPC()
+#define LLVM_INITIALIZE_TARGET_Sparc()
+#define LLVM_INITIALIZE_TARGET_SystemZ()
+#define LLVM_INITIALIZE_TARGET_XCore()
+
+#define LLVM_TARGET(TargetName) LLVM_INITIALIZE_TARGET_##TargetName()
+#include "llvm/Config/Targets.def"
+
   auto backendFactory = [=]() {
-    INIT_LLVM_TARGET(X86)
-    INIT_LLVM_TARGET(ARM)
-    INIT_LLVM_TARGET(AArch64)
-    INIT_LLVM_TARGET(RISCV)
-    INIT_LLVM_TARGET(WebAssembly)
     return std::make_shared<LLVMAOTTargetBackend>(queryOptions());
   };
 
@@ -704,8 +816,6 @@ void registerLLVMAOTTargetBackends(
   static TargetBackendRegistration registration2("dylib", backendFactory);
   static TargetBackendRegistration registration3("dylib-llvm-aot",
                                                  backendFactory);
-
-#undef INIT_LLVM_TARGET
 }
 
 }  // namespace HAL

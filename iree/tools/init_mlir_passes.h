@@ -44,9 +44,9 @@ inline void registerMlirPasses() {
   registerLoopCoalescingPass();
   registerLoopInvariantCodeMotionPass();
   registerAffineScalarReplacementPass();
-  registerParallelLoopCollapsingPass();
+  registerSCFParallelLoopCollapsingPass();
   registerPrintOpStatsPass();
-  registerViewOpGraphPassPass();
+  registerViewOpGraphPass();
   registerStripDebugInfoPass();
   registerSymbolDCEPass();
 
@@ -62,13 +62,16 @@ inline void registerMlirPasses() {
   // Linalg
   registerLinalgPasses();
 
+  // LLVM
+  registerConvertArmNeon2dToIntrPass();
+
   // MemRef
   memref::registerMemRefPasses();
 
   // SCF
   registerSCFParallelLoopFusionPass();
   registerSCFParallelLoopTilingPass();
-  registerSCFToStandardPass();
+  registerSCFToControlFlowPass();
 
   // Quant
   quant::registerQuantPasses();
@@ -79,7 +82,8 @@ inline void registerMlirPasses() {
   // SPIR-V
   spirv::registerSPIRVLowerABIAttributesPass();
   registerConvertGPUToSPIRVPass();
-  registerConvertStandardToSPIRVPass();
+  registerConvertControlFlowToSPIRVPass();
+  registerConvertFuncToSPIRVPass();
   registerConvertLinalgToSPIRVPass();
 
   // TOSA.

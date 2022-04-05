@@ -187,11 +187,10 @@ def VM_ImportInterface : OpInterface<"ImportInterface"> {
   ];
 }
 
-class VM_Op<string mnemonic, list<OpTrait> traits = []> :
+class VM_Op<string mnemonic, list<Trait> traits = []> :
     Op<VM_Dialect, mnemonic,
        !listconcat(traits, [VM_OpInterface])> {
-  let parser = [{ return parse$cppClass(parser, &result); }];
-  let printer = [{ return print$cppClass(p, *this); }];
+  let hasCustomAssemblyFormat = 1;
 
   list<VM_EncEncodeExpr> encoding = ?;
 }
@@ -214,7 +213,7 @@ def VM_GlobalOpInterface : OpInterface<"VMGlobalOp"> {
       auto storageType = $_self.getStorageType();
       assert(storageType.isIntOrFloat());
       assert(storageType.getIntOrFloatBitWidth() % 8 == 0);
-      return storageType.getIntOrFloatBitWidth() / 8;
+      return IREE::Util::getRoundedElementByteWidth(storageType);
     }]>,
     InterfaceMethod<[{}], "StringRef", "getSymbolName", (ins)>,
     InterfaceMethod<[{}], "bool", "isMutable", (ins)>,
@@ -369,14 +368,10 @@ def VM_PrimitiveType : AnyTypeOf<[
   FloatOfWidths<[16, 32, 64]>,
 ]>;
 
-class VM_ConstantIntegerValueAttr<I type> : Attr<
-    Or<[
-      SignlessIntegerAttrBase<type,
-                              type.bitwidth # "-bit integer value">.predicate,
-      SignlessIntElementsAttr<type.bitwidth>.predicate,
-    ]>> {
-  let storageType = "Attribute";
-  let returnType = "Attribute";
+class VM_ConstantIntegerValueAttr<I type> : SignlessIntegerAttrBase<type,
+                              type.bitwidth # "-bit integer value"> {
+  let storageType = "IntegerAttr";
+  let returnType = "IntegerAttr";
   let convertFromStorage = "$_self";
   let constBuilderCall = "$0";
 }

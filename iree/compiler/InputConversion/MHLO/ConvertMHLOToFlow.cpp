@@ -11,7 +11,7 @@
 #include "iree/compiler/Dialect/Flow/IR/FlowDialect.h"
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -19,6 +19,7 @@
 
 namespace mlir {
 namespace iree_compiler {
+namespace MHLO {
 
 namespace {
 
@@ -39,9 +40,10 @@ void setupDirectMHLOToFlowLegality(MLIRContext *context,
 }
 
 void populateMHLOToFlowPatterns(MLIRContext *context,
-                                OwningRewritePatternList &patterns) {
+                                RewritePatternSet &patterns) {
   patterns.insert<ConstOpLowering>(context);
 }
 
+}  // namespace MHLO
 }  // namespace iree_compiler
 }  // namespace mlir

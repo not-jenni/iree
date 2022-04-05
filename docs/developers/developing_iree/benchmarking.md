@@ -14,12 +14,12 @@ It measures timing for the whole process of invoking a function through the VM,
 including allocating and freeing output buffers. This is a high-level benchmark
 of an entire invocation flow. It provides a big picture view, but depends on
 many different variables, like an integration test. For finer-grained
-measurements more akin to unit tests, see [Microbenchmarks](#microbenchmarks).
+measurements more akin to unit tests, see [Executable Benchmarks](#executable-benchmarks).
 
 To use `iree-benchmark-module`, generate an IREE module for the target backend:
 
 ```shell
-$ bazel run //iree/tools:iree-translate -- \
+$ bazel run //iree/tools:iree-compile -- \
   -iree-mlir-to-vm-bytecode-module \
   -iree-hal-target-backends=vmvx \
   $PWD/iree/samples/models/simple_abs.mlir \
@@ -107,7 +107,7 @@ dispatch functions, generate an IREE module with the
 `-iree-flow-export-benchmark-funcs` flag set:
 
 ```shell
-$ build/iree/tools/iree-translate \
+$ build/iree/tools/iree-compile \
   -iree-input-type=mhlo \
   -iree-mlir-to-vm-bytecode-module \
   -iree-flow-export-benchmark-funcs \

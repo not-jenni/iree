@@ -10,7 +10,9 @@
 
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "iree/compiler/Dialect/VM/IR/VMOps.h"
-#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/Affine/Passes.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
@@ -22,12 +24,14 @@ namespace VM {
 
 void buildVMTransformPassPipeline(OpPassManager &passManager,
                                   TargetOptions targetOptions) {
-  passManager.addNestedPass<mlir::FuncOp>(createLoopCoalescingPass());
+  passManager.addNestedPass<mlir::func::FuncOp>(createLoopCoalescingPass());
   passManager.addNestedPass<IREE::Util::InitializerOp>(
       createLoopInvariantCodeMotionPass());
-  passManager.addNestedPass<mlir::FuncOp>(createLoopInvariantCodeMotionPass());
-  passManager.addNestedPass<IREE::Util::InitializerOp>(createLowerToCFGPass());
-  passManager.addNestedPass<mlir::FuncOp>(createLowerToCFGPass());
+  passManager.addNestedPass<mlir::func::FuncOp>(
+      createLoopInvariantCodeMotionPass());
+  passManager.addNestedPass<IREE::Util::InitializerOp>(
+      createConvertSCFToCFPass());
+  passManager.addNestedPass<mlir::func::FuncOp>(createConvertSCFToCFPass());
   passManager.addPass(createCanonicalizerPass());
   passManager.addPass(createCSEPass());
 
@@ -42,6 +46,12 @@ void buildVMTransformPassPipeline(OpPassManager &passManager,
   passManager.addPass(createCanonicalizerPass());
   passManager.addPass(createCSEPass());
 
+  // Now that we've inlined/canonicalized/etc the initializers we can remove
+  // them if they are empty to save a few bytes in the binary and avoid a
+  // runtime initialization call.
+  passManager.addNestedPass<IREE::VM::ModuleOp>(
+      createDropEmptyModuleInitializersPass());
+
   passManager.addPass(createSymbolDCEPass());
   if (targetOptions.optimizeForStackSize) {
     passManager.addNestedPass<IREE::VM::ModuleOp>(createSinkDefiningOpsPass());
@@ -53,7 +63,8 @@ void registerVMTransformPassPipeline() {
       "iree-vm-transformation-pipeline",
       "Runs the full IREE VM dialect transformation pipeline",
       [](OpPassManager &passManager) {
-        buildVMTransformPassPipeline(passManager, getTargetOptionsFromFlags());
+        buildVMTransformPassPipeline(passManager,
+                                     TargetOptions::FromFlags::get());
       });
 }
 

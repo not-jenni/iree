@@ -8,6 +8,7 @@
 # These are generally just wrappers around host heap memory and host threads.
 
 load("//iree:build_defs.oss.bzl", "iree_cmake_extra_content")
+load("//build_tools/bazel:cc_binary_benchmark.bzl", "cc_binary_benchmark")
 
 package(
     default_visibility = ["//visibility:public"],
@@ -16,18 +17,33 @@ package(
 )
 
 cc_library(
+    name = "executable_environment",
+    srcs = ["executable_environment.c"],
+    hdrs = ["executable_environment.h"],
+    deps = [
+        ":executable_library",
+        "//iree/base",
+        "//iree/base:tracing",
+        "//iree/base/internal:cpu",
+        "//iree/hal",
+    ],
+)
+
+cc_library(
     name = "executable_library",
     hdrs = ["executable_library.h"],
 )
 
-cc_test(
+cc_binary_benchmark(
     name = "executable_library_benchmark",
     srcs = ["executable_library_benchmark.c"],
     deps = [
+        ":executable_environment",
         ":executable_library",
         ":local",
         "//iree/base",
         "//iree/base:tracing",
+        "//iree/base/internal:file_io",
         "//iree/base/internal:flags",
         "//iree/hal",
         "//iree/hal/local/loaders:embedded_library_loader",
@@ -43,9 +59,10 @@ cc_test(
         "executable_library_test.c",
     ],
     deps = [
+        ":executable_environment",
+        ":executable_library",
         "//iree/base",
         "//iree/base:core_headers",
-        "//iree/hal/local:executable_library",
     ],
 )
 
@@ -70,6 +87,7 @@ cc_library(
         "local_executable_layout.h",
     ],
     deps = [
+        ":executable_environment",
         ":executable_library",
         "//iree/base",
         "//iree/base:core_headers",
@@ -103,6 +121,7 @@ cc_library(
         "//iree/base/internal:arena",
         "//iree/base/internal:synchronization",
         "//iree/hal",
+        "//iree/hal/utils:buffer_transfer",
     ],
 )
 
@@ -113,27 +132,13 @@ cc_library(
 iree_cmake_extra_content(
     content = """
 # task_driver is used by asynchronuous drivers.
-if(NOT (${IREE_HAL_DRIVER_DYLIB} OR ${IREE_HAL_DRIVER_VMVX}))
+# TODO(scotttodd): refactor this - code depending on threading should be
+#   possible to declare in the build system but conditionally link in
+if(NOT EMSCRIPTEN AND NOT (${IREE_HAL_DRIVER_DYLIB} OR ${IREE_HAL_DRIVER_VMVX}))
   return()
 endif()
 """,
     inline = True,
-)
-
-# TODO(benvanik): move into base/? may be useful for other backends or for other
-# parts of the system (like modules handling IO/RPC).
-cc_library(
-    name = "event_pool",
-    srcs = ["event_pool.c"],
-    hdrs = ["event_pool.h"],
-    deps = [
-        "//iree/base",
-        "//iree/base:core_headers",
-        "//iree/base:tracing",
-        "//iree/base/internal",
-        "//iree/base/internal:synchronization",
-        "//iree/base/internal:wait_handle",
-    ],
 )
 
 cc_library(
@@ -157,7 +162,7 @@ cc_library(
         "task_semaphore.h",
     ],
     deps = [
-        ":event_pool",
+        ":executable_environment",
         ":executable_library",
         ":local",
         "//iree/base",
@@ -165,9 +170,12 @@ cc_library(
         "//iree/base:tracing",
         "//iree/base/internal",
         "//iree/base/internal:arena",
+        "//iree/base/internal:event_pool",
         "//iree/base/internal:synchronization",
         "//iree/base/internal:wait_handle",
         "//iree/hal",
+        "//iree/hal/utils:buffer_transfer",
+        "//iree/hal/utils:resource_set",
         "//iree/task",
     ],
 )

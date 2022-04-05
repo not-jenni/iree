@@ -13,7 +13,7 @@
 #include "iree/compiler/Dialect/VM/Conversion/ImportUtils.h"
 #include "iree/compiler/Dialect/VM/Conversion/TypeConverter.h"
 #include "iree/compiler/Dialect/VM/IR/VMOps.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -120,7 +120,7 @@ class VMVXImportOpConversion : public OpConversionPattern<T> {
 void populateVMVXToVMPatterns(MLIRContext *context,
                               TypeConverter &typeConverter,
                               SymbolTable &importSymbols,
-                              OwningRewritePatternList &patterns) {}
+                              RewritePatternSet &patterns) {}
 
 }  // namespace iree_compiler
 }  // namespace mlir

@@ -15,7 +15,7 @@ include(CMakeParseArguments)
 # SRC: Source file to compile into a bytecode module.
 # FLAGS: Flags to pass to the translation tool (list of strings).
 # TRANSLATE_TOOL: Translation tool to invoke (CMake target). The default
-#     tool is "iree-translate".
+#     tool is "iree-compile".
 # C_IDENTIFIER: Identifier to use for generate c embed code.
 #     If omitted then no C embed code will be generated.
 # PUBLIC: Add this so that this library will be exported under ${PACKAGE}::
@@ -25,8 +25,8 @@ include(CMakeParseArguments)
 #    -DIREE_BUILD_TESTS=ON to CMake.
 #
 # Note:
-# By default, iree_bytecode_module will create a library named ${NAME}_cc,
-# and alias target iree::${NAME}_cc. The iree:: form should always be used.
+# By default, iree_bytecode_module will create a library named ${NAME}_c,
+# and alias target iree::${NAME}_c. The iree:: form should always be used.
 # This is to reduce namespace pollution.
 function(iree_bytecode_module)
   cmake_parse_arguments(
@@ -45,7 +45,7 @@ function(iree_bytecode_module)
   if(DEFINED _RULE_TRANSLATE_TOOL)
     set(_TRANSLATE_TOOL ${_RULE_TRANSLATE_TOOL})
   else()
-    set(_TRANSLATE_TOOL "iree-translate")
+    set(_TRANSLATE_TOOL "iree-compile")
   endif()
 
   if(DEFINED _RULE_MODULE_FILE_NAME)
@@ -91,6 +91,7 @@ function(iree_bytecode_module)
       DEPENDS
         ${_OPT_TOOL_EXECUTABLE}
         ${_RULE_SRC}
+      VERBATIM
     )
   else()
     # OPT_FLAGS was not specified, so are not using the OPT_TOOL.
@@ -99,7 +100,6 @@ function(iree_bytecode_module)
   endif()
 
   iree_get_executable_path(_TRANSLATE_TOOL_EXECUTABLE ${_TRANSLATE_TOOL})
-  iree_get_executable_path(_EMBEDDED_LINKER_TOOL_EXECUTABLE "lld")
 
   set(_ARGS "${_RULE_FLAGS}")
 
@@ -107,7 +107,25 @@ function(iree_bytecode_module)
   list(APPEND _ARGS "${_TRANSLATE_SRC_PATH}")
   list(APPEND _ARGS "-o")
   list(APPEND _ARGS "${_MODULE_FILE_NAME}")
-  list(APPEND _ARGS "-iree-llvm-embedded-linker-path=\"${_EMBEDDED_LINKER_TOOL_EXECUTABLE}\"")
+
+  # If an LLVM CPU backend is enabled, supply the linker tool.
+  if(IREE_LLD_TARGET)
+    iree_get_executable_path(_LINKER_TOOL_EXECUTABLE "lld")
+    list(APPEND _ARGS "-iree-llvm-embedded-linker-path=\"${_LINKER_TOOL_EXECUTABLE}\"")
+    list(APPEND _ARGS "-iree-llvm-wasm-linker-path=\"${_LINKER_TOOL_EXECUTABLE}\"")
+    # Note: -iree-llvm-system-linker-path is left unspecified.
+  endif()
+
+  if(IREE_BYTECODE_MODULE_FORCE_SYSTEM_DYLIB_LINKER)
+    list(APPEND _ARGS "-iree-llvm-link-embedded=false")
+  endif()
+
+  # Support testing in TSan build dirs. Unlike other sanitizers, TSan is an
+  # ABI break: when the host code is built with TSan, the module must be too,
+  # otherwise we get crashes calling module code.
+  if(IREE_BYTECODE_MODULE_ENABLE_TSAN)
+    list(APPEND _ARGS "-iree-llvm-sanitize=thread")
+  endif()
 
   # Depending on the binary instead of the target here given we might not have
   # a target in this CMake invocation when cross-compiling.
@@ -121,8 +139,9 @@ function(iree_bytecode_module)
     # trigger rebuilding.
     DEPENDS
       ${_TRANSLATE_TOOL_EXECUTABLE}
-      ${_EMBEDDED_LINKER_TOOL_EXECUTABLE}
+      ${_LINKER_TOOL_EXECUTABLE}
       ${_TRANSLATE_SRC}
+    VERBATIM
   )
 
   if(_RULE_TESTONLY)

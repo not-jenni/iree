@@ -27,6 +27,7 @@ build-*/
 configured.bazelrc
 user.bazelrc
 version_info.json
+CMakeUserPresets.json
 
 # Dear ImGui Ini files
 imgui.ini
@@ -61,4 +62,4 @@ mkdocs/site/
 docs/website/site/
 
 # Temporary files
-iree/compiler/Dialect/HAL/Target/LLVM/librt/bin/librt.ll
+iree/builtins/**/bin/*.ll

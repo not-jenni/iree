@@ -41,6 +41,10 @@ static llvm::cl::opt<bool> clDisableLoopNounrollWa(
         "Disable the workaround for bug in ptxas for CUDA version before 11.4"),
     llvm::cl::init(false));
 
+static llvm::cl::opt<std::string> clTargetChip(
+    "iree-cuda-llvm-target-arch", llvm::cl::desc("LLVM target chip"),
+    llvm::cl::init("sm_35"));
+
 namespace mlir {
 namespace iree_compiler {
 namespace IREE {
@@ -161,7 +165,7 @@ class CUDATargetBackend final : public TargetBackend {
     Builder b(context);
     SmallVector<NamedAttribute> configItems;
 
-    configItems.emplace_back(b.getIdentifier("executable_targets"),
+    configItems.emplace_back(b.getStringAttr("executable_targets"),
                              getExecutableTargets(context));
 
     auto configAttr = b.getDictionaryAttr(configItems);
@@ -190,14 +194,10 @@ class CUDATargetBackend final : public TargetBackend {
 
     // Remove all the functions that are not part of the CUDA kernel.
     // TODO: Find a better solution to handle this.
-    auto illegalFuncOps = llvm::to_vector<4>(innerModuleOp.getOps<FuncOp>());
+    auto illegalFuncOps =
+        llvm::to_vector<4>(innerModuleOp.getOps<func::FuncOp>());
     for (auto funcOp : illegalFuncOps) {
       funcOp.erase();
-    }
-    auto halInterfaceOps =
-        llvm::to_vector<1>(innerModuleOp.getOps<IREE::HAL::InterfaceOp>());
-    for (auto halOp : halInterfaceOps) {
-      halOp.erase();
     }
 
     auto llvmModule =
@@ -214,6 +214,8 @@ class CUDATargetBackend final : public TargetBackend {
     }
     std::vector<std::array<int32_t, 3>> workgroupSizes;
     std::vector<std::string> entryPointNames;
+    std::vector<uint32_t> workgroupLocalMemories;
+
     for (auto func : innerModuleOp.getOps<LLVM::LLVMFuncOp>()) {
       auto *llvmFunc = llvmModule->getFunction(func.getName());
       if (llvmFunc->isDeclaration()) continue;
@@ -221,7 +223,13 @@ class CUDATargetBackend final : public TargetBackend {
       llvmFunc->setName(sanitizeNameForCuda(func.getName()));
       entryPointNames.emplace_back(llvmFunc->getName());
       std::array<int32_t, 3> workgroup_size;
+      uint32_t workgroupLocalMemory = 0;
       auto entryPointOp = entryPointOps[func.getName()];
+      if (auto workgroupLocalMemoryAttr =
+              entryPointOp.workgroup_local_memory()) {
+        workgroupLocalMemory =
+            workgroupLocalMemoryAttr.getValue().getSExtValue();
+      }
       if (Optional<ArrayAttr> workgroupSizeAttr =
               entryPointOp.workgroup_size()) {
         for (auto it : llvm::enumerate(workgroupSizeAttr.getValue())) {
@@ -230,6 +238,7 @@ class CUDATargetBackend final : public TargetBackend {
       } else {
         workgroup_size = {1, 1, 1};
       }
+      workgroupLocalMemories.push_back(workgroupLocalMemory);
       workgroupSizes.push_back(workgroup_size);
       llvm::Metadata *llvmMetadata[] = {
           llvm::ValueAsMetadata::get(llvmFunc),
@@ -245,7 +254,7 @@ class CUDATargetBackend final : public TargetBackend {
     std::unique_ptr<llvm::TargetMachine> targetMachine;
     {
       llvm::Triple triple("nvptx64-nvidia-cuda");
-      std::string targetChip = "sm_35";
+      std::string targetChip = clTargetChip;
       std::string features = "+ptx60";
       std::string error;
       const llvm::Target *target =
@@ -278,6 +287,8 @@ class CUDATargetBackend final : public TargetBackend {
         targetISA.size());
 
     auto entryPointsRef = builder.createStringVec(entryPointNames);
+    auto workgroupLocalMemoriesRef =
+        builder.createInt32Vec(workgroupLocalMemories);
 
     iree_CUDABlockSizeDef_vec_start(builder);
     auto blockSizes = workgroupSizes.begin();
@@ -289,6 +300,8 @@ class CUDATargetBackend final : public TargetBackend {
     auto blockSizesRef = iree_CUDABlockSizeDef_vec_end(builder);
 
     iree_CUDAExecutableDef_entry_points_add(builder, entryPointsRef);
+    iree_CUDAExecutableDef_shared_memory_size_add(builder,
+                                                  workgroupLocalMemoriesRef);
     iree_CUDAExecutableDef_block_sizes_add(builder, blockSizesRef);
     iree_CUDAExecutableDef_ptx_image_add(builder, ptxCudeRef);
     iree_CUDAExecutableDef_end_as_root(builder);
@@ -317,6 +330,12 @@ class CUDATargetBackend final : public TargetBackend {
       MLIRContext *context) const {
     Builder b(context);
     SmallVector<NamedAttribute> configItems;
+    // Add some configurations to the `hal.executable.target` attribute.
+    auto addConfig = [&](StringRef name, Attribute value) {
+      configItems.emplace_back(StringAttr::get(context, name), value);
+    };
+    // Set target arch
+    addConfig("target_arch", StringAttr::get(context, clTargetChip));
 
     auto configAttr = b.getDictionaryAttr(configItems);
     return IREE::HAL::ExecutableTargetAttr::get(

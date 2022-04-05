@@ -8,9 +8,9 @@
 #include "mlir-hlo/Dialect/mhlo/IR/chlo_ops.h"
 #include "mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
 #include "mlir-hlo/Dialect/mhlo/transforms/rewriters.h"
-#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Shape/IR/Shape.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
@@ -31,7 +31,8 @@ namespace TF {
 //    tensorflow/compiler/mlir/xla/transforms/legalize_tf.cc
 // It does not require the same number of options as we can hardcode as the pass
 // the IREE requires.
-class ConvertToMHLOPass : public PassWrapper<ConvertToMHLOPass, FunctionPass> {
+class ConvertToMHLOPass
+    : public PassWrapper<ConvertToMHLOPass, OperationPass<FuncOp>> {
   void getDependentDialects(DialectRegistry &registry) const override {
     registry
         .insert<mlir::linalg::LinalgDialect, mlir::TF::TensorFlowDialect,
@@ -39,7 +40,7 @@ class ConvertToMHLOPass : public PassWrapper<ConvertToMHLOPass, FunctionPass> {
                 mlir::tf_device::TensorFlowDeviceDialect,
                 mlir::tf_saved_model::TensorFlowSavedModelDialect,
                 chlo::HloClientDialect, mhlo::MhloDialect, shape::ShapeDialect,
-                mlir::arith::ArithmeticDialect, StandardOpsDialect>();
+                mlir::arith::ArithmeticDialect, func::FuncDialect>();
   }
 
   StringRef getArgument() const override { return "iree-tf-convert-to-mhlo"; }
@@ -52,26 +53,26 @@ class ConvertToMHLOPass : public PassWrapper<ConvertToMHLOPass, FunctionPass> {
   ConvertToMHLOPass() = default;
   ConvertToMHLOPass(const ConvertToMHLOPass &) {}
 
-  void runOnFunction() override {
-    auto op = getFunction();
+  void runOnOperation() override {
+    auto op = getOperation();
     MLIRContext *context = op.getContext();
 
     // Lower TF Patterns must be separate from canonocalization patterns as
     // they are sometimes inversions of eachother.
-    OwningRewritePatternList lowerTfPatterns(&getContext());
+    RewritePatternSet lowerTfPatterns(&getContext());
     mlir::TF::PopulateTFLoweringBeforeHLOPatterns(context, &lowerTfPatterns);
 
-    OwningRewritePatternList canonicalizePatterns(&getContext());
-    for (auto *op : context->getRegisteredOperations()) {
-      op->getCanonicalizationPatterns(canonicalizePatterns, context);
+    RewritePatternSet canonicalizePatterns(&getContext());
+    for (auto op : context->getRegisteredOperations()) {
+      op.getCanonicalizationPatterns(canonicalizePatterns, context);
     }
 
-    OwningRewritePatternList patterns(&getContext());
+    RewritePatternSet patterns(&getContext());
     // Note that the `OperationConverter` orders patterns lexicographically by:
     // 1) Ascending legalization depth (i.e., minimum number of patterns
     // necessary to arrive at conversion target).
     // 2) Descending pattern benefit.
-    // 3) Order of patterns in `OwningRewritePatternList`.
+    // 3) Order of patterns in `RewritePatternSet`.
 
     // Add TF->HLO legalization patterns.
     mhlo::PopulateLegalizeTfPatterns(context, &patterns);
@@ -90,11 +91,11 @@ class ConvertToMHLOPass : public PassWrapper<ConvertToMHLOPass, FunctionPass> {
     target.addLegalDialect<chlo::HloClientDialect>();
     target.addLegalDialect<linalg::LinalgDialect>();
     target.addLegalDialect<mhlo::MhloDialect>();
-    target.addLegalDialect<mlir::StandardOpsDialect,
+    target.addLegalDialect<mlir::func::FuncDialect,
                            mlir::arith::ArithmeticDialect>();
     target.addLegalDialect<shape::ShapeDialect>();
     target.addLegalDialect<tensor::TensorDialect>();
-    target.addLegalOp<mlir::CallOp>();
+    target.addLegalOp<mlir::func::CallOp>();
     target.addLegalOp<mlir::tensor::CastOp>();
     target.addLegalOp<mlir::tensor::DimOp>();
 
@@ -169,7 +170,7 @@ class ConvertToMHLOPass : public PassWrapper<ConvertToMHLOPass, FunctionPass> {
       llvm::cl::init("INVALID_DEVICE_TYPE")};
 };
 
-std::unique_ptr<FunctionPass> createConvertToMHLOPass() {
+std::unique_ptr<Pass> createConvertToMHLOPass() {
   return std::make_unique<ConvertToMHLOPass>();
 }
 

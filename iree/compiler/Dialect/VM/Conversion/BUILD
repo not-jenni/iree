@@ -26,13 +26,13 @@ cc_library(
         "TypeConverter.h",
     ],
     deps = [
-        "//iree/compiler/Dialect/Shape/IR",
         "//iree/compiler/Dialect/Util/IR",
         "//iree/compiler/Dialect/VM/IR",
+        "//iree/compiler/Utils",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Parser",
-        "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Transforms",
     ],
 )

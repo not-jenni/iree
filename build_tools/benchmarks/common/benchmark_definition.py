@@ -11,98 +11,97 @@ shared between different stages of the same benchmark pipeline.
 """
 
 import json
-import re
 import subprocess
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Dict, Sequence
 
-__all__ = [
-    "AndroidDeviceInfo", "BenchmarkInfo", "BenchmarkResults",
-    "execute_cmd_and_get_output"
-]
+
+@dataclass
+class DriverInfo:
+  """An object describing a IREE HAL driver.
+
+  It includes the following characteristics:
+  - pretty_name: the pretty name, e.g., 'IREE-DyLib'
+  - device_type: the targeted device type, e.g., 'CPU'
+  """
+
+  pretty_name: str
+  device_type: str
+
 
 # A map for IREE driver names. This allows us to normalize driver names like
 # mapping to more friendly ones and detach to keep driver names used in
 # benchmark presentation stable.
-IREE_DRIVER_NAME_MAP = {
-    "iree-dylib": "IREE-Dylib",
-    "iree-dylib-sync": "IREE-Dylib-Sync",
-    "iree-vmvx": "IREE-VMVX",
-    "iree-vmvx-sync": "IREE-VMVX-Sync",
-    "iree-vulkan": "IREE-Vulkan",
+IREE_DRIVERS_INFOS = {
+    "iree-dylib": DriverInfo("IREE-Dylib", "CPU"),
+    "iree-dylib-sync": DriverInfo("IREE-Dylib-Sync", "CPU"),
+    "iree-vmvx": DriverInfo("IREE-VMVX", "CPU"),
+    "iree-vmvx-sync": DriverInfo("IREE-VMVX-Sync", "CPU"),
+    "iree-vulkan": DriverInfo("IREE-Vulkan", "GPU"),
 }
+
+IREE_PRETTY_NAMES_TO_DRIVERS = {
+    v.pretty_name: k for k, v in IREE_DRIVERS_INFOS.items()
+}
+
+
+def execute_cmd(args: Sequence[str],
+                verbose: bool = False,
+                **kwargs) -> subprocess.CompletedProcess:
+  """Executes a command and returns the completed process.
+
+  A thin wrapper around subprocess.run that sets some useful defaults and
+  optionally prints out the command being run.
+
+  Raises:
+    CalledProcessError if the command fails.
+  """
+  cmd = " ".join(args)
+  if verbose:
+    print(f"cmd: {cmd}")
+  try:
+    return subprocess.run(args, check=True, text=True, **kwargs)
+  except subprocess.CalledProcessError as exc:
+    print((f"\n\nThe following command failed:\n\n{cmd}"
+           f"\n\nReturn code: {exc.returncode}\n\n"))
+    if exc.stdout:
+      print(f"Stdout:\n\n{exc.stdout}\n\n")
+    if exc.stderr:
+      print(f"Stderr:\n\n{exc.stderr}\n\n")
+    raise exc
 
 
 def execute_cmd_and_get_output(args: Sequence[str],
                                verbose: bool = False,
                                **kwargs) -> str:
-  """Executes a command and returns its stdout."""
-  if verbose:
-    cmd = " ".join(args)
-    print(f"cmd: {cmd}")
-  return subprocess.run(args,
-                        check=True,
-                        stdout=subprocess.PIPE,
-                        universal_newlines=True,
-                        **kwargs).stdout.strip()
+  """Executes a command and returns its stdout.
+
+  Same as execute_cmd except captures stdout (and not stderr).
+  """
+  return execute_cmd(args, verbose=verbose, stdout=subprocess.PIPE,
+                     **kwargs).stdout.strip()
 
 
-def get_android_device_model(verbose: bool = False) -> str:
-  """Returns the Android device model."""
-  model = execute_cmd_and_get_output(
-      ["adb", "shell", "getprop", "ro.product.model"], verbose=verbose)
-  model = re.sub(r"\W+", "-", model)
-  return model
-
-
-def get_android_cpu_abi(verbose: bool = False) -> str:
-  """Returns the CPU ABI for the Android device."""
-  return execute_cmd_and_get_output(
-      ["adb", "shell", "getprop", "ro.product.cpu.abi"], verbose=verbose)
-
-
-def get_android_cpu_features(verbose: bool = False) -> Sequence[str]:
-  """Returns the CPU features for the Android device."""
-  cpuinfo = execute_cmd_and_get_output(["adb", "shell", "cat", "/proc/cpuinfo"],
-                                       verbose=verbose)
-  features = []
-  for line in cpuinfo.splitlines():
-    if line.startswith("Features"):
-      _, features = line.split(":")
-      return features.strip().split()
-  return features
-
-
-def get_android_gpu_name(verbose: bool = False) -> str:
-  """Returns the GPU name for the Android device."""
-  vkjson = execute_cmd_and_get_output(["adb", "shell", "cmd", "gpu", "vkjson"],
-                                      verbose=verbose)
-  vkjson = json.loads(vkjson)
-  name = vkjson["devices"][0]["properties"]["deviceName"]
-
-  # Perform some canonicalization:
-
-  # - Adreno GPUs have raw names like "Adreno (TM) 650".
-  name = name.replace("(TM)", "")
-
-  # Replace all consecutive non-word characters with a single hypen.
-  name = re.sub(r"\W+", "-", name)
-
-  return name
+class PlatformType(Enum):
+  ANDROID = "Android"
+  LINUX = "Linux"
 
 
 @dataclass
-class AndroidDeviceInfo:
-  """An object describing the current Android Device.
+class DeviceInfo:
+  """An object describing a device.
 
-  It includes the following phone characteristics:
+  It includes the following characteristics:
+  - platform_type: the OS platform, e.g., 'Android'
   - model: the product model, e.g., 'Pixel-4'
   - cpu_abi: the CPU ABI, e.g., 'arm64-v8a'
   - cpu_features: the detailed CPU features, e.g., ['fphp', 'sve']
   - gpu_name: the GPU name, e.g., 'Mali-G77'
   """
 
+  platform_type: PlatformType
   model: str
   cpu_abi: str
   cpu_features: Sequence[str]
@@ -117,12 +116,30 @@ class AndroidDeviceInfo:
         f"cpu_features=[{features}]",
     ]
     params = ", ".join(params)
-    return f"Android device <{params}>"
+    return f"{self.platform_type.value} device <{params}>"
 
-  def get_arm_arch_revision(self) -> str:
+  def get_cpu_arch_revision(self) -> str:
+    if self.cpu_abi == "arm64-v8a":
+      return self.__get_arm_cpu_arch_revision()
+    raise ValueError("Unrecognized CPU ABI; need to update the list")
+
+  def to_json_object(self) -> Dict[str, Any]:
+    return {
+        "platform_type": self.platform_type.value,
+        "model": self.model,
+        "cpu_abi": self.cpu_abi,
+        "cpu_features": self.cpu_features,
+        "gpu_name": self.gpu_name,
+    }
+
+  @staticmethod
+  def from_json_object(json_object: Dict[str, Any]):
+    return DeviceInfo(PlatformType(json_object["platform_type"]),
+                      json_object["model"], json_object["cpu_abi"],
+                      json_object["cpu_features"], json_object["gpu_name"])
+
+  def __get_arm_cpu_arch_revision(self) -> str:
     """Returns the ARM architecture revision."""
-    if self.cpu_abi != "arm64-v8a":
-      raise ValueError("Unrecognized ARM CPU ABI; need to update the list")
 
     # CPU features for ARMv8 revisions.
     # From https://en.wikichip.org/wiki/arm/armv8#ARMv8_Extensions_and_Processor_Features
@@ -138,27 +155,6 @@ class AndroidDeviceInfo:
       rev = "ARMv8.2-A"
     return rev
 
-  def to_json_object(self) -> Dict[str, Any]:
-    return {
-        "model": self.model,
-        "cpu_abi": self.cpu_abi,
-        "cpu_features": self.cpu_features,
-        "gpu_name": self.gpu_name,
-    }
-
-  @staticmethod
-  def from_json_object(json_object: Dict[str, Any]):
-    return AndroidDeviceInfo(json_object["model"], json_object["cpu_abi"],
-                             json_object["cpu_features"],
-                             json_object["gpu_name"])
-
-  @staticmethod
-  def from_adb(verbose: bool = False):
-    return AndroidDeviceInfo(get_android_device_model(verbose),
-                             get_android_cpu_abi(verbose),
-                             get_android_cpu_features(verbose),
-                             get_android_gpu_name(verbose))
-
 
 @dataclass
 class BenchmarkInfo:
@@ -172,8 +168,7 @@ class BenchmarkInfo:
   - bench_mode: a list of tags for benchmark mode,
       e.g., ['1-thread', 'big-core', 'full-inference']
   - runner: which runner is used for benchmarking, e.g., 'iree_vulkan', 'tflite'
-  - device_info: an AndroidDeviceInfo object describing the phone where
-      bnechmarks run
+  - device_info: an DeviceInfo object describing the device where benchmarks run
   """
 
   model_name: str
@@ -181,31 +176,54 @@ class BenchmarkInfo:
   model_source: str
   bench_mode: Sequence[str]
   runner: str
-  device_info: AndroidDeviceInfo
+  device_info: DeviceInfo
 
   def __str__(self):
     # Get the target architecture and better driver name depending on the runner.
-    target_arch = ""
-    driver = ""
-    if self.runner == "iree-vulkan":
+    driver_info = IREE_DRIVERS_INFOS.get(self.runner)
+    if not driver_info:
+      raise ValueError(
+          f"Unrecognized runner '{self.runner}'; need to update the list")
+
+    target_arch = None
+    if driver_info.device_type == 'GPU':
       target_arch = "GPU-" + self.device_info.gpu_name
-      driver = IREE_DRIVER_NAME_MAP[self.runner]
-    elif (self.runner == "iree-dylib" or self.runner == "iree-dylib-sync" or
-          self.runner == "iree-vmvx" or self.runner == "iree-vmvx-sync"):
-      target_arch = "CPU-" + self.device_info.get_arm_arch_revision()
-      driver = IREE_DRIVER_NAME_MAP[self.runner]
+    elif driver_info.device_type == 'CPU':
+      target_arch = "CPU-" + self.device_info.get_cpu_arch_revision()
     else:
-      raise ValueError("Unrecognized runner; need to update the list")
+      raise ValueError(
+          f"Unrecognized device type '{driver_info.device_type}' of the runner '{self.runner}'"
+      )
 
     if self.model_tags:
       tags = ",".join(self.model_tags)
       model_part = f"{self.model_name} [{tags}] ({self.model_source})"
     else:
       model_part = f"{self.model_name} ({self.model_source})"
-    phone_part = f"{self.device_info.model} ({target_arch})"
+    device_part = f"{self.device_info.model} ({target_arch})"
     mode = ",".join(self.bench_mode)
 
-    return f"{model_part} {mode} with {driver} @ {phone_part}"
+    return f"{model_part} {mode} with {driver_info.pretty_name} @ {device_part}"
+
+  @staticmethod
+  def from_device_info_and_name(device_info: DeviceInfo, name: str):
+    (
+        model_name,
+        model_tags,
+        model_source,
+        bench_mode,
+        _,  # "with"
+        runner,
+        _,  # "@"
+        model,
+        _,  # Device Info
+    ) = name.split()
+    model_source = model_source.strip("()")
+    model_tags = model_tags.strip("[]").split(",")
+    bench_mode = bench_mode.split(",")
+    runner = IREE_PRETTY_NAMES_TO_DRIVERS.get(runner)
+    return BenchmarkInfo(model_name, model_tags, model_source, bench_mode,
+                         runner, device_info)
 
   def deduce_taskset(self) -> str:
     """Deduces the CPU affinity taskset mask according to benchmark modes."""
@@ -235,8 +253,37 @@ class BenchmarkInfo:
                          model_source=json_object["model_source"],
                          bench_mode=json_object["bench_mode"],
                          runner=json_object["runner"],
-                         device_info=AndroidDeviceInfo.from_json_object(
+                         device_info=DeviceInfo.from_json_object(
                              json_object["device_info"]))
+
+
+@dataclass
+class BenchmarkRun(object):
+  """An object describing a single run of the benchmark binary.
+
+  - benchmark_info: a BenchmarkInfo object describing the benchmark setup.
+  - context: the benchmark context returned by the benchmarking framework.
+  - results: the benchmark results returned by the benchmarking framework.
+  """
+  benchmark_info: BenchmarkInfo
+  context: Dict[str, Any]
+  results: Sequence[Dict[str, Any]]
+
+  def to_json_object(self) -> Dict[str, Any]:
+    return {
+        "benchmark_info": self.benchmark_info.to_json_object(),
+        "context": self.context,
+        "results": self.results,
+    }
+
+  def to_json_str(self) -> str:
+    return json.dumps(self.to_json_object())
+
+  @staticmethod
+  def from_json_object(json_object: Dict[str, Any]):
+    return BenchmarkRun(
+        BenchmarkInfo.from_json_object(json_object["benchmark_info"]),
+        json_object["context"], json_object["results"])
 
 
 class BenchmarkResults(object):
@@ -244,10 +291,7 @@ class BenchmarkResults(object):
 
     It contains the following fields:
     - commit: the commit SHA for this set of benchmarks.
-    - benchmarks: a list of benchmarks, each with
-      - benchmark: a BenchmarkInfo object
-      - context: the context for running the benchmarks
-      - results: results for all benchmark runs
+    - benchmarks: a list of BenchmarkRun objects
     """
 
   def __init__(self):
@@ -256,16 +300,6 @@ class BenchmarkResults(object):
 
   def set_commit(self, commit: str):
     self.commit = commit
-
-  def append_one_benchmark(self, benchmark_info: BenchmarkInfo,
-                           run_context: Dict[str, Any],
-                           run_results: Sequence[Dict[str, Any]]):
-    """Appends the results for one benchmark."""
-    self.benchmarks.append({
-        "benchmark": benchmark_info,
-        "context": run_context,
-        "results": run_results,
-    })
 
   def merge(self, other):
     if self.commit != other.commit:
@@ -281,7 +315,7 @@ class BenchmarkResults(object):
         'mean', 'median', 'stddev'.
       """
     time = None
-    for bench_case in self.benchmarks[benchmark_index]["results"]:
+    for bench_case in self.benchmarks[benchmark_index].results:
       if bench_case["name"].endswith(f"real_time_{kind}"):
         if bench_case["time_unit"] != "ms":
           raise ValueError(f"Expected ms as time unit")
@@ -293,12 +327,7 @@ class BenchmarkResults(object):
 
   def to_json_str(self) -> str:
     json_object = {"commit": self.commit, "benchmarks": []}
-    for benchmark in self.benchmarks:
-      json_object["benchmarks"].append({
-          "benchmark": benchmark["benchmark"].to_json_object(),
-          "context": benchmark["context"],
-          "results": benchmark["results"],
-      })
+    json_object["benchmarks"] = [b.to_json_object() for b in self.benchmarks]
     return json.dumps(json_object)
 
   @staticmethod
@@ -306,8 +335,7 @@ class BenchmarkResults(object):
     json_object = json.loads(json_str)
     results = BenchmarkResults()
     results.set_commit(json_object["commit"])
-    for benchmark in json_object["benchmarks"]:
-      results.append_one_benchmark(
-          BenchmarkInfo.from_json_object(benchmark["benchmark"]),
-          benchmark["context"], benchmark["results"])
+    results.benchmarks = [
+        BenchmarkRun.from_json_object(b) for b in json_object["benchmarks"]
+    ]
     return results

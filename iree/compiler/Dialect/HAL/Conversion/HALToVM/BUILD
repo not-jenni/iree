@@ -17,7 +17,6 @@ cc_library(
         "ConvertBufferOps.cpp",
         "ConvertBufferViewOps.cpp",
         "ConvertCommandBufferOps.cpp",
-        "ConvertConstantOps.cpp",
         "ConvertDeviceOps.cpp",
         "ConvertExecutableOps.cpp",
         "ConvertExperimentalOps.cpp",
@@ -37,9 +36,9 @@ cc_library(
         "//iree/compiler/Dialect/VM/Conversion/UtilToVM",
         "//iree/compiler/Dialect/VM/IR",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
-        "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Transforms",
     ],
 )

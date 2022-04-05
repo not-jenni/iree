@@ -12,13 +12,11 @@
 #include <type_traits>
 
 #include "iree/compiler/Dialect/VM/Target/init_targets.h"
-#include "iree/tools/init_compiler_modules.h"
-#include "iree/tools/init_iree_dialects.h"
-#include "iree/tools/init_mlir_dialects.h"
+#include "iree/tools/init_dialects.h"
+#include "iree/tools/init_llvmir_translations.h"
 #include "iree/tools/init_passes.h"
 #include "iree/tools/init_targets.h"
 #include "iree/tools/init_translations.h"
-#include "iree/tools/init_xla_dialects.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
@@ -36,24 +34,27 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Support/Timing.h"
 #include "mlir/Support/ToolUtilities.h"
-#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Translation.h"
+#include "mlir/Tools/mlir-translate/Translation.h"
 
+// TODO: Once we are switched to runIreecMain, this can be slimmed down
+// substantially, since it will just be about testing actual translations.
 int mlir::iree_compiler::runIreeTranslateMain(int argc, char **argv) {
   llvm::InitLLVM y(argc, argv);
-  mlir::DialectRegistry registry;
-  mlir::registerMlirDialects(registry);
-  mlir::registerLLVMDialectTranslation(registry);
-  mlir::registerXLADialects(registry);
-  mlir::iree_compiler::registerAllPasses();
-  mlir::iree_compiler::registerIreeDialects(registry);
-  mlir::iree_compiler::registerIreeCompilerModuleDialects(registry);
+
+  // Global/static registrations.
   mlir::iree_compiler::registerHALTargetBackends();
   mlir::iree_compiler::registerVMTargets();
   mlir::registerMlirTranslations();
   mlir::iree_compiler::registerIreeTranslations();
+  mlir::iree_compiler::registerAllPasses();
+
+  // MLIRContext registration and hooks.
+  mlir::DialectRegistry registry;
+  mlir::iree_compiler::registerAllDialects(registry);
+  mlir::iree_compiler::registerLLVMIRTranslations(registry);
+
   // Make sure command line options are registered.
-  (void)mlir::iree_compiler::IREE::HAL::getTargetOptionsFromFlags();
+  (void)mlir::iree_compiler::IREE::HAL::TargetOptions::FromFlags::get();
 
   // Register MLIRContext command-line options like
   // -mlir-print-op-on-diagnostic.
@@ -97,6 +98,15 @@ int mlir::iree_compiler::runIreeTranslateMain(int argc, char **argv) {
   auto output = mlir::openOutputFile(outputFilename, &errorMessage);
   if (!output) {
     llvm::errs() << errorMessage << "\n";
+    return 1;
+  }
+
+  // The value is required in processBuffer but if Required option is set on
+  // flag above then there is an error reported per possible translation rather
+  // than single one, so check explicitly instead.
+  if (!translationRequested) {
+    llvm::errs()
+        << "Translation to perform option: must be specified at least once!\n";
     return 1;
   }
 

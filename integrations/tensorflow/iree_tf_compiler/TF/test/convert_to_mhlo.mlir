@@ -1,8 +1,11 @@
-// RUN: iree-tf-opt -iree-tf-convert-to-mhlo -split-input-file %s | IreeFileCheck %s
+// RUN: iree-tf-opt -iree-tf-convert-to-mhlo -split-input-file %s | FileCheck %s
 
 // CHECK-LABEL: @sigmoid
 func @sigmoid(%arg0: tensor<2xf32>) -> tensor<2xf32> {
-  // CHECK-DAG: [[HALF:%.+]] = mhlo.constant dense<5.000000e-01> : tensor<2xf32>
+  // CHECK-DAG: [[SCALAR:%.+]] = mhlo.constant dense<5.000000e-01> : tensor<f32>
+  // CHECK-DAG: [[SHAPE_OF:%.+]] = shape.shape_of %arg0 : tensor<2xf32> -> tensor<1xindex>
+  // CHECK-DAG: [[SHAPE_VAL:%.+]] = shape.to_extent_tensor [[SHAPE_OF]] : tensor<1xindex> -> tensor<1xindex>
+  // CHECK-DAG: [[HALF:%.+]] = "mhlo.dynamic_broadcast_in_dim"([[SCALAR]], [[SHAPE_VAL]]) {broadcast_dimensions = dense<> : tensor<0xi64>} : (tensor<f32>, tensor<1xindex>) -> tensor<2xf32>
   // CHECK-DAG: [[R1:%.+]] =  mhlo.multiply %arg0, [[HALF]] : tensor<2xf32>
   // CHECK-DAG: [[R2:%.+]] =  "mhlo.tanh"([[R1]]) : (tensor<2xf32>) -> tensor<2xf32>
   // CHECK-DAG: [[R3:%.+]] =  mhlo.multiply [[R2]], [[HALF]] : tensor<2xf32>
@@ -22,7 +25,8 @@ func @sigmoid_complex(%arg0: tensor<2xcomplex<f32>>) -> tensor<2xcomplex<f32>> {
 // CHECK-LABEL: @sigmoid_unranked
 func @sigmoid_unranked(%arg0: tensor<*xf32>) -> tensor<*xf32> {
   // CHECK-DAG: [[SCALAR:%.+]] = mhlo.constant dense<5.000000e-01> : tensor<f32>
-  // CHECK-DAG: [[SHAPE_VAL:%.+]] = shape.shape_of %arg0 : tensor<*xf32> -> tensor<?xindex>
+  // CHECK-DAG: [[SHAPE_OF:%.+]] = shape.shape_of %arg0 : tensor<*xf32> -> tensor<?xindex>
+  // CHECK-DAG: [[SHAPE_VAL:%.+]] = shape.to_extent_tensor [[SHAPE_OF]] : tensor<?xindex> -> tensor<?xindex>
   // CHECK-DAG: [[HALF:%.+]] = "mhlo.dynamic_broadcast_in_dim"([[SCALAR]], [[SHAPE_VAL]]) {broadcast_dimensions = dense<> : tensor<0xi64>} : (tensor<f32>, tensor<?xindex>) -> tensor<*xf32>
   // CHECK-DAG: [[R1:%.+]] =  mhlo.multiply %arg0, [[HALF]] : tensor<*xf32>
   // CHECK-DAG: [[R2:%.+]] =  "mhlo.tanh"([[R1]]) : (tensor<*xf32>) -> tensor<*xf32>

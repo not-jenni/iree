@@ -9,7 +9,7 @@
 #include "iree/compiler/Dialect/Flow/Transforms/Passes.h"
 #include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -37,8 +37,8 @@ class ExportBenchmarkFuncsPass
     // Gather the functions we want to wrap for benchmarking and wrap them.
     // Since we are inserting new functions as part of this pass we must perform
     // the wrapping for only the inputs.
-    SmallVector<mlir::FuncOp, 4> entryFuncOps;
-    for (auto entryFuncOp : moduleOp.getOps<mlir::FuncOp>()) {
+    SmallVector<mlir::func::FuncOp, 4> entryFuncOps;
+    for (auto entryFuncOp : moduleOp.getOps<mlir::func::FuncOp>()) {
       if (entryFuncOp.isPublic()) {
         entryFuncOps.push_back(entryFuncOp);
       }
@@ -71,14 +71,14 @@ class ExportBenchmarkFuncsPass
   }
 
   LogicalResult createEntryPointBenchmarkFunc(mlir::ModuleOp moduleOp,
-                                              mlir::FuncOp entryFuncOp) {
+                                              mlir::func::FuncOp entryFuncOp) {
     OpBuilder moduleBuilder(&getContext());
     moduleBuilder.setInsertionPointAfter(entryFuncOp);
 
     // Create one dummy input variable per input.
     Location loc = entryFuncOp.getLoc();
     SmallVector<IREE::Util::GlobalOp, 4> dummyInputVariableOps;
-    for (auto inputType : entryFuncOp.getType().getInputs()) {
+    for (auto inputType : entryFuncOp.getFunctionType().getInputs()) {
       auto dummyVar = createDummyInputVariableOp(loc, inputType, moduleBuilder);
       if (!dummyVar) return failure();
       dummyInputVariableOps.push_back(dummyVar);
@@ -86,7 +86,7 @@ class ExportBenchmarkFuncsPass
 
     // Create a `() -> ()` entry point op the benchmark tool can run.
     std::string funcName = std::string(entryFuncOp.getName()) + "_benchmark";
-    auto funcOp = moduleBuilder.create<mlir::FuncOp>(
+    auto funcOp = moduleBuilder.create<mlir::func::FuncOp>(
         loc, funcName, moduleBuilder.getFunctionType({}, {}));
     funcOp.setPublic();
     funcOp->setAttr("iree.abi.stub", moduleBuilder.getUnitAttr());
@@ -105,14 +105,15 @@ class ExportBenchmarkFuncsPass
       args.push_back(blockBuilder.createOrFold<IREE::Util::GlobalLoadOp>(
           loc, dummyInputVariableOps[i]));
     }
-    auto callOp = blockBuilder.create<mlir::CallOp>(loc, entryFuncOp, args);
+    auto callOp =
+        blockBuilder.create<mlir::func::CallOp>(loc, entryFuncOp, args);
 
     // Sink all results with do_not_optimize to ensure that DCE does not
     // remove the call.
     for (auto result : callOp.getResults()) {
       blockBuilder.create<IREE::Util::DoNotOptimizeOp>(loc, result);
     }
-    blockBuilder.create<mlir::ReturnOp>(loc);
+    blockBuilder.create<mlir::func::ReturnOp>(loc);
 
     // Ensure the original function is not exported and not inlined.
     entryFuncOp->setAttr("noinline", moduleBuilder.getUnitAttr());

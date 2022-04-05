@@ -5,10 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/VM/Target/Bytecode/BytecodeModuleTarget.h"
-#include "iree/compiler/Dialect/VM/Target/Bytecode/TranslationFlags.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Visitors.h"
-#include "mlir/Translation.h"
+#include "mlir/Tools/mlir-translate/Translation.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -20,7 +19,7 @@ void registerToVMBytecodeTranslation() {
       "iree-vm-ir-to-bytecode-module",
       [](mlir::ModuleOp moduleOp, llvm::raw_ostream &output) {
         return translateModuleToBytecode(
-            moduleOp, getBytecodeTargetOptionsFromFlags(), output);
+            moduleOp, BytecodeTargetOptions::FromFlags::get(), output);
       });
 }
 

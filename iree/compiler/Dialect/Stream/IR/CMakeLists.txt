@@ -40,17 +40,19 @@ iree_cc_library(
     ::StreamTypesGen
     LLVMSupport
     MLIRArithmetic
+    MLIRArithmeticUtils
+    MLIRFunc
     MLIRIR
     MLIRInferTypeOpInterface
     MLIRMemRef
     MLIRParser
     MLIRSideEffectInterfaces
-    MLIRStandard
     MLIRSupport
     MLIRTensor
     MLIRTransformUtils
-    iree::compiler::Dialect::Shape::IR
+    iree::compiler::Dialect::Stream::Builtins
     iree::compiler::Dialect::Util::IR
+    iree::compiler::Utils
   PUBLIC
 )
 

@@ -95,7 +95,7 @@ Check out the contents of the 'tools' build directory:
 
 ```shell
 $ ls ../iree-build/iree/tools
-$ ../iree-build/iree/tools/iree-translate --help
+$ ../iree-build/iree/tools/iree-compile --help
 ```
 
 Translate a
@@ -109,18 +109,11 @@ $ ../iree-build/iree/tools/iree-run-mlir $PWD/iree/samples/models/simple_abs.mli
 
 ### LLVM Ahead-of-Time (AOT) backend
 
-If you want to manually specify the linker used, set the
-`IREE_LLVMAOT_LINKER_PATH` environment variable to the path of the linker:
-
-```shell
-$ export IREE_LLVMAOT_LINKER_PATH=ld.lld-10
-```
-
 Translate a source MLIR into an IREE module:
 
 ```shell
 # Assuming in IREE source root
-$ ../iree-build/iree/tools/iree-translate \
+$ ../iree-build/iree/tools/iree-compile \
     -iree-mlir-to-vm-bytecode-module \
     -iree-llvm-target-triple=x86_64-linux-gnu \
     -iree-hal-target-backends=dylib-llvm-aot \

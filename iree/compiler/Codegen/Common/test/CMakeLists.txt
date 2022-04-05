@@ -15,19 +15,28 @@ iree_lit_test_suite(
     lit
   SRCS
     "affinemin_canonicalization.mlir"
+    "bufferize_copy_only_dispatches.mlir"
     "canonicalize_interface_load_store.mlir"
+    "convert_to_destination_passing_style.mlir"
     "dead_alloc.mlir"
     "f32Tof16.mlir"
     "flatten_memref_subspan.mlir"
+    "fold_affine_min_in_distributed_loops.mlir"
     "fold_tensor_extract_op.mlir"
     "forop_canonicalization.mlir"
+    "insert_distribution_info.mlir"
+    "iree_comprehensive_bufferize.mlir"
     "linalg_bufferize.mlir"
     "remove_dead_allocs.mlir"
+    "remove_trivial_loops.mlir"
+    "rewrite_linalg_destructive_updates.mlir"
+    "tile_and_distribute_to_workgroups.mlir"
     "transpose_canonicalization.mlir"
+    "type_propagation.mlir"
     "vectorize_linalg_conv.mlir"
     "vectorize_linalg_mmt4d.mlir"
-  DATA
-    iree::tools::IreeFileCheck
+  TOOLS
+    FileCheck
     iree::tools::iree-opt
 )
 

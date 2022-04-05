@@ -10,12 +10,12 @@
 #include "iree/compiler/Dialect/Stream/IR/StreamTypes.h"
 #include "llvm/Support/SourceMgr.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
-#include "mlir/Parser.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Transforms/FoldUtils.h"
 #include "mlir/Transforms/InliningUtils.h"
 
@@ -57,6 +57,38 @@ struct StreamFolderInterface : public DialectFoldInterface {
   }
 };
 
+// Tries to fold away unrealized_conversion_cast ops if the downstream consumers
+// don't need the extra information. These are inserted during conversion or
+// transforms that may interop with external dialects.
+//
+// Specifically matches:
+//   %0 = builtin.unrealized_conversion_cast %arg0, %arg1 :
+//        !stream.resource<transient>, index to !stream.resource<transient>
+struct StripResourceConversionCastPattern
+    : public OpRewritePattern<UnrealizedConversionCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(UnrealizedConversionCastOp castOp,
+                                PatternRewriter &rewriter) const override {
+    auto result = castOp.getResult(0);
+    if (!result.getType().isa<IREE::Stream::ResourceType>()) return failure();
+    assert(castOp.getNumOperands() == 2 &&
+           "expect resource, index -> resource");
+    auto resourceValue = castOp.getOperand(0);
+    auto sizeValue = castOp.getOperand(1);
+    for (auto &use : llvm::make_early_inc_range(result.getUses())) {
+      if (auto sizeOp =
+              dyn_cast<IREE::Stream::ResourceSizeOp>(use.getOwner())) {
+        sizeOp.getResult().replaceAllUsesWith(sizeValue);
+        rewriter.eraseOp(sizeOp);
+      } else {
+        use.set(resourceValue);
+      }
+    }
+    rewriter.eraseOp(castOp);
+    return success();
+  }
+};
+
 }  // namespace
 
 StreamDialect::StreamDialect(MLIRContext *context)
@@ -71,11 +103,17 @@ StreamDialect::StreamDialect(MLIRContext *context)
   addInterfaces<StreamInlinerInterface, StreamFolderInterface>();
 }
 
+void StreamDialect::getCanonicalizationPatterns(
+    RewritePatternSet &results) const {
+  results.insert<StripResourceConversionCastPattern>(getContext());
+}
+
 Operation *StreamDialect::materializeConstant(OpBuilder &builder,
                                               Attribute value, Type type,
                                               Location loc) {
-  if (mlir::ConstantOp::isBuildableWith(value, type)) {
-    return builder.create<mlir::ConstantOp>(loc, type, value);
+  if (mlir::func::ConstantOp::isBuildableWith(value, type)) {
+    return builder.create<mlir::func::ConstantOp>(
+        loc, type, value.cast<FlatSymbolRefAttr>());
   } else if (arith::ConstantOp::isBuildableWith(value, type)) {
     return builder.create<arith::ConstantOp>(loc, type, value);
   } else if (value.isa<IREE::Stream::TimepointAttr>()) {

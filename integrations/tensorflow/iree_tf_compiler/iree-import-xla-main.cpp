@@ -16,15 +16,15 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "mlir-hlo/Dialect/mhlo/IR/register.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/SymbolTable.h"
-#include "mlir/Parser.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
 #include "tensorflow/compiler/mlir/xla/hlo_to_mlir_hlo.h"
@@ -145,10 +145,11 @@ int main(int argc, char **argv) {
 
   DialectRegistry registry;
   mlir::mhlo::registerAllMhloDialects(registry);
-  registry.insert<mlir::StandardOpsDialect, mlir::arith::ArithmeticDialect,
+  registry.insert<mlir::func::FuncDialect, mlir::arith::ArithmeticDialect,
                   mlir::math::MathDialect>();
   MLIRContext context;
-  OwningModuleRef module = ModuleOp::create(mlir::UnknownLoc::get(&context));
+  OwningOpRef<mlir::ModuleOp> module =
+      ModuleOp::create(mlir::UnknownLoc::get(&context));
   context.appendDialectRegistry(registry);
   context.loadAllAvailableDialects();
 
@@ -227,7 +228,7 @@ int main(int argc, char **argv) {
       break;
     }
     default:
-      llvm_unreachable("illegal XlaFormat");
+      assert(false && "illegal XlaFormat");
   }
 
   // Find the entry function and annotate it as exported.

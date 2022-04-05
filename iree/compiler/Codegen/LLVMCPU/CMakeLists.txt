@@ -18,18 +18,31 @@ iree_cc_library(
   SRCS
     "ConvertToLLVM.cpp"
     "KernelDispatch.cpp"
+    "LLVMCPUCheckIRBeforeLLVMConversion.cpp"
     "LLVMCPULowerExecutableTarget.cpp"
     "LLVMCPUSynchronizeSymbolVisibility.cpp"
-    "LLVMCPUTileAndVectorizeLinalgTensorOps.cpp"
+    "LLVMCPUTileFuseAndVectorizeLinalgTensorOps.cpp"
     "LLVMCPUUnfuseFMAOps.cpp"
-    "LLVMCPUVectorization.cpp"
     "Passes.cpp"
-    "VectorContractToAArch64InlineAsmOp.cpp"
+    "VectorContractCustomKernels.cpp"
+    "VerifyLinalgTransformLegality.cpp"
   DEPS
+    IREELinalgExtDialect
+    IREELinalgExtPasses
+    IREELinalgTransformDialect
+    IREELinalgTransformDialectTransforms
     LLVMSupport
     MLIRAffineToStandard
     MLIRAnalysis
     MLIRArithmeticToLLVM
+    MLIRArithmeticTransforms
+    MLIRArmNeon
+    MLIRArmNeon2dToIntr
+    MLIRBufferization
+    MLIRControlFlowToLLVM
+    MLIRFunc
+    MLIRFuncToLLVM
+    MLIRFuncTransforms
     MLIRIR
     MLIRLLVMCommonConversion
     MLIRLLVMIR
@@ -42,13 +55,13 @@ iree_cc_library(
     MLIRMemRef
     MLIRMemRefToLLVM
     MLIRMemRefTransforms
+    MLIRPDL
+    MLIRPDLInterp
     MLIRPass
     MLIRReconcileUnrealizedCasts
     MLIRSCF
-    MLIRSCFToStandard
-    MLIRStandard
-    MLIRStandardOpsTransforms
-    MLIRStandardToLLVM
+    MLIRSCFToControlFlow
+    MLIRSCFTransforms
     MLIRTensor
     MLIRTosa
     MLIRTosaToStandard
@@ -56,19 +69,20 @@ iree_cc_library(
     MLIRVector
     MLIRVectorToLLVM
     MLIRVectorToSCF
+    MLIRVectorTransforms
     iree::compiler::Codegen::Common
     iree::compiler::Codegen::Dialect::IREECodegenDialect
     iree::compiler::Codegen::PassHeaders
+    iree::compiler::Codegen::Sandbox
     iree::compiler::Codegen::Transforms
     iree::compiler::Codegen::Utils
     iree::compiler::Dialect::Flow::IR
+    iree::compiler::Dialect::Flow::IR::PartitionableLoopsInterface
     iree::compiler::Dialect::HAL::IR
     iree::compiler::Dialect::HAL::IR::HALDialect
-    iree::compiler::Dialect::LinalgExt::IR
-    iree::compiler::Dialect::LinalgExt::Transforms
-    iree::compiler::Dialect::Shape::IR
-    iree::compiler::Dialect::Shape::Transforms
+    iree::compiler::Dialect::HAL::Utils
     iree::compiler::Dialect::Util::IR
+    iree::compiler::Utils
   PUBLIC
 )
 

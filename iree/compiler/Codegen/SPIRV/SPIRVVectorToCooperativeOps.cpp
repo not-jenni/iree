@@ -17,7 +17,7 @@
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/Dialect/SPIRV/Transforms/SPIRVConversion.h"
 #include "mlir/Dialect/Utils/StructuredOpsUtils.h"
-#include "mlir/Dialect/Vector/VectorOps.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -86,8 +86,8 @@ struct ConvertVectorTransferOp final
       vector::TransferReadOp::Adaptor adaptor(operands,
                                               op->getAttrDictionary());
       Value bufferPtr = spirv::getElementPtr(
-          *getTypeConverter<SPIRVTypeConverter>(), memrefType, adaptor.source(),
-          adaptor.indices(), loc, rewriter);
+          *getTypeConverter<SPIRVTypeConverter>(), memrefType,
+          adaptor.getSource(), adaptor.getIndices(), loc, rewriter);
       rewriter.replaceOpWithNewOp<spirv::CooperativeMatrixLoadNVOp>(
           op, matType, bufferPtr, strideValue, coloumnMajor,
           spirv::MemoryAccessAttr());
@@ -98,10 +98,10 @@ struct ConvertVectorTransferOp final
       vector::TransferWriteOp::Adaptor adaptor(operands,
                                                op->getAttrDictionary());
       Value bufferPtr = spirv::getElementPtr(
-          *getTypeConverter<SPIRVTypeConverter>(), memrefType, adaptor.source(),
-          adaptor.indices(), loc, rewriter);
+          *getTypeConverter<SPIRVTypeConverter>(), memrefType,
+          adaptor.getSource(), adaptor.getIndices(), loc, rewriter);
       rewriter.create<spirv::CooperativeMatrixStoreNVOp>(
-          loc, bufferPtr, adaptor.vector(), strideValue, coloumnMajor,
+          loc, bufferPtr, adaptor.getVector(), strideValue, coloumnMajor,
           spirv::MemoryAccessAttr());
       rewriter.eraseOp(op);
       return success();
@@ -119,22 +119,24 @@ struct ConvertVectorContractOp final
   LogicalResult matchAndRewrite(
       vector::ContractionOp contractOp, OpAdaptor operands,
       ConversionPatternRewriter &rewriter) const override {
-    if (!llvm::empty(contractOp.masks())) return failure();
+    if (!llvm::empty(contractOp.getMasks())) return failure();
 
     // Check that this is a matmul operation.
-    auto iterators = contractOp.iterator_types().getValue();
+    auto iterators = contractOp.getIteratorTypes().getValue();
     if (iterators.size() != 3 || !isParallelIterator(iterators[0]) ||
-        !isParallelIterator(iterators[1]) || !isReductionIterator(iterators[2]))
+        !isParallelIterator(iterators[1]) ||
+        !isReductionIterator(iterators[2])) {
       return failure();
-    if (contractOp.kind() != vector::CombiningKind::ADD) return failure();
+    }
+    if (contractOp.getKind() != vector::CombiningKind::ADD) return failure();
 
     // Column major matmuls should have been lowered to transpose + contract
     // by this point. Transpose can be handled by load/store operations.
-    if (!isRowMajorMatmul(contractOp.indexing_maps())) return failure();
+    if (!isRowMajorMatmul(contractOp.getIndexingMapsAttr())) return failure();
 
     rewriter.replaceOpWithNewOp<spirv::CooperativeMatrixMulAddNVOp>(
-        contractOp, operands.acc().getType(), operands.lhs(), operands.rhs(),
-        operands.acc());
+        contractOp, operands.getAcc().getType(), operands.getLhs(),
+        operands.getRhs(), operands.getAcc());
     return success();
   }
 };
@@ -152,9 +154,9 @@ struct ConvertConstantMatrix final
     if (!vectorType || vectorType.getRank() != 2) return failure();
 
     // Only convert splat integer/float vectors.
-    auto values = op.value().dyn_cast<DenseIntOrFPElementsAttr>();
+    auto values = op.getValue().dyn_cast<DenseIntOrFPElementsAttr>();
     if (!values || !values.isSplat()) return failure();
-    Attribute value = values.getSplatValue();
+    Attribute value = values.getSplatValue<Attribute>();
 
     auto elementType = values.getType().getElementType();
     Value splatValue = rewriter.create<spirv::ConstantOp>(
@@ -173,10 +175,10 @@ struct ConvertElementwiseOp final : public OpConversionPattern<SrcOpType> {
   using OpConversionPattern<SrcOpType>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
-      SrcOpType op, ArrayRef<Value> operands,
+      SrcOpType op, typename SrcOpType::Adaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     // All operands should be of cooperative matrix types.
-    for (Value operand : operands) {
+    for (Value operand : adaptor.getOperands()) {
       if (!operand.getType().isa<spirv::CooperativeMatrixNVType>())
         return failure();
     }
@@ -185,7 +187,7 @@ struct ConvertElementwiseOp final : public OpConversionPattern<SrcOpType> {
     if (op->getNumResults() != 1) return failure();
 
     auto matType = this->typeConverter->convertType(op.getType());
-    rewriter.replaceOpWithNewOp<DstOpType>(op, matType, operands);
+    rewriter.replaceOpWithNewOp<DstOpType>(op, matType, adaptor.getOperands());
     return success();
   }
 };
@@ -198,7 +200,7 @@ struct SPIRVVectorToCooperativeOpsPass final
     : public SPIRVVectorToCooperativeOpsBase<SPIRVVectorToCooperativeOpsPass> {
   void runOnOperation() override {
     MLIRContext *context = &getContext();
-    FuncOp funcOp = getOperation();
+    func::FuncOp funcOp = getOperation();
 
     spirv::TargetEnvAttr targetAttr = getSPIRVTargetEnvAttr(funcOp);
     SPIRVTypeConverter typeConverter(targetAttr);
@@ -278,7 +280,8 @@ struct SPIRVVectorToCooperativeOpsPass final
 
 }  // namespace
 
-std::unique_ptr<OperationPass<FuncOp>> createSPIRVVectorToCooperativeOpsPass() {
+std::unique_ptr<OperationPass<func::FuncOp>>
+createSPIRVVectorToCooperativeOpsPass() {
   return std::make_unique<SPIRVVectorToCooperativeOpsPass>();
 }
 

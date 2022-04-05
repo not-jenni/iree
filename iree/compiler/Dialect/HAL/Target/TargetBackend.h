@@ -14,7 +14,7 @@
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/HAL/Utils/DeviceSwitchBuilder.h"
-#include "iree/compiler/Dialect/HAL/Utils/TypeUtils.h"
+#include "iree/compiler/Utils/OptionUtils.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "mlir/IR/Dialect.h"
@@ -25,10 +25,14 @@ namespace iree_compiler {
 namespace IREE {
 namespace HAL {
 
+// TODO(benvanik): remove this and replace with the pass pipeline options.
 // Controls executable translation targets.
 struct TargetOptions {
   // TODO(benvanik): multiple targets of the same type, etc.
   std::vector<std::string> targets;
+
+  // A path to write individual executable source listings into.
+  std::string sourceListingPath;
 
   // TODO(benvanik): flags for debug/optimization/etc.
   // The intent is that we can have a global debug/-ON flag that then each
@@ -36,11 +40,9 @@ struct TargetOptions {
   // the best we can do is a coarse flag as to whether source maps should be
   // embedded, however we could be much better here on the TargetBackend
   // interface.
+  void bindOptions(OptionsBinder &binder);
+  using FromFlags = OptionsFromFlags<TargetOptions>;
 };
-
-// Returns a TargetOptions struct initialized with the
-// --iree-hal-target-* flags.
-TargetOptions getTargetOptionsFromFlags();
 
 // HAL executable target backend interface.
 // Multiple backends can be registered and targeted during a single compilation.
@@ -137,8 +139,7 @@ class TargetBackend {
   //       hal.interface.binding @arg1, set=0, binding=1, ...
   //     }
   //     hal.executable.variant @target, target="target-backend" {
-  //       hal.executable.entry_point @main attributes {
-  //         interface = @main_io,
+  //       hal.executable.entry_point @main interface(@main_io) {
   //         ordinal = 0 : index
   //       }
   //       module { ... }
@@ -179,9 +180,9 @@ class TargetBackend {
   //       hal.executable.entry_point @main_dispatch_1 attributes { ... }
   //       hal.executable.entry_point @main_dispatch_2 attributes { ... }
   //       module {
-  //         func @main_0(...) { ... }
-  //         func @main_1(...) { ... }
-  //         func @main_2(...) { ... }
+  //         func.func @main_0(...) { ... }
+  //         func.func @main_1(...) { ... }
+  //         func.func @main_2(...) { ... }
   //       }
   //     }
   //   }
@@ -206,7 +207,7 @@ class TargetBackend {
   // binary format (such as to the IREE VM) will fail.
   virtual LogicalResult serializeExecutable(
       IREE::HAL::ExecutableVariantOp variantOp, OpBuilder &executableBuilder) {
-    llvm_unreachable("unimplemented serializeExecutable");
+    assert(false && "unimplemented serializeExecutable");
     return failure();
   }
 

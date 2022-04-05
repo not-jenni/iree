@@ -14,7 +14,7 @@
 #include "iree/compiler/Codegen/SPIRV/KernelConfig.h"
 #include "iree/compiler/Codegen/Utils/Utils.h"
 #include "llvm/Support/Debug.h"
-#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/IR/BuiltinOps.h"
 
 #define DEBUG_TYPE "iree-spirv-nvidia-config"
@@ -45,8 +45,9 @@ static Optional<CooperativeMatrixSize> getCooperativeMatrixSize(
       int64_t matmulM = property.m_size().getValue().getZExtValue();
       int64_t matmulN = property.n_size().getValue().getZExtValue();
       int64_t matmulK = property.k_size().getValue().getZExtValue();
-      if (m % matmulM == 0 && n % matmulN == 0 && k % matmulK == 0)
+      if (m % matmulM == 0 && n % matmulN == 0 && k % matmulK == 0) {
         return CooperativeMatrixSize{matmulM, matmulN, matmulK};
+      }
     }
   }
   return llvm::None;
@@ -62,8 +63,8 @@ static LogicalResult setOpConfig(const spirv::TargetEnv &targetEnv,
 
   Value lhs = op.inputs()[0], rhs = op.inputs()[1], init = op.outputs()[0];
 
-  ArrayRef<int64_t> lhsShape = getUntiledShape(lhs);
-  ArrayRef<int64_t> rhsShape = getUntiledShape(rhs);
+  ArrayRef<int64_t> lhsShape = lhs.getType().cast<ShapedType>().getShape();
+  ArrayRef<int64_t> rhsShape = rhs.getType().cast<ShapedType>().getShape();
   if (llvm::any_of(lhsShape, ShapedType::isDynamic)) return success();
   if (llvm::any_of(rhsShape, ShapedType::isDynamic)) return success();
 
@@ -103,9 +104,9 @@ static LogicalResult setOpConfig(const spirv::TargetEnv &targetEnv,
   tileSizes.push_back({coopMatSize->m, coopMatSize->n, coopMatSize->k});
   tileSizes.push_back({coopMatSize->m, coopMatSize->n, coopMatSize->k});
 
-  return setOpConfigAndEntryPointFnTranslation(op->getParentOfType<FuncOp>(),
-                                               op, tileSizes, {}, pipeline,
-                                               workgroupSize);
+  return setOpConfigAndEntryPointFnTranslation(
+      op->getParentOfType<func::FuncOp>(), op, tileSizes, pipeline,
+      workgroupSize);
 }
 
 LogicalResult setNVIDIACodeGenConfig(const spirv::TargetEnv &targetEnv,

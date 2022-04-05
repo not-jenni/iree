@@ -36,7 +36,7 @@ typedef struct iree_hal_vmvx_executable_t {
   iree_vm_function_t entry_fns[];
 } iree_hal_vmvx_executable_t;
 
-extern const iree_hal_local_executable_vtable_t iree_hal_vmvx_executable_vtable;
+static const iree_hal_local_executable_vtable_t iree_hal_vmvx_executable_vtable;
 
 // Verifies that an entry point function exported by the bytecode module matches
 // the calling convention we expect. This avoids the need to check it during
@@ -57,32 +57,116 @@ static iree_status_t iree_hal_vmvx_executable_verify_entry_point(
   return iree_ok_status();
 }
 
+// Calls the __set_constants method on |executable| with the given |constants|.
+// We wrap the data in VM buffer and require that it is not retained by the
+// module; the constant values should be extracted and stored in globals.
+// Fails if the constant table is not of the required size.
+static iree_status_t iree_hal_vmvx_executable_set_constants(
+    iree_hal_vmvx_executable_t* executable, iree_vm_module_t* bytecode_module,
+    iree_host_size_t constant_count, const uint32_t* constants) {
+  // Look for the exported function. If it's not present then no constants are
+  // required and if it is then we must have at least one constant.
+  iree_vm_function_t set_function;
+  iree_status_t status = iree_vm_module_lookup_function_by_name(
+      bytecode_module, IREE_VM_FUNCTION_LINKAGE_EXPORT,
+      iree_make_cstring_view("__set_constants"), &set_function);
+  if (iree_status_is_not_found(status)) {
+    // No constants required by the executable.
+    iree_status_ignore(status);
+    if (constant_count > 0) {
+      // ...but we got provided some anyway.
+      return iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
+                              "executable has no executable-level constants "
+                              "but %" PRIhsz " constants were provided",
+                              constant_count);
+    }
+    return iree_ok_status();  // nothing to do
+  } else if (!iree_status_is_ok(status)) {
+    return status;
+  } else if (!constant_count || !constants) {
+    // Constants required but none provided.
+    return iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
+                            "executable requires executable-level constants "
+                            "but none were provided");
+  }
+
+  IREE_TRACE_ZONE_BEGIN(z0);
+
+  // TODO(benvanik): maybe just take the cost of an alloc + clone here so that
+  // we can more gracefully handle the module doing weird things with the inputs
+  // and constants.
+
+  // Wrap the constant memory in an on-stack buffer.
+  iree_vm_buffer_t buffer = {{0}};
+  iree_vm_buffer_initialize(
+      IREE_VM_BUFFER_ACCESS_ORIGIN_HOST,
+      iree_make_byte_span((void*)constants,
+                          constant_count * sizeof(*constants)),
+      iree_allocator_null(), &buffer);
+
+  // Setup input list.
+  uint8_t input_storage[64] = {0};
+  iree_vm_list_t* inputs = NULL;
+  iree_vm_type_def_t element_type =
+      iree_vm_type_def_make_ref_type(iree_vm_buffer_type_id());
+  status = iree_vm_list_initialize(
+      iree_make_byte_span(input_storage, sizeof(input_storage)), &element_type,
+      1, &inputs);
+  if (iree_status_is_ok(status)) {
+    iree_vm_ref_t buffer_ref = iree_vm_buffer_retain_ref(&buffer);
+    status = iree_vm_list_push_ref_move(inputs, &buffer_ref);
+  }
+
+  // Copy the executable constants into the module state.
+  if (iree_status_is_ok(status)) {
+    status =
+        iree_vm_invoke(executable->context, set_function,
+                       IREE_VM_INVOCATION_FLAG_NONE, /*policy=*/NULL, inputs,
+                       /*outputs=*/NULL, executable->base.host_allocator);
+  }
+
+  // Inputs *must* be released here as we allocated it on the stack.
+  if (inputs) {
+    iree_vm_list_deinitialize(inputs);
+  }
+
+  // Buffer *must* be released here since we don't control the constant
+  // lifetime - this will abort if it's not.
+  iree_vm_buffer_deinitialize(&buffer);
+
+  IREE_TRACE_ZONE_END(z0);
+  return status;
+}
+
 static iree_status_t iree_hal_vmvx_executable_create(
     iree_vm_context_t* context, iree_vm_module_t* bytecode_module,
-    iree_host_size_t executable_layout_count,
-    iree_hal_executable_layout_t* const* executable_layouts,
+    const iree_hal_executable_params_t* executable_params,
     iree_allocator_t host_allocator, iree_hal_executable_t** out_executable) {
   IREE_ASSERT_ARGUMENT(context);
   IREE_ASSERT_ARGUMENT(bytecode_module);
-  IREE_ASSERT_ARGUMENT(!executable_layout_count || executable_layouts);
+  IREE_ASSERT_ARGUMENT(executable_params);
+  IREE_ASSERT_ARGUMENT(!executable_params->executable_layout_count ||
+                       executable_params->executable_layouts);
   IREE_ASSERT_ARGUMENT(out_executable);
   *out_executable = NULL;
   IREE_TRACE_ZONE_BEGIN(z0);
 
   iree_host_size_t entry_count =
       iree_vm_module_signature(bytecode_module).export_function_count;
-  if (entry_count != executable_layout_count) {
+  if (entry_count != executable_params->executable_layout_count) {
     return iree_make_status(IREE_STATUS_FAILED_PRECONDITION,
                             "executable provides %zu entry points but caller "
                             "provided %zu; must match",
-                            entry_count, executable_layout_count);
+                            entry_count,
+                            executable_params->executable_layout_count);
   }
 
   iree_hal_vmvx_executable_t* executable = NULL;
   iree_host_size_t total_size =
       sizeof(*executable) + entry_count * sizeof(*executable->entry_fns) +
       entry_count * sizeof(*executable->base.dispatch_attrs) +
-      executable_layout_count * sizeof(iree_hal_local_executable_layout_t);
+      executable_params->executable_layout_count *
+          sizeof(iree_hal_local_executable_layout_t);
   iree_status_t status =
       iree_allocator_malloc(host_allocator, total_size, (void**)&executable);
   iree_hal_executable_dispatch_attrs_v0_t* dispatch_attrs = NULL;
@@ -94,9 +178,10 @@ static iree_status_t iree_hal_vmvx_executable_create(
     iree_hal_local_executable_layout_t** executable_layouts_ptr =
         (iree_hal_local_executable_layout_t**)ptr;
     iree_hal_local_executable_initialize(
-        &iree_hal_vmvx_executable_vtable, executable_layout_count,
-        executable_layouts, executable_layouts_ptr, host_allocator,
-        &executable->base);
+        &iree_hal_vmvx_executable_vtable,
+        executable_params->executable_layout_count,
+        executable_params->executable_layouts, executable_layouts_ptr,
+        host_allocator, &executable->base);
     executable->context = context;
     executable->base.dispatch_attrs = dispatch_attrs;
     iree_vm_context_retain(executable->context);
@@ -130,6 +215,13 @@ static iree_status_t iree_hal_vmvx_executable_create(
     }
   }
 
+  // Provide executable constants to the module.
+  if (iree_status_is_ok(status)) {
+    status = iree_hal_vmvx_executable_set_constants(
+        executable, bytecode_module, executable_params->constant_count,
+        executable_params->constants);
+  }
+
   if (iree_status_is_ok(status)) {
     *out_executable = (iree_hal_executable_t*)executable;
   } else {
@@ -157,7 +249,7 @@ static void iree_hal_vmvx_executable_destroy(
 static iree_status_t iree_hal_vmvx_executable_issue_call(
     iree_hal_local_executable_t* base_executable, iree_host_size_t ordinal,
     const iree_hal_executable_dispatch_state_v0_t* dispatch_state,
-    const iree_hal_vec3_t* workgroup_id, iree_byte_span_t local_memory) {
+    const iree_hal_executable_workgroup_state_v0_t* workgroup_state) {
   iree_hal_vmvx_executable_t* executable =
       (iree_hal_vmvx_executable_t*)base_executable;
 
@@ -221,7 +313,9 @@ static iree_status_t iree_hal_vmvx_executable_issue_call(
   iree_vm_buffer_t local_memory_buffer;
   iree_vm_buffer_initialize(
       IREE_VM_BUFFER_ACCESS_MUTABLE | IREE_VM_BUFFER_ACCESS_ORIGIN_HOST,
-      local_memory, iree_allocator_null(), &local_memory_buffer);
+      iree_make_byte_span(workgroup_state->local_memory,
+                          workgroup_state->local_memory_size),
+      iree_allocator_null(), &local_memory_buffer);
   iree_vm_buffer_retain(&local_memory_buffer);  // for call
 
   // Map the push constant memory directly from the dispatch state.
@@ -237,13 +331,13 @@ static iree_status_t iree_hal_vmvx_executable_issue_call(
   // Prepare call argument buffer. We've verified the signature on creation and
   // know the exact format we can assume here.
   //
-  //   func @entry(
+  //   func.func @entry(
   //       %local_memory: !vmvx.buffer,
   //       %constants: !vmvx.buffer,
   //       %bindings: !util.list<!vmvx.buffer>,
-  //       %workgroup_x: index,
-  //       %workgroup_y: index,
-  //       %workgroup_z: index,
+  //       %workgroup_id_x: index,
+  //       %workgroup_id_y: index,
+  //       %workgroup_id_z: index,
   //       %workgroup_size_x: index,
   //       %workgroup_size_y: index,
   //       %workgroup_size_z: index,
@@ -258,9 +352,9 @@ static iree_status_t iree_hal_vmvx_executable_issue_call(
     iree_vm_ref_t local_memory;
     iree_vm_ref_t constants;
     iree_vm_ref_t bindings;
-    uint32_t workgroup_x;
-    uint32_t workgroup_y;
-    uint32_t workgroup_z;
+    uint32_t workgroup_id_x;
+    uint32_t workgroup_id_y;
+    uint32_t workgroup_id_z;
     uint32_t workgroup_size_x;
     uint32_t workgroup_size_y;
     uint32_t workgroup_size_z;
@@ -286,15 +380,15 @@ static iree_status_t iree_hal_vmvx_executable_issue_call(
               .ptr = binding_list,
               .offsetof_counter = 0,
           },
-      .workgroup_x = workgroup_id->x,
-      .workgroup_y = workgroup_id->y,
-      .workgroup_z = workgroup_id->z,
-      .workgroup_size_x = dispatch_state->workgroup_size.x,
-      .workgroup_size_y = dispatch_state->workgroup_size.y,
-      .workgroup_size_z = dispatch_state->workgroup_size.z,
-      .workgroup_count_x = dispatch_state->workgroup_count.x,
-      .workgroup_count_y = dispatch_state->workgroup_count.y,
-      .workgroup_count_z = dispatch_state->workgroup_count.z,
+      .workgroup_id_x = workgroup_state->workgroup_id_x,
+      .workgroup_id_y = workgroup_state->workgroup_id_y,
+      .workgroup_id_z = workgroup_state->workgroup_id_z,
+      .workgroup_size_x = dispatch_state->workgroup_size_x,
+      .workgroup_size_y = dispatch_state->workgroup_size_y,
+      .workgroup_size_z = dispatch_state->workgroup_size_z,
+      .workgroup_count_x = dispatch_state->workgroup_count_x,
+      .workgroup_count_y = dispatch_state->workgroup_count_y,
+      .workgroup_count_z = dispatch_state->workgroup_count_z,
   };
 
   // On-stack stack. We really do abuse the stack too much here.
@@ -327,12 +421,13 @@ static iree_status_t iree_hal_vmvx_executable_issue_call(
   return status;
 }
 
-const iree_hal_local_executable_vtable_t iree_hal_vmvx_executable_vtable = {
-    .base =
-        {
-            .destroy = iree_hal_vmvx_executable_destroy,
-        },
-    .issue_call = iree_hal_vmvx_executable_issue_call,
+static const iree_hal_local_executable_vtable_t
+    iree_hal_vmvx_executable_vtable = {
+        .base =
+            {
+                .destroy = iree_hal_vmvx_executable_destroy,
+            },
+        .issue_call = iree_hal_vmvx_executable_issue_call,
 };
 
 //===----------------------------------------------------------------------===//
@@ -346,7 +441,7 @@ typedef struct iree_hal_vmvx_module_loader_t {
   iree_vm_module_t* vmvx_module;
 } iree_hal_vmvx_module_loader_t;
 
-extern const iree_hal_executable_loader_vtable_t
+static const iree_hal_executable_loader_vtable_t
     iree_hal_vmvx_module_loader_vtable;
 
 iree_status_t iree_hal_vmvx_module_loader_create(
@@ -406,21 +501,21 @@ static bool iree_hal_vmvx_module_loader_query_support(
 
 static iree_status_t iree_hal_vmvx_module_loader_try_load(
     iree_hal_executable_loader_t* base_executable_loader,
-    const iree_hal_executable_spec_t* executable_spec,
+    const iree_hal_executable_params_t* executable_params,
     iree_hal_executable_t** out_executable) {
   iree_hal_vmvx_module_loader_t* executable_loader =
       (iree_hal_vmvx_module_loader_t*)base_executable_loader;
   IREE_TRACE_ZONE_BEGIN(z0);
 
   iree_const_byte_span_t bytecode_module_data =
-      executable_spec->executable_data;
+      executable_params->executable_data;
 
   // If the caching mode allows for aliasing the existing flatbuffer data then
   // we avoid allocations and just pass the pointer on through. The caller
   // ensures that the data remains valid for the duration the executable is
   // loaded. Otherwise, we clone it and let the bytecode module take ownership.
   iree_allocator_t bytecode_module_allocator;
-  if (iree_all_bits_set(executable_spec->caching_mode,
+  if (iree_all_bits_set(executable_params->caching_mode,
                         IREE_HAL_EXECUTABLE_CACHING_MODE_ALIAS_PROVIDED_DATA)) {
     // Zero-copy route.
     bytecode_module_allocator = iree_allocator_null();
@@ -428,7 +523,7 @@ static iree_status_t iree_hal_vmvx_module_loader_try_load(
     bytecode_module_allocator = executable_loader->host_allocator;
     IREE_RETURN_AND_END_ZONE_IF_ERROR(
         z0, iree_allocator_clone(executable_loader->host_allocator,
-                                 executable_spec->executable_data,
+                                 executable_params->executable_data,
                                  (void**)&bytecode_module_data.data));
   }
 
@@ -436,7 +531,7 @@ static iree_status_t iree_hal_vmvx_module_loader_try_load(
   // we have it) to the module to manage.
   iree_vm_module_t* bytecode_module = NULL;
   iree_status_t status = iree_vm_bytecode_module_create(
-      executable_spec->executable_data, bytecode_module_allocator,
+      executable_params->executable_data, bytecode_module_allocator,
       executable_loader->host_allocator, &bytecode_module);
 
   // Create the context tying together the shared VMVX module and the
@@ -457,9 +552,8 @@ static iree_status_t iree_hal_vmvx_module_loader_try_load(
   // module, which itself may own the underlying allocation).
   if (iree_status_is_ok(status)) {
     status = iree_hal_vmvx_executable_create(
-        context, bytecode_module, executable_spec->executable_layout_count,
-        executable_spec->executable_layouts, executable_loader->host_allocator,
-        out_executable);
+        context, bytecode_module, executable_params,
+        executable_loader->host_allocator, out_executable);
   }
 
   iree_vm_context_release(context);
@@ -469,8 +563,9 @@ static iree_status_t iree_hal_vmvx_module_loader_try_load(
   return status;
 }
 
-const iree_hal_executable_loader_vtable_t iree_hal_vmvx_module_loader_vtable = {
-    .destroy = iree_hal_vmvx_module_loader_destroy,
-    .query_support = iree_hal_vmvx_module_loader_query_support,
-    .try_load = iree_hal_vmvx_module_loader_try_load,
+static const iree_hal_executable_loader_vtable_t
+    iree_hal_vmvx_module_loader_vtable = {
+        .destroy = iree_hal_vmvx_module_loader_destroy,
+        .query_support = iree_hal_vmvx_module_loader_query_support,
+        .try_load = iree_hal_vmvx_module_loader_try_load,
 };

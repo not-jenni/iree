@@ -23,6 +23,46 @@
 #include "iree/base/tracing.h"
 
 //===----------------------------------------------------------------------===//
+// C11 aligned_alloc compatibility shim
+//===----------------------------------------------------------------------===//
+
+#if defined(IREE_PLATFORM_WINDOWS)
+// https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-malloc
+#define iree_aligned_alloc(alignment, size) _aligned_malloc(size, alignment)
+#define iree_aligned_free(p) _aligned_free(p)
+#elif defined(_ISOC11_SOURCE)
+// https://en.cppreference.com/w/c/memory/aligned_alloc
+#define iree_aligned_alloc(alignment, size) aligned_alloc(alignment, size)
+#define iree_aligned_free(p) free(p)
+#elif _POSIX_C_SOURCE >= 200112L
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_memalign.html
+static inline void* iree_aligned_alloc(size_t alignment, size_t size) {
+  void* ptr = NULL;
+  return posix_memalign(&ptr, alignment, size) == 0 ? ptr : NULL;
+}
+#define iree_aligned_free(p) free(p)
+#else
+// Emulates alignment with normal malloc. We overallocate by at least the
+// alignment + the size of a pointer, store the base pointer at p[-1], and
+// return the aligned pointer. This lets us easily get the base pointer in free
+// to pass back to the system.
+static inline void* iree_aligned_alloc(size_t alignment, size_t size) {
+  void* base_ptr = malloc(size + alignment + sizeof(uintptr_t));
+  if (!base_ptr) return NULL;
+  uintptr_t* aligned_ptr = (uintptr_t*)iree_host_align(
+      (uintptr_t)base_ptr + sizeof(uintptr_t), alignment);
+  aligned_ptr[-1] = (uintptr_t)base_ptr;
+  return aligned_ptr;
+}
+static inline void iree_aligned_free(void* p) {
+  if (IREE_UNLIKELY(!p)) return;
+  uintptr_t* aligned_ptr = (uintptr_t*)p;
+  void* base_ptr = (void*)aligned_ptr[-1];
+  free(base_ptr);
+}
+#endif  // IREE_PLATFORM_WINDOWS
+
+//===----------------------------------------------------------------------===//
 // iree_status_t canonical errors
 //===----------------------------------------------------------------------===//
 
@@ -220,8 +260,6 @@ IREE_API_EXPORT const char* iree_status_code_string(iree_status_code_t code) {
       return "ALREADY_EXISTS";
     case IREE_STATUS_PERMISSION_DENIED:
       return "PERMISSION_DENIED";
-    case IREE_STATUS_UNAUTHENTICATED:
-      return "UNAUTHENTICATED";
     case IREE_STATUS_RESOURCE_EXHAUSTED:
       return "RESOURCE_EXHAUSTED";
     case IREE_STATUS_FAILED_PRECONDITION:
@@ -238,6 +276,10 @@ IREE_API_EXPORT const char* iree_status_code_string(iree_status_code_t code) {
       return "UNAVAILABLE";
     case IREE_STATUS_DATA_LOSS:
       return "DATA_LOSS";
+    case IREE_STATUS_UNAUTHENTICATED:
+      return "UNAUTHENTICATED";
+    case IREE_STATUS_DEFERRED:
+      return "DEFERRED";
     default:
       return "";
   }
@@ -525,11 +567,23 @@ IREE_API_EXPORT iree_status_t iree_status_ignore(iree_status_t status) {
   return iree_ok_status();
 }
 
+IREE_API_EXPORT iree_status_t iree_status_join(iree_status_t base_status,
+                                               iree_status_t new_status) {
+  // TODO(benvanik): annotate |base_status| with |new_status| so we see it?
+  // This is intended for failure handling and usually the first failure is the
+  // root cause and most important to see.
+  if (!iree_status_is_ok(base_status)) {
+    iree_status_ignore(new_status);
+    return base_status;
+  }
+  return new_status;
+}
+
 IREE_API_EXPORT IREE_ATTRIBUTE_NORETURN void iree_status_abort(
     iree_status_t status) {
+  iree_status_fprint(stderr, status);
   IREE_ASSERT(!iree_status_is_ok(status),
               "only valid to call with failing status codes");
-  iree_status_fprint(stderr, status);
   iree_status_free(status);
   abort();
 }
@@ -645,7 +699,8 @@ IREE_API_EXPORT bool iree_status_format(iree_status_t status,
   *out_buffer_length = 0;
 
   // Grab storage which may have a message and zero or more payloads.
-  iree_status_storage_t* storage = iree_status_storage(status);
+  iree_status_storage_t* storage IREE_ATTRIBUTE_UNUSED =
+      iree_status_storage(status);
 
   // Prefix with source location and status code string (may be 'OK').
   iree_host_size_t buffer_length = 0;
@@ -771,7 +826,7 @@ IREE_API_EXPORT void iree_status_fprint(FILE* file, iree_status_t status) {
     fprintf(file, "%.*s\n", (int)status_buffer_length, status_buffer);
     iree_allocator_free(allocator, status_buffer);
   } else {
-    fprintf(file, "(failed to format status)\n");
+    fprintf(file, "(?)\n");
   }
   fflush(file);
 }

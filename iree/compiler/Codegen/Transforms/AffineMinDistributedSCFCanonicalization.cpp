@@ -12,6 +12,7 @@
 
 #include "iree/compiler/Codegen/Transforms/Transforms.h"
 #include "mlir/Dialect/Affine/Utils.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -31,8 +32,9 @@ static bool isDivisible(Value v, int64_t dividend);
 /// ```
 static bool affineMinOpDivisible(AffineMinOp minOp, int64_t dividend) {
   if (!minOp.getSymbolOperands().empty() ||
-      minOp.getAffineMap().getNumResults() != 2)
+      minOp.getAffineMap().getNumResults() != 2) {
     return {};
+  }
   Value iv;
   Value ub;
   Value lb;
@@ -45,9 +47,9 @@ static bool affineMinOpDivisible(AffineMinOp minOp, int64_t dividend) {
     auto forOp = dyn_cast_or_null<scf::ForOp>(containingOp);
     if (forOp && forOp.getInductionVar() == dim) {
       iv = dim;
-      ub = forOp.upperBound();
-      lb = forOp.lowerBound();
-      step = forOp.step();
+      ub = forOp.getUpperBound();
+      lb = forOp.getLowerBound();
+      step = forOp.getStep();
       break;
     }
     auto parallelOp = dyn_cast_or_null<scf::ParallelOp>(containingOp);
@@ -55,9 +57,9 @@ static bool affineMinOpDivisible(AffineMinOp minOp, int64_t dividend) {
     for (auto inductionVar : llvm::enumerate(parallelOp.getInductionVars())) {
       if (inductionVar.value() == dim) {
         iv = dim;
-        ub = parallelOp.upperBound()[inductionVar.index()];
-        lb = parallelOp.lowerBound()[inductionVar.index()];
-        step = parallelOp.step()[inductionVar.index()];
+        ub = parallelOp.getUpperBound()[inductionVar.index()];
+        lb = parallelOp.getLowerBound()[inductionVar.index()];
+        step = parallelOp.getStep()[inductionVar.index()];
         break;
       }
     }
@@ -68,19 +70,21 @@ static bool affineMinOpDivisible(AffineMinOp minOp, int64_t dividend) {
   AffineExpr ivDim;
   AffineExpr ubDim;
   for (auto dim : llvm::enumerate(minOp.getDimOperands())) {
-    if (dim.value() == iv)
+    if (dim.value() == iv) {
       ivDim = getAffineDimExpr(dim.index(), minOp.getContext());
-    else if (dim.value() == ub)
+    } else if (dim.value() == ub) {
       ubDim = getAffineDimExpr(dim.index(), minOp.getContext());
-    else
+    } else {
       return false;
+    }
   }
 
   if (!ubDim) {
-    if (auto cstUb = ub.getDefiningOp<arith::ConstantIndexOp>())
+    if (auto cstUb = ub.getDefiningOp<arith::ConstantIndexOp>()) {
       ubDim = getAffineConstantExpr(cstUb.value(), minOp.getContext());
-    else
+    } else {
       return false;
+    }
   }
   AffineExpr diffExp = ubDim - ivDim;
   // Check that all the affine map results are either constant divisible by
@@ -134,8 +138,9 @@ static Optional<int64_t> foldAffineMin(AffineMinOp minOp) {
   AffineMap map = minOp.getAffineMap();
   int64_t constantResult = 0;
   for (AffineExpr result : map.getResults()) {
-    if (auto cst = result.dyn_cast<AffineConstantExpr>())
+    if (auto cst = result.dyn_cast<AffineConstantExpr>()) {
       constantResult = cst.getValue();
+    }
   }
   if (constantResult == 0) return {};
   // If afine.min map's results are all positive and divisible by
@@ -163,7 +168,7 @@ struct AffineMinDistributedSCFCanonicalizationPattern
 /// individually.
 struct AffineMinDistributedSCFCanonicalizationPass
     : public PassWrapper<AffineMinDistributedSCFCanonicalizationPass,
-                         FunctionPass> {
+                         OperationPass<func::FuncOp>> {
   StringRef getArgument() const override {
     return "iree-codegen-affinemin-scf-canonicalization";
   }
@@ -173,8 +178,8 @@ struct AffineMinDistributedSCFCanonicalizationPass
            "distribute.";
   }
 
-  void runOnFunction() override {
-    FuncOp funcOp = getFunction();
+  void runOnOperation() override {
+    func::FuncOp funcOp = getOperation();
     RewritePatternSet foldPattern(&getContext());
     populateAffineMinSCFCanonicalizationPattern(foldPattern);
     FrozenRewritePatternSet frozenPatterns(std::move(foldPattern));

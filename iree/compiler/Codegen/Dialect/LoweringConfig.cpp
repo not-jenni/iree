@@ -8,16 +8,16 @@
 
 #include "iree/compiler/Codegen/Dialect/IREECodegenDialect.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/DialectImplementation.h"
 
 #define GET_ATTRDEF_CLASSES
 #include "iree/compiler/Codegen/Dialect/LoweringConfig.cpp.inc"
 #include "iree/compiler/Codegen/Dialect/LoweringConfigEnums.cpp.inc"
 
-static const char kConfigAttrName[] = "lowering.config";
-static const char kTranslationInfoAttrName[] = "translation.info";
-static const char kCompilationInfoAttrName[] = "compilation.info";
+static const char kConfigAttrName[] = "lowering_config";
+static const char kTranslationInfoAttrName[] = "translation_info";
+static const char kCompilationInfoAttrName[] = "compilation_info";
 
 namespace mlir {
 namespace iree_compiler {
@@ -68,85 +68,15 @@ static SmallVector<int64_t> getIntegerVals(ArrayAttr arrayAttr) {
 namespace IREE {
 namespace Codegen {
 
-namespace {
-
-// TODO(ravishankarm): The IREEFieldParser is part of the patch D111594 (where
-// it is called ::mlir::FieldParser). Remove this when the upstream change lands
-// in IREE.
-
 //===----------------------------------------------------------------------===//
-// Parse Fields
-//===----------------------------------------------------------------------===//
-
-/// Provide a template class that can be specialized by users to dispatch to
-/// parsers. Auto-generated parsers generate calls to
-/// `IREEFieldParser<T>::parse`, where `T` is the parameter storage type, to
-/// parse custom types.
-template <typename T, typename = T>
-struct IREEFieldParser;
-
-/// Parse an attribute.
-template <typename AttributeT>
-struct IREEFieldParser<
-    AttributeT, std::enable_if_t<std::is_base_of<Attribute, AttributeT>::value,
-                                 AttributeT>> {
-  static FailureOr<AttributeT> parse(DialectAsmParser &parser) {
-    AttributeT value;
-    if (parser.parseAttribute(value)) return failure();
-    return value;
-  }
-};
-
-/// Parse any integer.
-template <typename IntT>
-struct IREEFieldParser<IntT,
-                       std::enable_if_t<std::is_integral<IntT>::value, IntT>> {
-  static FailureOr<IntT> parse(DialectAsmParser &parser) {
-    IntT value;
-    if (parser.parseInteger(value)) return failure();
-    return value;
-  }
-};
-
-/// Parse a string.
-template <>
-struct IREEFieldParser<std::string> {
-  static FailureOr<std::string> parse(DialectAsmParser &parser) {
-    std::string value;
-    if (parser.parseString(&value)) return failure();
-    return value;
-  }
-};
-
-/// Parse any container that supports back insertion as a list.
-template <typename ContainerT>
-struct IREEFieldParser<
-    ContainerT, std::enable_if_t<std::is_member_function_pointer<decltype(
-                                     &ContainerT::push_back)>::value,
-                                 ContainerT>> {
-  using ElementT = typename ContainerT::value_type;
-  static FailureOr<ContainerT> parse(DialectAsmParser &parser) {
-    ContainerT elements;
-    auto elementParser = [&]() {
-      auto element = IREEFieldParser<ElementT>::parse(parser);
-      if (failed(element)) return failure();
-      elements.push_back(element.getValue());
-      return success();
-    };
-    if (parser.parseCommaSeparatedList(elementParser)) return failure();
-    return elements;
-  }
-};
-}  // namespace
-
-//===----------------------------------------------------------------------===//
-// iree_codegen.translation.info
+// iree_codegen.translation_info
 //===----------------------------------------------------------------------===//
 
 TranslationInfoAttr TranslationInfoAttr::get(
     MLIRContext *context, DispatchLoweringPassPipeline passPipeline,
     ArrayRef<int64_t> workloadPerWorkgroup) {
-  auto pipelineAttr = StringAttr::get(context, stringifyEnum(passPipeline));
+  auto pipelineAttr =
+      DispatchLoweringPassPipelineAttr::get(context, passPipeline);
   ArrayAttr workloadPerWorkgroupAttr =
       getI64IntegerArrayAttr(context, workloadPerWorkgroup);
   return get(context, pipelineAttr, workloadPerWorkgroupAttr);
@@ -154,9 +84,7 @@ TranslationInfoAttr TranslationInfoAttr::get(
 
 DispatchLoweringPassPipeline
 TranslationInfoAttr::getDispatchLoweringPassPipeline() {
-  Optional<DispatchLoweringPassPipeline> passPipeline =
-      symbolizeEnum<DispatchLoweringPassPipeline>(getPassPipeline().getValue());
-  return passPipeline.getValue();
+  return getPassPipeline().getValue();
 }
 
 SmallVector<int64_t> TranslationInfoAttr::getWorkloadPerWorkgroupVals() {
@@ -164,78 +92,22 @@ SmallVector<int64_t> TranslationInfoAttr::getWorkloadPerWorkgroupVals() {
 }
 
 LogicalResult TranslationInfoAttr::verify(
-    function_ref<InFlightDiagnostic()> emitError, StringAttr passPipeline,
+    function_ref<InFlightDiagnostic()> emitError,
+    IREE::Codegen::DispatchLoweringPassPipelineAttr passPipeline,
     ArrayAttr workloadPerWorkgroup) {
   if (!passPipeline) {
     return emitError() << "missing pass pipeline specification";
   }
-  auto passPipelineValue =
-      symbolizeEnum<IREE::Codegen::DispatchLoweringPassPipeline>(
-          passPipeline.getValue());
-  if (!passPipelineValue) {
+  auto passPipelineValue = passPipeline.getValue();
+  if (passPipelineValue > IREE::Codegen::DispatchLoweringPassPipeline::None) {
     return emitError() << "invalid pass pipeline value : "
-                       << passPipeline.getValue();
-  }
-  if (!workloadPerWorkgroup) {
-    return emitError() << "expected workload_per_wg to be specified (even if "
-                          "specified as empty)";
-  }
-  if (!checkIntegerArrayAttr(workloadPerWorkgroup)) {
-    return emitError() << "expected workload_per_wg to be an IntegerAttr list";
+                       << stringifyEnum(passPipeline.getValue());
   }
   return success();
 }
 
-::mlir::Attribute TranslationInfoAttr::parse(::mlir::DialectAsmParser &parser,
-                                             ::mlir::Type attrType) {
-  ::mlir::FailureOr<StringAttr> _result_passPipeline;
-  ::mlir::FailureOr<ArrayAttr> _result_workloadPerWorkgroup;
-  // Parse literal '<'
-  if (parser.parseLess()) return {};
-  // Parse variable 'passPipeline'
-  _result_passPipeline = IREEFieldParser<StringAttr>::parse(parser);
-  if (failed(_result_passPipeline)) {
-    parser.emitError(parser.getCurrentLocation(),
-                     "failed to parse IREECodegen_TranslationInfoAttr "
-                     "parameter 'passPipeline' which is to be a `StringAttr`");
-    return {};
-  }
-  // Parse literal ','
-  if (parser.parseComma()) return {};
-  // Parse literal 'workload_per_wg'
-  if (parser.parseKeyword("workload_per_wg")) return {};
-  // Parse literal '='
-  if (parser.parseEqual()) return {};
-  // Parse variable 'workloadPerWorkgroup'
-  _result_workloadPerWorkgroup = IREEFieldParser<ArrayAttr>::parse(parser);
-  if (failed(_result_workloadPerWorkgroup)) {
-    parser.emitError(
-        parser.getCurrentLocation(),
-        "failed to parse IREECodegen_TranslationInfoAttr parameter "
-        "'workloadPerWorkgroup' which is to be a `ArrayAttr`");
-    return {};
-  }
-  // Parse literal '>'
-  if (parser.parseGreater()) return {};
-  return TranslationInfoAttr::get(parser.getContext(),
-                                  _result_passPipeline.getValue(),
-                                  _result_workloadPerWorkgroup.getValue());
-}
-
-void TranslationInfoAttr::print(::mlir::DialectAsmPrinter &printer) const {
-  printer << "translation.info";
-  printer << "<";
-  printer << getPassPipeline();
-  printer << ",";
-  printer << ' ' << "workload_per_wg";
-  printer << ' ' << "=";
-  printer << ' ';
-  printer << getWorkloadPerWorkgroup();
-  printer << ">";
-}
-
 //===----------------------------------------------------------------------===//
-// iree_codegen.lowering.config
+// iree_codegen.lowering_config
 //===----------------------------------------------------------------------===//
 
 LoweringConfigAttr LoweringConfigAttr::get(MLIRContext *context,
@@ -288,73 +160,17 @@ LogicalResult LoweringConfigAttr::verify(
     return emitError()
            << "expected all elements of tile_sizes to be a list of integers";
   }
-  if (!nativeVectorSize) {
-    return emitError() << "expected native_vector_size to be specified (even "
-                          "if specified as empty)";
-  }
-  if (!checkIntegerArrayAttr(nativeVectorSize)) {
-    return emitError()
-           << "expected native_vector_size to be a list of integer values";
+  if (nativeVectorSize) {
+    if (!checkIntegerArrayAttr(nativeVectorSize)) {
+      return emitError()
+             << "expected native_vector_size to be a list of integer values";
+    }
   }
   return success();
 }
 
-::mlir::Attribute LoweringConfigAttr::parse(::mlir::DialectAsmParser &parser,
-                                            ::mlir::Type attrType) {
-  ::mlir::FailureOr<ArrayAttr> _result_tileSizes;
-  ::mlir::FailureOr<ArrayAttr> _result_nativeVectorSize;
-  // Parse literal '<'
-  if (parser.parseLess()) return {};
-  // Parse literal 'tile_sizes'
-  if (parser.parseKeyword("tile_sizes")) return {};
-  // Parse literal '='
-  if (parser.parseEqual()) return {};
-  // Parse variable 'tileSizes'
-  _result_tileSizes = IREEFieldParser<ArrayAttr>::parse(parser);
-  if (failed(_result_tileSizes)) {
-    parser.emitError(parser.getCurrentLocation(),
-                     "failed to parse IREECodegen_LoweringConfigAttr parameter "
-                     "'tileSizes' which is to be a `ArrayAttr`");
-    return {};
-  }
-  // Parse literal ','
-  if (parser.parseComma()) return {};
-  // Parse literal 'native_vector_size'
-  if (parser.parseKeyword("native_vector_size")) return {};
-  // Parse literal '='
-  if (parser.parseEqual()) return {};
-  // Parse variable 'nativeVectorSize'
-  _result_nativeVectorSize = IREEFieldParser<ArrayAttr>::parse(parser);
-  if (failed(_result_nativeVectorSize)) {
-    parser.emitError(parser.getCurrentLocation(),
-                     "failed to parse IREECodegen_LoweringConfigAttr parameter "
-                     "'nativeVectorSize' which is to be a `ArrayAttr`");
-    return {};
-  }
-  // Parse literal '>'
-  if (parser.parseGreater()) return {};
-  return LoweringConfigAttr::get(parser.getContext(),
-                                 _result_tileSizes.getValue(),
-                                 _result_nativeVectorSize.getValue());
-}
-
-void LoweringConfigAttr::print(::mlir::DialectAsmPrinter &printer) const {
-  printer << "lowering.config";
-  printer << "<";
-  printer << "tile_sizes";
-  printer << ' ' << "=";
-  printer << ' ';
-  printer << getTileSizes();
-  printer << ",";
-  printer << ' ' << "native_vector_size";
-  printer << ' ' << "=";
-  printer << ' ';
-  printer << getNativeVectorSize();
-  printer << ">";
-}
-
 //===----------------------------------------------------------------------===//
-// iree.compilation.info
+// iree.compilation_info
 //===----------------------------------------------------------------------===//
 
 CompilationInfoAttr CompilationInfoAttr::get(MLIRContext *context,
@@ -402,81 +218,12 @@ LogicalResult CompilationInfoAttr::verify(
           translationInfo.getWorkloadPerWorkgroup()))) {
     return failure();
   }
-  if (!workgroupSize) {
-    return emitError() << "expected workgroup_size to be specified (even if "
-                          "specified empty)";
-  }
-  if (!checkIntegerArrayAttr(workgroupSize)) {
-    return emitError() << "expected workgroup_size to be a list of integers";
+  if (workgroupSize) {
+    if (!checkIntegerArrayAttr(workgroupSize)) {
+      return emitError() << "expected workgroup_size to be a list of integers";
+    }
   }
   return success();
-}
-
-/// Parser method that is copied from the auto-generated using `assemblyFormat`
-/// available with patch D111594. Replace after that change is in IREE.
-::mlir::Attribute CompilationInfoAttr::parse(::mlir::DialectAsmParser &parser,
-                                             ::mlir::Type attrType) {
-  ::mlir::FailureOr<LoweringConfigAttr> _result_loweringConfig;
-  ::mlir::FailureOr<TranslationInfoAttr> _result_translationInfo;
-  ::mlir::FailureOr<ArrayAttr> _result_workgroupSize;
-  // Parse literal '<'
-  if (parser.parseLess()) return {};
-  // Parse variable 'loweringConfig'
-  _result_loweringConfig = IREEFieldParser<LoweringConfigAttr>::parse(parser);
-  if (failed(_result_loweringConfig)) {
-    parser.emitError(
-        parser.getCurrentLocation(),
-        "failed to parse IREECodegen_CompilationInfoAttr parameter "
-        "'loweringConfig' which is to be a `LoweringConfigAttr`");
-    return {};
-  }
-  // Parse literal ','
-  if (parser.parseComma()) return {};
-  // Parse variable 'translationInfo'
-  _result_translationInfo = IREEFieldParser<TranslationInfoAttr>::parse(parser);
-  if (failed(_result_translationInfo)) {
-    parser.emitError(
-        parser.getCurrentLocation(),
-        "failed to parse IREECodegen_CompilationInfoAttr parameter "
-        "'translationInfo' which is to be a `TranslationInfoAttr`");
-    return {};
-  }
-  // Parse literal ','
-  if (parser.parseComma()) return {};
-  // Parse literal 'workgroup_size'
-  if (parser.parseKeyword("workgroup_size")) return {};
-  // Parse literal '='
-  if (parser.parseEqual()) return {};
-  // Parse variable 'workgroupSize'
-  _result_workgroupSize = IREEFieldParser<ArrayAttr>::parse(parser);
-  if (failed(_result_workgroupSize)) {
-    parser.emitError(parser.getCurrentLocation(),
-                     "failed to parse IREECodegen_CompilationInfoAttr "
-                     "parameter 'workgroupSize' which is to be a `ArrayAttr`");
-    return {};
-  }
-  // Parse literal '>'
-  if (parser.parseGreater()) return {};
-  return CompilationInfoAttr::get(
-      parser.getContext(), _result_loweringConfig.getValue(),
-      _result_translationInfo.getValue(), _result_workgroupSize.getValue());
-}
-
-/// Printer method that is copied from the auto-generated using `assemblyFormat`
-/// available with patch D111594. Replace after that change is in IREE.
-void CompilationInfoAttr::print(::mlir::DialectAsmPrinter &printer) const {
-  printer << "compilation.info";
-  printer << "<";
-  printer << getLoweringConfig();
-  printer << ",";
-  printer << ' ';
-  printer << getTranslationInfo();
-  printer << ",";
-  printer << ' ' << "workgroup_size";
-  printer << ' ' << "=";
-  printer << ' ';
-  printer << getWorkgroupSize();
-  printer << ">";
 }
 
 SmallVector<int64_t> CompilationInfoAttr::getWorkgroupSizeVals() {
@@ -511,7 +258,7 @@ LogicalResult IREECodegenDialect::printCodegenAttrs(
 }  // namespace IREE
 
 //===----------------------------------------------------------------------===//
-// Helpers for getting/setting iree_codegen.translation.info attribute on the
+// Helpers for getting/setting iree_codegen.translation_info attribute on the
 // `hal.executable.entry_point`
 // ===----------------------------------------------------------------------===//
 
@@ -543,7 +290,7 @@ void setTranslationInfo(IREE::HAL::ExecutableEntryPointOp entryPointOp,
 }
 
 //===----------------------------------------------------------------------===//
-// Helpers for getting/setting `iree_codegen.lowering.config` attribute on root
+// Helpers for getting/setting `iree_codegen.lowering_config` attribute on root
 // operations.
 // ===----------------------------------------------------------------------===//
 
@@ -569,48 +316,8 @@ void setLoweringConfig(Operation *op,
   op->setAttr(kConfigAttrName, config);
 }
 
-LogicalResult setOpConfigAndEntryPointFnTranslation(
-    FuncOp entryPointFn, Operation *op,
-    IREE::Codegen::LoweringConfigAttr config,
-    IREE::Codegen::DispatchLoweringPassPipeline passPipeline,
-    ArrayRef<int64_t> workgroupSize) {
-  auto partitionedLoops = getPartitionedLoops(op);
-  SmallVector<int64_t, 3> workloadPerWorkgroup;
-  auto tileSizes = config.getTileSizeVals(0);
-  if (!tileSizes.empty() && !partitionedLoops.empty()) {
-    for (unsigned depth : partitionedLoops) {
-      if (depth >= tileSizes.size()) {
-        return op->emitOpError(
-                   "illegal configuration for lowering op, expect first level "
-                   "tile size to contain at least ")
-               << partitionedLoops.back() << " elements";
-      }
-      if (tileSizes[depth] == 0) {
-        return op->emitOpError("illegal to set tilesize of loop ")
-               << depth
-               << " to zero since it is set to be partitioned at the flow "
-                  "level";
-      }
-      workloadPerWorkgroup.push_back(tileSizes[depth]);
-    }
-    if (!workloadPerWorkgroup.empty()) {
-      workloadPerWorkgroup =
-          llvm::to_vector<3>(llvm::reverse(workloadPerWorkgroup));
-    }
-  }
-  auto entryPointOp = getEntryPoint(entryPointFn);
-  if (!entryPointOp) {
-    return entryPointFn.emitOpError(
-        "unable to find entry point op for entry point function");
-  }
-  auto translationInfo = IREE::Codegen::TranslationInfoAttr::get(
-      entryPointOp->getContext(), passPipeline, workloadPerWorkgroup);
-  setTranslationInfo(entryPointOp, translationInfo, workgroupSize);
-  return success();
-}
-
 //===----------------------------------------------------------------------===//
-// Helpers for getting/setting `iree_codegen.compilation.info` attribute on root
+// Helpers for getting/setting `iree_codegen.compilation_info` attribute on root
 // operations to override IREEs default compilation.
 // ===----------------------------------------------------------------------===//
 

@@ -7,7 +7,8 @@
 steps:
   - label: "build"
     commands:
-      - "docker run --user=$(id -u):$(id -g) --volume=\\$PWD:\\$IREE_DOCKER_WORKDIR --workdir=\\$IREE_DOCKER_WORKDIR --rm gcr.io/iree-oss/cmake-android@sha256:0981a75325547d1bd5771290287cb8ef09181c4c127972d17132405394478ffb build_tools/kokoro/gcp_ubuntu/cmake/android/build.sh arm64-v8a"
+      - "git submodule sync && git submodule update --init --jobs 8 --depth 1"
+      - "docker run --user=$(id -u):$(id -g) --volume=\\$PWD:\\$IREE_DOCKER_WORKDIR --workdir=\\$IREE_DOCKER_WORKDIR --rm gcr.io/iree-oss/android@sha256:edbfe315d43b87fdfeaa602e9c5499cb9e78a084e1423b8bc3c6a42cdd2e606b build_tools/cmake/build_android.sh arm64-v8a"
       - "tar --exclude='*.o' --exclude='*.a' -czvf build-artifacts.tgz build-android"
     agents:
       - "queue=build"
@@ -17,29 +18,17 @@ steps:
 
   - wait
 
-  - label: "test on Galaxy S20 (exynos-990, mali-g77)"
+  - label: "test on Pixel 6 (google-tensor, mali-g78)"
     commands:
+      - "git clean -fdx"
+      - "adb shell rm -rf /data/local/tmp/iree"
       - "buildkite-agent artifact download --step build build-artifacts.tgz ./"
       - "tar xzf build-artifacts.tgz"
       - "find build-android/ -name '*.cmake' -exec sed -i \"s!\\$IREE_DOCKER_WORKDIR/!\\$PWD/!g\" {} \\;"
       - "cd build-android/"
       - "ctest --timeout 900 --output-on-failure"
     agents:
-      - "android-soc=exynos-990"
-      - "queue=test-android"
-    env:
-      IREE_DOCKER_WORKDIR: "/usr/src/github/iree"
-    timeout_in_minutes: "15"
-
-  - label: "test on Galaxy S10 (exynos-9820, mali-g76)"
-    commands:
-      - "buildkite-agent artifact download --step build build-artifacts.tgz ./"
-      - "tar xzf build-artifacts.tgz"
-      - "find build-android/ -name '*.cmake' -exec sed -i \"s!\\$IREE_DOCKER_WORKDIR/!\\$PWD/!g\" {} \\;"
-      - "cd build-android/"
-      - "ctest --timeout 900 --output-on-failure"
-    agents:
-      - "android-soc=exynos-9820"
+      - "android-soc=google-tensor"
       - "queue=test-android"
     env:
       IREE_DOCKER_WORKDIR: "/usr/src/github/iree"
@@ -47,19 +36,37 @@ steps:
 
   - label: "test on Pixel 4 (snapdragon-855, adreno-640)"
     commands:
+      - "git clean -fdx"
+      - "adb shell rm -rf /data/local/tmp/iree"
       - "buildkite-agent artifact download --step build build-artifacts.tgz ./"
       - "tar xzf build-artifacts.tgz"
       - "find build-android/ -name '*.cmake' -exec sed -i \"s!\\$IREE_DOCKER_WORKDIR/!\\$PWD/!g\" {} \\;"
       - "cd build-android/"
-      # vulkan tests using khr_shader_float16_int8 are failing on pixel4.
-      # Disabling it until we identify the root cause.
-      - "ctest --timeout 900 --output-on-failure --label-exclude \"^vulkan_uses_vk_khr_shader_float16_int8\\$\""
+      # Pixel 4 ships an old Adreno GPU driver. There are quite a few bugs triggered by our tests.
+      # Disable running tests entirely on Pixel 4. Moto Edge X30 gets us covered on Adreno GPU.
+      - "ctest --timeout 900 --output-on-failure --label-exclude \"vulkan\""
     agents:
       - "android-soc=snapdragon-855"
       - "queue=test-android"
     env:
       IREE_DOCKER_WORKDIR: "/usr/src/github/iree"
     timeout_in_minutes: "15"
+
+  - label: "test on Moto Edge X30 (snapdragon-8gen1, adreno-730)"
+    commands:
+      - "git clean -fdx"
+      - "adb shell rm -rf /data/local/tmp/iree"
+      - "buildkite-agent artifact download --step build build-artifacts.tgz ./"
+      - "tar xzf build-artifacts.tgz"
+      - "find build-android/ -name '*.cmake' -exec sed -i \"s!\\$IREE_DOCKER_WORKDIR/!\\$PWD/!g\" {} \\;"
+      - "cd build-android/"
+      - "ctest --timeout 900 --output-on-failure"
+    agents:
+      - "android-soc=snapdragon-8gen1"
+      - "queue=test-android"
+    env:
+      IREE_DOCKER_WORKDIR: "/usr/src/github/iree"
+    timeout_in_minutes: "30"
 
 notify:
   - email: "bdi-build-cop+buildkite@grotations.appspotmail.com"

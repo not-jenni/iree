@@ -1,9 +1,4 @@
-// RUN: iree-opt -split-input-file -iree-vmvx-conversion -canonicalize %s | IreeFileCheck %s
-
-hal.interface private @io  {
-  hal.interface.binding @s0b0_ro_external, set=0, binding=0, type="StorageBuffer", access="Read"
-  hal.interface.binding @s0b1_xw_external, set=0, binding=1, type="StorageBuffer", access="Write|Discard"
-}
+// RUN: iree-opt -split-input-file -iree-vmvx-conversion -canonicalize %s | FileCheck %s
 
 // CHECK: memref.global "private" constant @__constant_5xi32 : memref<5xi32> = dense<[1, 2, 3, 4, 5]>
 memref.global "private" constant @__constant_5xi32 : memref<5xi32> = dense<[1, 2, 3, 4, 5]>
@@ -21,7 +16,7 @@ memref.global "private" constant @__constant_5xi32 : memref<5xi32> = dense<[1, 2
 //  CHECK-SAME:   %[[WORKGROUP_COUNT_X:[a-z0-9]+]]: index,
 //  CHECK-SAME:   %[[WORKGROUP_COUNT_Y:[a-z0-9]+]]: index,
 //  CHECK-SAME:   %[[WORKGROUP_COUNT_Z:[a-z0-9]+]]: index) {
-func @entry() {
+func.func @entry() {
   %cst = arith.constant 0.000000e+00 : f32
   %c5 = arith.constant 5 : index
   %c0 = arith.constant 0 : index
@@ -29,10 +24,10 @@ func @entry() {
   %0 = memref.get_global @__constant_5xi32 : memref<5xi32>
   //      CHECK: %[[BINDING0_RAW:.+]] = util.list.get %[[BINDINGS]][%c0] : !util.list<memref<?xi8>>
   // CHECK-NEXT: %[[BINDING0:.+]] = builtin.unrealized_conversion_cast %[[BINDING0_RAW]] : memref<?xi8> to memref<5xf32>
-  %1 = hal.interface.binding.subspan @io::@s0b0_ro_external[%c0] : memref<5xf32>
+  %1 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<5xf32>
   //      CHECK: %[[BINDING1_RAW:.+]] = util.list.get %[[BINDINGS]][%c1] : !util.list<memref<?xi8>>
   // CHECK-NEXT: %[[BINDING1:.+]] = builtin.unrealized_conversion_cast %[[BINDING1_RAW]] : memref<?xi8> to memref<5xi32>
-  %2 = hal.interface.binding.subspan @io::@s0b1_xw_external[%c0] : memref<5xi32>
+  %2 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<5xi32>
   %workgroup_size_x = hal.interface.workgroup.size[0] : index
   %workgroup_id_x = hal.interface.workgroup.id[0] : index
   %workgroup_count_x = hal.interface.workgroup.count[0] : index

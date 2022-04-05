@@ -14,11 +14,11 @@
 #include "iree/schemas/metal_executable_def_builder.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
-#include "mlir/Dialect/Linalg/IR/LinalgTypes.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
-#include "mlir/Dialect/Vector/VectorOps.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Target/SPIRV/Serialization.h"
 
 namespace mlir {
@@ -54,7 +54,7 @@ class MetalSPIRVTargetBackend : public TargetBackend {
     Builder b(context);
     SmallVector<NamedAttribute> configItems;
 
-    configItems.emplace_back(b.getIdentifier("executable_targets"),
+    configItems.emplace_back(b.getStringAttr("executable_targets"),
                              getExecutableTargets(context));
 
     auto configAttr = b.getDictionaryAttr(configItems);
@@ -154,7 +154,7 @@ class MetalSPIRVTargetBackend : public TargetBackend {
     Builder b(context);
     SmallVector<NamedAttribute> configItems;
 
-    configItems.emplace_back(b.getIdentifier(spirv::getTargetEnvAttrName()),
+    configItems.emplace_back(b.getStringAttr(spirv::getTargetEnvAttrName()),
                              targetEnv);
 
     auto configAttr = b.getDictionaryAttr(configItems);

@@ -126,7 +126,7 @@ iree_cc_library(
   PUBLIC
 )
 
-iree_cc_test(
+iree_cc_binary_benchmark(
   NAME
     native_module_benchmark
   SRCS
@@ -138,6 +138,7 @@ iree_cc_test(
     iree::base
     iree::base::logging
     iree::testing::benchmark_main
+  TESTONLY
 )
 
 iree_cc_test(
@@ -210,7 +211,7 @@ iree_cc_test(
     "notap"
 )
 
-iree_cc_binary(
+iree_cc_binary_benchmark(
   NAME
     bytecode_module_benchmark
   SRCS
@@ -226,15 +227,6 @@ iree_cc_binary(
   TESTONLY
 )
 
-iree_run_binary_test(
-  NAME
-    "bytecode_module_benchmark_test"
-  ARGS
-    "--benchmark_min_time=0"
-  TEST_BINARY
-    ::bytecode_module_benchmark
-)
-
 iree_bytecode_module(
   NAME
     bytecode_module_benchmark_module
@@ -242,13 +234,15 @@ iree_bytecode_module(
     "bytecode_module_benchmark.mlir"
   C_IDENTIFIER
     "iree_vm_bytecode_module_benchmark_module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
   FLAGS
     "-iree-vm-ir-to-bytecode-module"
   TESTONLY
   PUBLIC
 )
 
-iree_cc_test(
+iree_cc_binary_benchmark(
   NAME
     bytecode_module_size_benchmark
   SRCS
@@ -258,6 +252,7 @@ iree_cc_test(
     ::bytecode_module_size_benchmark_module_c
     ::vm
     iree::base
+  TESTONLY
 )
 
 iree_bytecode_module(
@@ -267,6 +262,8 @@ iree_bytecode_module(
     "bytecode_module_size_benchmark.mlir"
   C_IDENTIFIER
     "iree_vm_bytecode_module_size_benchmark_module"
+  TRANSLATE_TOOL
+    iree_tools_iree-translate
   FLAGS
     "-iree-vm-ir-to-bytecode-module"
   TESTONLY
@@ -298,6 +295,9 @@ iree_cc_library(
     shims_emitc
   HDRS
     "shims_emitc.h"
+  DEPS
+    ::impl
+    iree::base::core_headers
   PUBLIC
 )
 

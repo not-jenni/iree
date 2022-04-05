@@ -28,15 +28,15 @@ CPU instructions.
 #### Build runtime from source
 
 Please make sure you have followed the [Getting started][get-started] page
-to build IREE for Linux/Windows and the [Android cross-compilation][android-cc]
-page for Android. The dylib HAL driver is compiled in by default on all
-platforms.
+to build IREE for your host platform and the
+[Android cross-compilation][android-cc]
+page if you are cross compiling for Android. The dylib HAL driver is compiled
+in by default on all platforms.
 
 <!-- TODO(??): a way to verify dylib is compiled in and supported -->
 
-If you want to explicitly specify HAL drivers to support, you will need to add
-`DyLib` to the `IREE_HAL_DRIVERS_TO_BUILD` CMake list variable when configuring
-(for target).
+Ensure that the `IREE_HAL_DRIVER_DYLIB` CMake option is `ON` when configuring
+for the target.
 
 ### Get compiler for CPU native instructions
 
@@ -44,32 +44,29 @@ If you want to explicitly specify HAL drivers to support, you will need to add
 
 #### Download as Python package
 
-Python packages for various IREE functionalities are regularly published on
-IREE's [GitHub Releases][iree-releases] page.  Right now these are just
-snapshots of the `main` development branch.
-
-You can install the Python package containing the LLVM-based dylib compiler by
+Python packages for various IREE functionalities are regularly published
+to [PyPI][pypi]. See the [Python Bindings][python-bindings] page for more
+details. The core `iree-compiler` package includes the LLVM-based CPU compiler:
 
 ``` shell
-python -m pip install iree-compiler-snapshot \
-    -f https://github.com/google/iree/releases
+python -m pip install iree-compiler
 ```
 
 !!! tip
-    `iree-translate` is installed as `/path/to/python/site-packages/iree/tools/core/iree-translate`.
+    `iree-compile` is installed as `/path/to/python/site-packages/iree/tools/core/iree-compile`.
     You can find out the full path to the `site-packages` directory via the
     `python -m site` command.
 
 #### Build compiler from source
 
 Please make sure you have followed the [Getting started][get-started] page
-to build IREE for Linux/Windows and the [Android cross-compilation][android-cc]
-page for Android. The dylib compiler backend is compiled in by default on all
-platforms.
+to build IREE for your host platform and the
+[Android cross-compilation][android-cc]
+page if you are cross compiling for Android. The dylib compiler backend is
+compiled in by default on all platforms.
 
-If you want to explicitly specify HAL drivers to support, you will need to add
-`DYLIB-LLVM-AOT` to the `IREE_TARGET_BACKENDS_TO_BUILD` CMake list variable when
-configuring (for host).
+Ensure that the `IREE_TARGET_BACKEND_DYLIB_LLVM_AOT` CMake option is `ON` when
+configuring for the host.
 
 ## Compile and run the model
 
@@ -92,7 +89,7 @@ weights from [TensorFlow Hub][tf-hub-mobilenetv2] and convert it using IREE's
 In the build directory, run the following command:
 
 ``` shell hl_lines="3"
-iree/tools/iree-translate \
+iree/tools/iree-compile \
     -iree-mlir-to-vm-bytecode-module \
     -iree-hal-target-backends=dylib-llvm-aot \
     iree_input.mlir -o mobilenet-dylib.vmfb
@@ -133,9 +130,10 @@ concrete values.
 
 [android-cc]: ../building-from-source/android.md
 [get-started]: ../building-from-source/getting-started.md
-[iree-releases]: https://github.com/google/iree/releases/
 [llvm]: https://llvm.org/
 [mlir]: https://mlir.llvm.org/
+[pypi]: https://pypi.org/user/google-iree-pypi-deploy/
+[python-bindings]: ../bindings/python.md
 [tf-hub-mobilenetv2]: https://tfhub.dev/google/tf2-preview/mobilenet_v2/classification
-[tf-import]: ../ml-frameworks/tensorflow.md
-[tflite-import]: ../ml-frameworks/tensorflow-lite.md
+[tf-import]: ../getting-started/tensorflow.md
+[tflite-import]: ../getting-started/tensorflow-lite.md

@@ -14,13 +14,15 @@
 #include "mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
 #include "mlir-hlo/Dialect/mhlo/transforms/rewriters.h"
 #include "mlir-hlo/utils/broadcast_utils.h"
-#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 
 namespace mlir {
 namespace iree_compiler {
+namespace MHLO {
 
 namespace {
 
@@ -194,7 +196,7 @@ Optional<Extent> computeBinaryResultExtent(OpBuilder &builder, Location loc,
 
   Value isEqual = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
                                                 lhsExtentValue, rhsExtentValue);
-  builder.create<AssertOp>(
+  builder.create<cf::AssertOp>(
       loc, isEqual,
       builder.getStringAttr("mismatched dynamic broadcast extents"));
 
@@ -271,7 +273,7 @@ Optional<Extent> computeTernaryResultExtent(OpBuilder &builder, Location loc,
     Value cmpRhsValue = cmpRhs.convertToValue(builder, loc);
     Value isEqual = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
                                                   cmpLhsValue, cmpRhsValue);
-    builder.create<AssertOp>(
+    builder.create<cf::AssertOp>(
         loc, isEqual,
         builder.getStringAttr("mismatched dynamic broadcast extents"));
   }
@@ -310,7 +312,7 @@ struct ConvertConstantLikeOp
     : public OpConversionPattern<chlo::ConstantLikeOp> {
   using OpConversionPattern<chlo::ConstantLikeOp>::OpConversionPattern;
   LogicalResult matchAndRewrite(
-      chlo::ConstantLikeOp op, ArrayRef<Value> operands,
+      chlo::ConstantLikeOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     auto resultTy = op.getType().cast<RankedTensorType>();
     if (!resultTy.hasRank())
@@ -322,14 +324,12 @@ struct ConvertConstantLikeOp
       return success();
     }
 
-    chlo::ConstantLikeOpAdaptor transformed(operands);
     Location loc = op.getLoc();
 
     int resultRank = resultTy.getRank();
     SmallVector<Extent> resultExtents;
     resultExtents.reserve(resultRank);
-    appendExtents(rewriter, loc, resultExtents, transformed.operand(),
-                  resultTy);
+    appendExtents(rewriter, loc, resultExtents, adaptor.operand(), resultTy);
 
     auto resultTy0D = RankedTensorType::get({}, resultTy.getElementType());
     Value scalarConst = rewriter.create<mhlo::ConstOp>(
@@ -429,7 +429,7 @@ struct CompareBinaryBroadcastingAdaptor : public BinaryBroadcastingAdaptor {
     chlo::BroadcastCompareOpAdaptor adaptor(operands, op->getAttrDictionary());
     return builder.create<mhlo::CompareOp>(
         loc, resultType, broadcastValues.first, broadcastValues.second,
-        adaptor.comparison_direction(), adaptor.compare_type());
+        adaptor.comparison_direction(), adaptor.compare_typeAttr());
   }
 };
 
@@ -596,15 +596,14 @@ struct ConvertSelectOp : public OpConversionPattern<chlo::BroadcastSelectOp> {
   using OpConversionPattern<chlo::BroadcastSelectOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
-      chlo::BroadcastSelectOp op, ArrayRef<Value> operands,
+      chlo::BroadcastSelectOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    chlo::BroadcastSelectOp::Adaptor transformed(operands);
     Location loc = op.getLoc();
 
     // Only support ranked operands.
-    Value pred = transformed.pred();
-    Value thenValue = transformed.on_true();
-    Value elseValue = transformed.on_false();
+    Value pred = adaptor.pred();
+    Value thenValue = adaptor.on_true();
+    Value elseValue = adaptor.on_false();
     auto predType = pred.getType().dyn_cast<RankedTensorType>();
     auto thenType = thenValue.getType().dyn_cast<RankedTensorType>();
     auto elseType = elseValue.getType().dyn_cast<RankedTensorType>();
@@ -713,12 +712,11 @@ struct ConvertDynamicReshapeOp
   using OpConversionPattern<mhlo::DynamicReshapeOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
-      mhlo::DynamicReshapeOp op, ArrayRef<Value> rawOperands,
+      mhlo::DynamicReshapeOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    mhlo::DynamicReshapeOpAdaptor operands(rawOperands);
-    Value input = operands.operand();
-    Value outputShape = operands.output_shape();
+    Value input = adaptor.operand();
+    Value outputShape = adaptor.output_shape();
     auto outputShapeType = outputShape.getType().dyn_cast<RankedTensorType>();
     auto resultType = typeConverter->convertType(op.getType())
                           .dyn_cast_or_null<RankedTensorType>();
@@ -736,20 +734,30 @@ struct ConvertDynamicReshapeOp
       }
     }
 
-    rewriter.replaceOpWithNewOp<IREE::Flow::TensorReshapeOp>(op, resultType,
-                                                             input, targetDims);
+    SmallVector<Value> castedTargetDims;
+    for (Value dim : targetDims) {
+      if (dim.getType().isa<IntegerType>()) {
+        dim = rewriter.create<arith::IndexCastOp>(loc, rewriter.getIndexType(),
+                                                  dim);
+      }
+      castedTargetDims.push_back(dim);
+    }
+
+    rewriter.replaceOpWithNewOp<IREE::Flow::TensorReshapeOp>(
+        op, resultType, input, castedTargetDims);
     return success();
   }
 };
 
 }  // namespace
 
+}  // namespace MHLO
 }  // namespace iree_compiler
 }  // namespace mlir
 
-void mlir::iree_compiler::populateMHLOBroadcastingToLinalgPatterns(
+void mlir::iree_compiler::MHLO::populateMHLOBroadcastingToLinalgPatterns(
     MLIRContext *context, TypeConverter &typeConverter,
-    OwningRewritePatternList &patterns) {
+    RewritePatternSet &patterns) {
 #define POPULATE_SIMPLE_BCAST(ChloOp, HloOp)                          \
   patterns.insert<ConvertTrivialNonBroadcastBinaryOp>(                \
       context, typeConverter, 10,                                     \

@@ -115,7 +115,7 @@ typedef struct iree_hal_task_queue_wait_cmd_t {
 
 // Forks out multiple wait tasks prior to issuing the commands.
 static iree_status_t iree_hal_task_queue_wait_cmd(
-    uintptr_t user_context, iree_task_t* task,
+    void* user_context, iree_task_t* task,
     iree_task_submission_t* pending_submission) {
   iree_hal_task_queue_wait_cmd_t* cmd = (iree_hal_task_queue_wait_cmd_t*)task;
   IREE_TRACE_ZONE_BEGIN(z0);
@@ -135,8 +135,8 @@ static iree_status_t iree_hal_task_queue_wait_cmd(
 
 // Cleanup for iree_hal_task_queue_wait_cmd_t that releases the retained
 // semaphores.
-static void iree_hal_task_queue_wait_cmd_cleanup(iree_task_t* task,
-                                                 iree_status_t status) {
+static void iree_hal_task_queue_wait_cmd_cleanup(
+    iree_task_t* task, iree_status_code_t status_code) {
   iree_hal_task_queue_wait_cmd_t* cmd = (iree_hal_task_queue_wait_cmd_t*)task;
   iree_hal_semaphore_list_release(&cmd->wait_semaphores);
 }
@@ -189,7 +189,7 @@ typedef struct iree_hal_task_queue_issue_cmd_t {
 
 // Issues a set of command buffers without waiting for them to complete.
 static iree_status_t iree_hal_task_queue_issue_cmd(
-    uintptr_t user_context, iree_task_t* task,
+    void* user_context, iree_task_t* task,
     iree_task_submission_t* pending_submission) {
   iree_hal_task_queue_issue_cmd_t* cmd = (iree_hal_task_queue_issue_cmd_t*)task;
   IREE_TRACE_ZONE_BEGIN(z0);
@@ -200,9 +200,15 @@ static iree_status_t iree_hal_task_queue_issue_cmd(
   // submission was purely for synchronization.
   if (cmd->command_buffer_count > 0) {
     for (iree_host_size_t i = 0; i < cmd->command_buffer_count; ++i) {
-      status = iree_hal_task_command_buffer_issue(
-          cmd->command_buffers[i], &cmd->queue->state,
-          cmd->task.header.completion_task, cmd->arena, pending_submission);
+      if (iree_hal_task_command_buffer_isa(cmd->command_buffers[i])) {
+        status = iree_hal_task_command_buffer_issue(
+            cmd->command_buffers[i], &cmd->queue->state,
+            cmd->task.header.completion_task, cmd->arena, pending_submission);
+      } else {
+        status = iree_make_status(
+            IREE_STATUS_UNIMPLEMENTED,
+            "unsupported command buffer type for task queue submission");
+      }
       if (IREE_UNLIKELY(!iree_status_is_ok(status))) break;
     }
   }
@@ -213,8 +219,8 @@ static iree_status_t iree_hal_task_queue_issue_cmd(
 
 // Cleanup for iree_hal_task_queue_issue_cmd_t that resets the queue state
 // tracking the last in-flight issue.
-static void iree_hal_task_queue_issue_cmd_cleanup(iree_task_t* task,
-                                                  iree_status_t status) {
+static void iree_hal_task_queue_issue_cmd_cleanup(
+    iree_task_t* task, iree_status_code_t status_code) {
   iree_hal_task_queue_issue_cmd_t* cmd = (iree_hal_task_queue_issue_cmd_t*)task;
 
   // Reset queue tail issue task if it was us.
@@ -277,7 +283,7 @@ typedef struct iree_hal_task_queue_retire_cmd_t {
 // Retires a submission by signaling semaphores to their desired value and
 // disposing of the temporary arena memory used for the submission.
 static iree_status_t iree_hal_task_queue_retire_cmd(
-    uintptr_t user_context, iree_task_t* task,
+    void* user_context, iree_task_t* task,
     iree_task_submission_t* pending_submission) {
   iree_hal_task_queue_retire_cmd_t* cmd =
       (iree_hal_task_queue_retire_cmd_t*)task;
@@ -301,17 +307,17 @@ static iree_status_t iree_hal_task_queue_retire_cmd(
 // Cleanup for iree_hal_task_queue_retire_cmd_t that ensures that the arena
 // holding the submission is properly disposed and that semaphores are signaled
 // (or signaled to failure if the command failed).
-static void iree_hal_task_queue_retire_cmd_cleanup(iree_task_t* task,
-                                                   iree_status_t status) {
+static void iree_hal_task_queue_retire_cmd_cleanup(
+    iree_task_t* task, iree_status_code_t status_code) {
   iree_hal_task_queue_retire_cmd_t* cmd =
       (iree_hal_task_queue_retire_cmd_t*)task;
 
   // If the command failed then fail all semaphores to ensure future
   // submissions fail as well (including those on other queues).
-  if (!iree_status_is_ok(status)) {
+  if (IREE_UNLIKELY(status_code != IREE_STATUS_OK)) {
     for (iree_host_size_t i = 0; i < cmd->signal_semaphores.count; ++i) {
       iree_hal_semaphore_fail(cmd->signal_semaphores.semaphores[i],
-                              iree_status_clone(status));
+                              iree_status_from_code(status_code));
     }
   }
 

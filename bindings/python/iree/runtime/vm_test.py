@@ -17,7 +17,7 @@ import numpy as np
 def create_add_scalar_module():
   binary = iree.compiler.compile_str(
       """
-      func @add_scalar(%arg0: i32, %arg1: i32) -> i32 {
+      func.func @add_scalar(%arg0: i32, %arg1: i32) -> i32 {
         %0 = arith.addi %arg0, %arg1 : i32
         return %0 : i32
       }
@@ -32,7 +32,7 @@ def create_add_scalar_module():
 def create_simple_static_mul_module():
   binary = iree.compiler.compile_str(
       """
-      func @simple_mul(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>) -> tensor<4xf32> {
+      func.func @simple_mul(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>) -> tensor<4xf32> {
           %0 = "mhlo.multiply"(%arg0, %arg1) {name = "mul.1"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
           return %0 : tensor<4xf32>
       }
@@ -49,7 +49,7 @@ def create_simple_dynamic_abs_module():
   target_backends = iree.compiler.DEFAULT_TESTING_BACKENDS
   binary = iree.compiler.compile_str(
       """
-      func @simple_mul(%arg0: tensor<?x?xf32>) -> tensor<?x?xf32> {
+      func.func @simple_mul(%arg0: tensor<?x?xf32>) -> tensor<?x?xf32> {
           %0 = "mhlo.abs"(%arg0) : (tensor<?x?xf32>) -> tensor<?x?xf32>
           return %0 : tensor<?x?xf32>
       }
@@ -94,11 +94,20 @@ class VmTest(absltest.TestCase):
       # TODO: Unimplemented: (np.float16, ET.FLOAT_16)
       lst = iree.runtime.VmVariantList(5)
       ary1 = np.asarray([1, 2, 3, 4], dtype=dt)
-      lst.push_buffer_view(self.device, ary1, et)
-      ary2 = lst.get_as_ndarray(0)
+      bv1 = self.device.allocator.allocate_buffer_copy(
+          memory_type=iree.runtime.MemoryType.DEVICE_LOCAL |
+          iree.runtime.MemoryType.DEVICE_VISIBLE,
+          allowed_usage=iree.runtime.BufferUsage.ALL,
+          buffer=ary1,
+          element_type=et)
+      lst.push_buffer_view(bv1)
+      ary2 = iree.runtime.DeviceArray(self.device,
+                                      lst.get_as_buffer_view(0),
+                                      override_dtype=dt,
+                                      implicit_host_transfer=True)
       np.testing.assert_array_equal(ary1, ary2)
       with self.assertRaises(IndexError):
-        lst.get_as_ndarray(1)
+        lst.get_as_buffer_view(1)
 
   def test_variant_list_list(self):
     lst1 = iree.runtime.VmVariantList(5)

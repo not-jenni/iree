@@ -9,10 +9,11 @@
 #include "iree/compiler/Dialect/Flow/IR/FlowTypes.h"
 #include "iree/compiler/Dialect/Flow/Transforms/PassDetail.h"
 #include "iree/compiler/Dialect/Flow/Transforms/Passes.h"
-#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LLVM.h"
@@ -51,7 +52,10 @@ struct LinalgTensorReshapeToFlowTensorReshape
       return failure();
     }
     SmallVector<SmallVector<Value>> outputShape;
-    if (failed(reshapeOp.reifyResultShapes(rewriter, outputShape))) {
+    ReifyRankedShapedTypeOpInterface reifyShapedTypeInterface =
+        cast<ReifyRankedShapedTypeOpInterface>(reshapeOp.getOperation());
+    if (failed(reifyShapedTypeInterface.reifyResultShapes(rewriter,
+                                                          outputShape))) {
       return failure();
     }
     SmallVector<Value> outputDynamicShapes;
@@ -89,9 +93,10 @@ struct LinalgFillToFlowTensorSplat final
   }
 };
 
-struct ConvertSplatConstantOp : public OpRewritePattern<mlir::ConstantOp> {
+struct ConvertSplatConstantOp
+    : public OpRewritePattern<mlir::func::ConstantOp> {
   using OpRewritePattern::OpRewritePattern;
-  LogicalResult matchAndRewrite(mlir::ConstantOp op,
+  LogicalResult matchAndRewrite(mlir::func::ConstantOp op,
                                 PatternRewriter &rewriter) const override {
     if (op->getParentOfType<IREE::Flow::DispatchWorkgroupsOp>()) {
       return rewriter.notifyMatchFailure(op, "ignoring dispatch ops");
@@ -101,8 +106,9 @@ struct ConvertSplatConstantOp : public OpRewritePattern<mlir::ConstantOp> {
       return rewriter.notifyMatchFailure(op, "only looking for splats");
     }
     auto tensorType = op.getType().cast<TensorType>();
-    auto elementValue = rewriter.createOrFold<mlir::ConstantOp>(
-        op.getLoc(), tensorType.getElementType(), splatAttr.getSplatValue());
+    auto elementValue = rewriter.createOrFold<mlir::func::ConstantOp>(
+        op.getLoc(), tensorType.getElementType(),
+        splatAttr.getSplatValue<Attribute>());
     rewriter.replaceOpWithNewOp<IREE::Flow::TensorSplatOp>(
         op, tensorType, elementValue, ValueRange{});
     return success();
@@ -121,13 +127,12 @@ struct ConvertLinalgTensorOpsPass
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<IREE::Flow::FlowDialect, tensor::TensorDialect,
-                    linalg::LinalgDialect, mlir::StandardOpsDialect,
+                    linalg::LinalgDialect, mlir::func::FuncDialect,
                     mlir::arith::ArithmeticDialect, mlir::math::MathDialect>();
   }
   void runOnOperation() override {
     auto funcOp = getOperation();
     MLIRContext *context = funcOp->getContext();
-    context->allowUnregisteredDialects(true);
     RewritePatternSet patterns(&getContext());
     if (runBeforeDispatchRegionFormation) {
       patterns.insert<
@@ -146,8 +151,8 @@ struct ConvertLinalgTensorOpsPass
 };
 }  // namespace
 
-std::unique_ptr<OperationPass<mlir::FuncOp>> createConvertLinalgTensorOpsPass(
-    bool runBeforeDispatchRegionFormation) {
+std::unique_ptr<OperationPass<mlir::func::FuncOp>>
+createConvertLinalgTensorOpsPass(bool runBeforeDispatchRegionFormation) {
   return std::make_unique<ConvertLinalgTensorOpsPass>(
       runBeforeDispatchRegionFormation);
 }

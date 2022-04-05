@@ -1,14 +1,15 @@
-// RUN: iree-opt -split-input-file -iree-spirv-vectorize-load-store -canonicalize %s | IreeFileCheck %s
+// RUN: iree-opt -split-input-file -iree-spirv-vectorize-load-store -canonicalize -cse -mlir-print-local-scope %s | FileCheck %s
 
-// CHECK-LABEL: func @copy
-//  CHECK-SAME: (%[[ARG0:.+]]: memref<4096x1024xvector<4xf32>>
+// CHECK-LABEL: func @alloc_copy
+//  CHECK-SAME: (%[[ARG0:.+]]: memref<4096x1024xvector<4xf32>>, %[[X:.+]]: index, %[[Y:.+]]: index)
 //       CHECK: %[[ALLOC:.+]] = memref.alloc() : memref<128x8xvector<4xf32>, 3>
-//       CHECK: %[[V:.+]] = memref.load %[[ARG0]][%{{.*}}, %{{.*}}] : memref<4096x1024xvector<4xf32>>
-//       CHECK: memref.store %[[V]], %[[ALLOC]][%{{.*}}, %{{.*}}] : memref<128x8xvector<4xf32>, 3>
-//       CHECK: %[[MAT:.+]] = vector.transfer_read %[[ARG0]][%{{.*}}, %{{.*}}], %{{.*}} : memref<4096x1024xvector<4xf32>>, vector<32x8xf32>
-//       CHECK: vector.transfer_write %[[MAT]], %[[ALLOC]][%{{.*}}, %{{.*}}] : vector<32x8xf32>, memref<128x8xvector<4xf32>, 3>
+//       CHECK: %[[IDX:.+]] = affine.apply affine_map<()[s0] -> (s0 floordiv 4)>()[%[[Y]]]
+//       CHECK: %[[V:.+]] = memref.load %[[ARG0]][%[[X]], %[[IDX]]] : memref<4096x1024xvector<4xf32>>
+//       CHECK: memref.store %[[V]], %[[ALLOC]][%[[X]], %[[IDX]]] : memref<128x8xvector<4xf32>, 3>
+//       CHECK: %[[MAT:.+]] = vector.transfer_read %[[ARG0]][%[[X]], %[[IDX]]], %{{.*}} : memref<4096x1024xvector<4xf32>>, vector<32x8xf32>
+//       CHECK: vector.transfer_write %[[MAT]], %[[ALLOC]][%[[X]], %[[IDX]]] : vector<32x8xf32>, memref<128x8xvector<4xf32>, 3>
 //       CHECK: memref.dealloc %[[ALLOC]] : memref<128x8xvector<4xf32>, 3>
-func @copy(%arg0: memref<4096x4096xf32>, %x: index, %y: index) {
+func.func @alloc_copy(%arg0: memref<4096x4096xf32>, %x: index, %y: index) {
   %cst = arith.constant 0.000000e+00 : f32
   %0 = memref.alloc() : memref<128x32xf32, 3>
   %v = vector.transfer_read %arg0[%x, %y], %cst : memref<4096x4096xf32>, vector<1x4xf32>
@@ -22,9 +23,10 @@ func @copy(%arg0: memref<4096x4096xf32>, %x: index, %y: index) {
 // -----
 
 // Test that the memref is not vectorized if used by scalar load or store.
-// CHECK-LABEL: func @copy
+
+// CHECK-LABEL: func @alloc_copy
 //  CHECK-SAME: %[[ARG0:.+]]: memref<4096x4096xf32>
-func @copy(%arg0: memref<4096x4096xf32>, %x: index, %y: index) {
+func.func @alloc_copy(%arg0: memref<4096x4096xf32>, %x: index, %y: index) {
   %cst = arith.constant 0.000000e+00 : f32
   %0 = memref.alloc() : memref<128x32xf32, 3>
   %s = memref.load %arg0[%x, %y] : memref<4096x4096xf32>
@@ -36,17 +38,17 @@ func @copy(%arg0: memref<4096x4096xf32>, %x: index, %y: index) {
 // -----
 
 // CHECK-LABEL: func @resource_copy
-//     CHECK: %[[A:.+]] = hal.interface.binding.subspan @io::@arg0[%c0] : memref<4096x1024xvector<4xf32>>
-//     CHECK: %[[B:.+]] = hal.interface.binding.subspan @io::@ret0[%c0] : memref<4096x1024xvector<4xf32>>
+//     CHECK: %[[A:.+]] = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<4096x1024xvector<4xf32>>
+//     CHECK: %[[B:.+]] = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<4096x1024xvector<4xf32>>
 //     CHECK: %[[V:.+]] = memref.load %[[A]][%{{.*}}, %{{.*}}] : memref<4096x1024xvector<4xf32>>
 //     CHECK: memref.store %[[V]], %[[B]][%{{.*}}, %{{.*}}] : memref<4096x1024xvector<4xf32>>
 //     CHECK: %[[MAT:.+]] = vector.transfer_read %[[A]][%{{.*}}, %{{.*}}], %{{.*}} : memref<4096x1024xvector<4xf32>>, vector<32x8xf32>
 //     CHECK: vector.transfer_write %[[MAT]], %[[B]][%{{.*}}, %{{.*}}] {{.*}} : vector<32x8xf32>, memref<4096x1024xvector<4xf32>>
-func @resource_copy() {
+func.func @resource_copy() {
   %cst = arith.constant 0.000000e+00 : f32
   %c0 = arith.constant 0 : index
-  %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<4096x4096xf32>
-  %1 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<4096x4096xf32>
+  %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<4096x4096xf32>
+  %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<4096x4096xf32>
   %v = vector.transfer_read %0[%c0, %c0], %cst : memref<4096x4096xf32>, vector<1x4xf32>
   vector.transfer_write %v, %1[%c0, %c0] : vector<1x4xf32>, memref<4096x4096xf32>
   %mat = vector.transfer_read %0[%c0, %c0], %cst : memref<4096x4096xf32>, vector<32x8xf32>
@@ -54,25 +56,20 @@ func @resource_copy() {
   return
 }
 
-hal.interface private @io attributes {push_constants = 5 : index} {
-  hal.interface.binding @arg0, set=1, binding=2, type="StorageBuffer", access="Read"
-  hal.interface.binding @ret0, set=3, binding=4, type="StorageBuffer", access="Write"
-}
-
 // -----
 
 // CHECK-LABEL: func @resource_copy_f16
-//     CHECK: %[[A:.+]] = hal.interface.binding.subspan @io::@arg0[%c0] : memref<4096x1024xvector<4xf16>>
-//     CHECK: %[[B:.+]] = hal.interface.binding.subspan @io::@ret0[%c0] : memref<4096x1024xvector<4xf16>>
+//     CHECK: %[[A:.+]] = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<4096x1024xvector<4xf16>>
+//     CHECK: %[[B:.+]] = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<4096x1024xvector<4xf16>>
 //     CHECK: %[[V:.+]] = memref.load %[[A]][%{{.*}}, %{{.*}}] : memref<4096x1024xvector<4xf16>>
 //     CHECK: memref.store %[[V]], %[[B]][%{{.*}}, %{{.*}}] : memref<4096x1024xvector<4xf16>>
 //     CHECK: %[[MAT:.+]] = vector.transfer_read %[[A]][%{{.*}}, %{{.*}}], %{{.*}} : memref<4096x1024xvector<4xf16>>, vector<32x8xf16>
 //     CHECK: vector.transfer_write %[[MAT]], %[[B]][%{{.*}}, %{{.*}}] {{.*}} : vector<32x8xf16>, memref<4096x1024xvector<4xf16>>
-func @resource_copy_f16() {
+func.func @resource_copy_f16() {
   %cst = arith.constant 0.000000e+00 : f16
   %c0 = arith.constant 0 : index
-  %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<4096x4096xf16>
-  %1 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<4096x4096xf16>
+  %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<4096x4096xf16>
+  %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<4096x4096xf16>
   %v = vector.transfer_read %0[%c0, %c0], %cst : memref<4096x4096xf16>, vector<1x4xf16>
   vector.transfer_write %v, %1[%c0, %c0] : vector<1x4xf16>, memref<4096x4096xf16>
   %mat = vector.transfer_read %0[%c0, %c0], %cst : memref<4096x4096xf16>, vector<32x8xf16>
@@ -80,25 +77,20 @@ func @resource_copy_f16() {
   return
 }
 
-hal.interface private @io attributes {push_constants = 5 : index} {
-  hal.interface.binding @arg0, set=1, binding=2, type="StorageBuffer", access="Read"
-  hal.interface.binding @ret0, set=3, binding=4, type="StorageBuffer", access="Write"
-}
-
 // -----
 
 // CHECK-LABEL: func @resource_copy_8xf16
-//     CHECK: %[[A:.+]] = hal.interface.binding.subspan @io::@arg0[%c0] : memref<4096x512xvector<4xf32>>
-//     CHECK: %[[B:.+]] = hal.interface.binding.subspan @io::@ret0[%c0] : memref<4096x512xvector<4xf32>>
+//     CHECK: %[[A:.+]] = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<4096x512xvector<4xf32>>
+//     CHECK: %[[B:.+]] = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<4096x512xvector<4xf32>>
 //     CHECK: %[[V:.+]] = memref.load %[[A]][%{{.*}}, %{{.*}}] : memref<4096x512xvector<4xf32>>
 //     CHECK: memref.store %[[V]], %[[B]][%{{.*}}, %{{.*}}] : memref<4096x512xvector<4xf32>>
 //     CHECK: %[[MAT:.+]] = vector.transfer_read %[[A]][%{{.*}}, %{{.*}}], %{{.*}} : memref<4096x512xvector<4xf32>>, vector<32x8xf16>
 //     CHECK: vector.transfer_write %[[MAT]], %[[B]][%{{.*}}, %{{.*}}] {{.*}} : vector<32x8xf16>, memref<4096x512xvector<4xf32>>
-func @resource_copy_8xf16() {
+func.func @resource_copy_8xf16() {
   %cst = arith.constant 0.000000e+00 : f16
   %c0 = arith.constant 0 : index
-  %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<4096x4096xf16>
-  %1 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<4096x4096xf16>
+  %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<4096x4096xf16>
+  %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<4096x4096xf16>
   %v = vector.transfer_read %0[%c0, %c0], %cst : memref<4096x4096xf16>, vector<1x8xf16>
   vector.transfer_write %v, %1[%c0, %c0] : vector<1x8xf16>, memref<4096x4096xf16>
   %mat = vector.transfer_read %0[%c0, %c0], %cst : memref<4096x4096xf16>, vector<32x8xf16>
@@ -106,26 +98,21 @@ func @resource_copy_8xf16() {
   return
 }
 
-hal.interface private @io attributes {push_constants = 5 : index} {
-  hal.interface.binding @arg0, set=1, binding=2, type="StorageBuffer", access="Read"
-  hal.interface.binding @ret0, set=3, binding=4, type="StorageBuffer", access="Write"
-}
-
 // -----
 
 // CHECK-LABEL: func @resource_copy_dynamic_shape()
-func @resource_copy_dynamic_shape() {
+func.func @resource_copy_dynamic_shape() {
   %cst = arith.constant 0.000000e+00 : f32
   %c0 = arith.constant 0 : index
-  // CHECK: %[[DIM0:.+]] = hal.interface.load.constant offset = 0 : index
-  // CHECK: %[[DIM1:.+]] = hal.interface.load.constant offset = 1 : index
-  %dim0 = hal.interface.load.constant offset = 0 : index
-  %dim1 = hal.interface.load.constant offset = 1 : index
+  // CHECK: %[[DIM0:.+]] = hal.interface.constant.load[0] : index
+  // CHECK: %[[DIM1:.+]] = hal.interface.constant.load[1] : index
+  %dim0 = hal.interface.constant.load[0] : index
+  %dim1 = hal.interface.constant.load[1] : index
 
-  // CHECK: %[[INPUT:.+]] = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x8x?x32xvector<4xf32>>{%[[DIM0]], %[[DIM1]]}
-  // CHECK: %[[OUTPUT:.+]] = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x8x?x32xvector<4xf32>>{%[[DIM0]], %[[DIM1]]}
-  %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<?x8x?x128xf32>{%dim0, %dim1}
-  %1 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<?x8x?x128xf32>{%dim0, %dim1}
+  // CHECK: %[[INPUT:.+]] = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<?x8x?x32xvector<4xf32>>{%[[DIM0]], %[[DIM1]]}
+  // CHECK: %[[OUTPUT:.+]] = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<?x8x?x32xvector<4xf32>>{%[[DIM0]], %[[DIM1]]}
+  %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<?x8x?x128xf32>{%dim0, %dim1}
+  %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<?x8x?x128xf32>{%dim0, %dim1}
 
   // CHECK: %[[VAL1:.+]] = memref.load %[[INPUT]]
   // CHECK: memref.store %[[VAL1]], %[[OUTPUT]]
@@ -139,84 +126,63 @@ func @resource_copy_dynamic_shape() {
   return
 }
 
-hal.interface @io attributes {push_constants = 5 : index, sym_visibility = "private"} {
-  hal.interface.binding @arg0, set=1, binding=2, type="StorageBuffer", access="Read"
-  hal.interface.binding @ret0, set=3, binding=4, type="StorageBuffer", access="Write"
-}
-
 // -----
 
 // CHECK-LABEL: func @resource_copy_dynamic_last_dim()
-func @resource_copy_dynamic_last_dim() {
+func.func @resource_copy_dynamic_last_dim() {
   %cst = arith.constant 0.000000e+00 : f32
   %c0 = arith.constant 0 : index
-  %dim = hal.interface.load.constant offset = 0 : index
-  // CHECK: hal.interface.binding.subspan @io::@arg0[{{.+}}] : memref<4096x?xf32>
-  // CHECK: hal.interface.binding.subspan @io::@ret0[{{.+}}] : memref<4096x?xf32>
-  %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<4096x?xf32>{%dim}
-  %1 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<4096x?xf32>{%dim}
+  %dim = hal.interface.constant.load[0] : index
+  // CHECK: hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<4096x?xf32>
+  // CHECK: hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<4096x?xf32>
+  %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<4096x?xf32>{%dim}
+  %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<4096x?xf32>{%dim}
   %v = vector.transfer_read %0[%c0, %c0], %cst : memref<4096x?xf32>, vector<1x4xf32>
   vector.transfer_write %v, %1[%c0, %c0] : vector<1x4xf32>, memref<4096x?xf32>
   return
 }
 
-hal.interface @io attributes {push_constants = 5 : index, sym_visibility = "private"} {
-  hal.interface.binding @arg0, set=1, binding=2, type="StorageBuffer", access="Read"
-  hal.interface.binding @ret0, set=3, binding=4, type="StorageBuffer", access="Write"
-}
-
 // -----
 
 // CHECK-LABEL: func @do_not_vectorize_odd_vector_size
-func @do_not_vectorize_odd_vector_size() {
+func.func @do_not_vectorize_odd_vector_size() {
   %cst = arith.constant 0.0 : f32
   %c0 = arith.constant 0 : index
   // CHECK: hal.interface.binding.subspan
   // CHECK-SAME: memref<4x3xf32>
-  %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<4x3xf32>
+  %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<4x3xf32>
   // CHECK: hal.interface.binding.subspan
   // CHECK-SAME: memref<4x3xf32>
-  %1 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<4x3xf32>
+  %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<4x3xf32>
   %v = vector.transfer_read %0[%c0, %c0], %cst : memref<4x3xf32>, vector<3xf32>
   vector.transfer_write %v, %1[%c0, %c0] : vector<3xf32>, memref<4x3xf32>
   return
 }
 
-hal.interface private @io  {
-  hal.interface.binding @arg0, set=1, binding=2, type="StorageBuffer", access="Read"
-  hal.interface.binding @ret0, set=3, binding=4, type="StorageBuffer", access="Write"
-}
-
 // -----
 
-func @vectorize_binding_subspan() {
+func.func @vectorize_binding_subspan() {
   %cst = arith.constant 0.000000e+00 : f32
   %c0 = arith.constant 0 : index
-  // CHECK: hal.interface.binding.subspan @io::@arg0[%c0]
-  // CHECK-SAME: memref<4096x1024xvector<4xf32>>
-  // CHECK: hal.interface.binding.subspan @io::@ret0[%c0]
-  // CHECK-SAME: memref<4096x1024xvector<4xf32>>
-  %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<4096x4096xf32>
-  %1 = hal.interface.binding.subspan @io::@ret0[%c0] : memref<4096x4096xf32>
+  // CHECK: hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<4096x1024xvector<4xf32>>
+  // CHECK: hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<4096x1024xvector<4xf32>>
+  %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<4096x4096xf32>
+  %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<4096x4096xf32>
   %mat = vector.transfer_read %0[%c0, %c0], %cst : memref<4096x4096xf32>, vector<32x8xf32>
   vector.transfer_write %mat, %1[%c0, %c0] : vector<32x8xf32>, memref<4096x4096xf32>
   return
 }
 
-hal.interface private @io  {
-  hal.interface.binding @arg0, set=0, binding=0, type="StorageBuffer", access="Read"
-  hal.interface.binding @ret0, set=0, binding=1, type="StorageBuffer", access="Write|Discard"
-}
 
 // -----
 
 // CHECK-LABEL: func @scalarize_vector_transfer_op
-func @scalarize_vector_transfer_op(%arg: vector<3xf32>) -> (vector<3xf32>) {
+func.func @scalarize_vector_transfer_op(%arg: vector<3xf32>) -> (vector<3xf32>) {
   %c0 = arith.constant 0: index
   %c3 = arith.constant 3: index
   %f0 = arith.constant 0.0 : f32
-  %0 = hal.interface.binding.subspan @io::@arg0[%c0] : memref<20xf32>
-  %2 = hal.interface.binding.subspan @io::@ret1[%c0] : memref<20xf32>
+  %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<20xf32>
+  %2 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<20xf32>
   // CHECK-DAG: %[[INDEX0:.+]] = arith.constant 3 : index
   // CHECK-DAG: %[[INDEX1:.+]] = arith.constant 4 : index
   // CHECK-DAG: %[[INDEX2:.+]] = arith.constant 5 : index
@@ -239,3 +205,29 @@ func @scalarize_vector_transfer_op(%arg: vector<3xf32>) -> (vector<3xf32>) {
   vector.transfer_write %arg, %2[%c3] : vector<3xf32>, memref<20xf32>
   return %3: vector<3xf32>
 }
+
+// -----
+
+
+// CHECK-LABEL: func @scalarize_non_minor_identity_transfer_write
+//  CHECK-SAME: (%[[VALUE:.+]]: vector<4xf32>, %[[I1:.+]]: index, %[[I2:.+]]: index)
+func.func @scalarize_non_minor_identity_transfer_write(%value: vector<4xf32>, %i1: index, %i2: index) {
+  %c0 = arith.constant 0: index
+  %buffer = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) offset(%c0) alignment(64) : memref<1x130x130x1xf32>
+  vector.transfer_write %value, %buffer[%c0, %i1, %i2, %c0] {in_bounds = [true], permutation_map = affine_map<(d0, d1, d2, d3) -> (d2)>} : vector<4xf32>, memref<1x130x130x1xf32>
+  return
+}
+
+// CHECK: %[[C0:.+]] = arith.constant 0 : index
+// CHECK: %[[BUFFER:.+]] = hal.interface.binding.subspan
+// CHECK: %[[E0:.+]] = vector.extract %[[VALUE]][0] : vector<4xf32>
+// CHECK: memref.store %[[E0]], %[[BUFFER]][%[[C0]], %[[I1]], %[[I2]], %[[C0]]]
+// CHECK: %[[PLUS1:.+]] = affine.apply affine_map<()[s0] -> (s0 + 1)>()[%[[I2]]]
+// CHECK: %[[E1:.+]] = vector.extract %[[VALUE]][1] : vector<4xf32>
+// CHECK: memref.store %[[E1]], %[[BUFFER]][%[[C0]], %[[I1]], %[[PLUS1]], %[[C0]]]
+// CHECK: %[[PLUS2:.+]] = affine.apply affine_map<()[s0] -> (s0 + 2)>()[%[[I2]]]
+// CHECK: %[[E2:.+]] = vector.extract %[[VALUE]][2] : vector<4xf32>
+// CHECK: memref.store %[[E2]], %[[BUFFER]][%[[C0]], %[[I1]], %[[PLUS2]], %[[C0]]]
+// CHECK: %[[PLUS3:.+]] = affine.apply affine_map<()[s0] -> (s0 + 3)>()[%[[I2]]]
+// CHECK: %[[E3:.+]] = vector.extract %[[VALUE]][3] : vector<4xf32>
+// CHECK: memref.store %[[E3]], %[[BUFFER]][%[[C0]], %[[I1]], %[[PLUS3]], %[[C0]]]

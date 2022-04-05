@@ -57,18 +57,35 @@ static void iree_hal_vulkan_destroy_shader_module(
 
 static iree_status_t iree_hal_vulkan_create_pipelines(
     VkDeviceHandle* logical_device, VkPipelineCache pipeline_cache,
-    iree_hal_executable_caching_mode_t caching_mode,
+    const iree_hal_executable_params_t* executable_params,
     iree_SpirVExecutableDef_table_t executable_def,
-    VkShaderModule shader_module, iree_host_size_t executable_layout_count,
-    iree_hal_executable_layout_t* const* executable_layouts,
-    iree_host_size_t pipeline_count,
+    VkShaderModule shader_module, iree_host_size_t pipeline_count,
     iree_hal_vulkan_entry_point_t* out_entry_points) {
   IREE_TRACE_SCOPE();
-  VkComputePipelineCreateInfo* create_infos = NULL;
+  uint8_t* scratch_memory = NULL;
   IREE_RETURN_IF_ERROR(iree_allocator_malloc(
       logical_device->host_allocator(),
-      pipeline_count * sizeof(VkComputePipelineCreateInfo),
-      (void**)&create_infos));
+      pipeline_count * sizeof(VkComputePipelineCreateInfo) +
+          executable_params->constant_count * sizeof(VkSpecializationMapEntry),
+      (void**)&scratch_memory));
+  VkComputePipelineCreateInfo* create_infos =
+      (VkComputePipelineCreateInfo*)scratch_memory;
+  VkSpecializationMapEntry* spec_map_entries =
+      (VkSpecializationMapEntry*)(scratch_memory +
+                                  pipeline_count *
+                                      sizeof(VkComputePipelineCreateInfo));
+
+  VkSpecializationInfo spec_info;
+  memset(&spec_info, 0, sizeof(spec_info));
+  spec_info.mapEntryCount = executable_params->constant_count;
+  spec_info.pMapEntries = spec_map_entries;
+  spec_info.dataSize = executable_params->constant_count * sizeof(uint32_t);
+  spec_info.pData = executable_params->constants;
+  for (iree_host_size_t i = 0; i < executable_params->constant_count; ++i) {
+    spec_map_entries[i].constantID = i;
+    spec_map_entries[i].offset = i * sizeof(uint32_t);
+    spec_map_entries[i].size = sizeof(uint32_t);
+  }
 
   flatbuffers_string_vec_t entry_points_vec =
       iree_SpirVExecutableDef_entry_points_get(executable_def);
@@ -79,7 +96,7 @@ static iree_status_t iree_hal_vulkan_create_pipelines(
     create_info->pNext = NULL;
     create_info->flags = 0;
     if (!iree_all_bits_set(
-            caching_mode,
+            executable_params->caching_mode,
             IREE_HAL_EXECUTABLE_CACHING_MODE_ALLOW_OPTIMIZATION)) {
       create_info->flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
     }
@@ -89,9 +106,10 @@ static iree_status_t iree_hal_vulkan_create_pipelines(
       create_info->flags |= VK_PIPELINE_CREATE_DERIVATIVE_BIT;
     }
     create_info->layout = iree_hal_vulkan_native_executable_layout_handle(
-        executable_layouts[entry_ordinal]);
+        executable_params->executable_layouts[entry_ordinal]);
     create_info->basePipelineHandle = VK_NULL_HANDLE;
     create_info->basePipelineIndex = 0;
+
     VkPipelineShaderStageCreateInfo* stage_create_info = &create_info->stage;
     stage_create_info->sType =
         VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -101,7 +119,7 @@ static iree_status_t iree_hal_vulkan_create_pipelines(
     stage_create_info->module = shader_module;
     stage_create_info->pName =
         flatbuffers_string_vec_at(entry_points_vec, entry_ordinal);
-    stage_create_info->pSpecializationInfo = NULL;
+    stage_create_info->pSpecializationInfo = &spec_info;
   }
 
   VkPipeline* pipelines =
@@ -117,7 +135,7 @@ static iree_status_t iree_hal_vulkan_create_pipelines(
     }
   }
 
-  iree_allocator_free(logical_device->host_allocator(), create_infos);
+  iree_allocator_free(logical_device->host_allocator(), scratch_memory);
   return status;
 }
 
@@ -181,14 +199,6 @@ static iree_status_t iree_hal_spirv_executable_flatbuffer_verify(
                             "executable SPIR-V code is missing/empty");
   }
 
-  // TODO(benvanik): pull PopulateSpecializationInfo from history and update.
-  // For now the compiler isn't generating them, and we don't use them.
-  if (iree_SpirVExecutableDef_specialization_info_is_present(executable_def)) {
-    return iree_make_status(IREE_STATUS_UNIMPLEMENTED,
-                            "executable uses SPIR-V specialization constants; "
-                            "they need to be revived");
-  }
-
   return iree_ok_status();
 }
 
@@ -199,8 +209,10 @@ typedef struct iree_hal_vulkan_native_executable_t {
   iree_hal_vulkan_entry_point_t entry_points[];
 } iree_hal_vulkan_native_executable_t;
 
+namespace {
 extern const iree_hal_executable_vtable_t
     iree_hal_vulkan_native_executable_vtable;
+}  // namespace
 
 static iree_hal_vulkan_native_executable_t*
 iree_hal_vulkan_native_executable_cast(iree_hal_executable_t* base_value) {
@@ -211,10 +223,10 @@ iree_hal_vulkan_native_executable_cast(iree_hal_executable_t* base_value) {
 iree_status_t iree_hal_vulkan_native_executable_create(
     iree::hal::vulkan::VkDeviceHandle* logical_device,
     VkPipelineCache pipeline_cache,
-    const iree_hal_executable_spec_t* executable_spec,
+    const iree_hal_executable_params_t* executable_params,
     iree_hal_executable_t** out_executable) {
   IREE_ASSERT_ARGUMENT(logical_device);
-  IREE_ASSERT_ARGUMENT(executable_spec);
+  IREE_ASSERT_ARGUMENT(executable_params);
   IREE_ASSERT_ARGUMENT(out_executable);
   *out_executable = NULL;
   IREE_TRACE_ZONE_BEGIN(z0);
@@ -222,10 +234,10 @@ iree_status_t iree_hal_vulkan_native_executable_create(
   // Verify and fetch the executable flatbuffer wrapper.
   IREE_RETURN_AND_END_ZONE_IF_ERROR(
       z0, iree_hal_spirv_executable_flatbuffer_verify(
-              executable_spec->executable_data,
-              executable_spec->executable_layout_count));
+              executable_params->executable_data,
+              executable_params->executable_layout_count));
   iree_SpirVExecutableDef_table_t executable_def =
-      iree_SpirVExecutableDef_as_root(executable_spec->executable_data.data);
+      iree_SpirVExecutableDef_as_root(executable_params->executable_data.data);
 
   // Create the shader module.
   flatbuffers_uint32_vec_t code_vec =
@@ -261,10 +273,8 @@ iree_status_t iree_hal_vulkan_native_executable_create(
   }
   if (iree_status_is_ok(status)) {
     status = iree_hal_vulkan_create_pipelines(
-        logical_device, pipeline_cache, executable_spec->caching_mode,
-        executable_def, shader_module, executable_spec->executable_layout_count,
-        executable_spec->executable_layouts, executable->entry_point_count,
-        executable->entry_points);
+        logical_device, pipeline_cache, executable_params, executable_def,
+        shader_module, executable->entry_point_count, executable->entry_points);
   }
   iree_hal_vulkan_destroy_shader_module(logical_device, shader_module);
 
@@ -335,6 +345,8 @@ iree_status_t iree_hal_vulkan_native_executable_pipeline_for_entry_point(
   return iree_ok_status();
 }
 
+namespace {
 const iree_hal_executable_vtable_t iree_hal_vulkan_native_executable_vtable = {
     /*.destroy=*/iree_hal_vulkan_native_executable_destroy,
 };
+}  // namespace

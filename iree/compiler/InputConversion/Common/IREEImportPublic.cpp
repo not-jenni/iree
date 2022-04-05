@@ -4,8 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "iree-dialects/Dialect/IREE/IREEDialect.h"
-#include "iree-dialects/Dialect/IREE/IREEOps.h"
+#include "iree-dialects/Dialect/Input/InputDialect.h"
+#include "iree-dialects/Dialect/Input/InputOps.h"
 #include "iree/compiler/Dialect/Flow/IR/FlowDialect.h"
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "iree/compiler/Dialect/Flow/IR/FlowTypes.h"
@@ -17,16 +17,12 @@
 #include "iree/compiler/Dialect/Util/IR/UtilTypes.h"
 #include "iree/compiler/InputConversion/Common/PassDetail.h"
 #include "iree/compiler/InputConversion/Common/Passes.h"
-#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
-#include "mlir/Dialect/SCF/SCF.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/DialectConversion.h"
-
-namespace IREEPublic = mlir::iree;
 
 namespace mlir {
 namespace iree_compiler {
@@ -35,6 +31,7 @@ namespace {
 
 // Allowlist of function attributes to retain when importing funcs.
 constexpr const char *kRetainedAttributes[] = {
+    "iree.abi",
     "iree.reflection",
     "sym_visibility",
     "noinline",
@@ -43,9 +40,9 @@ constexpr const char *kRetainedAttributes[] = {
 struct IREEImportPublicPass
     : public IREEImportPublicBase<IREEImportPublicPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<mlir::iree::IREEDialect, IREE::Flow::FlowDialect,
+    registry.insert<IREE::Input::IREEInputDialect, IREE::Flow::FlowDialect,
                     IREE::HAL::HALDialect, IREE::Util::UtilDialect,
-                    mlir::StandardOpsDialect, mlir::arith::ArithmeticDialect>();
+                    mlir::func::FuncDialect, mlir::arith::ArithmeticDialect>();
   }
   void runOnOperation() override;
 };
@@ -76,7 +73,7 @@ class OneToOneConverionPattern : public ConversionPattern {
 
     OperationState state(srcOp->getLoc(), targetName, operands, resultTypes,
                          srcOp->getAttrs());
-    Operation *targetOp = rewriter.createOperation(state);
+    Operation *targetOp = rewriter.create(state);
     rewriter.replaceOp(srcOp, targetOp->getResults());
     return success();
   }
@@ -86,43 +83,66 @@ class OneToOneConverionPattern : public ConversionPattern {
 };
 
 class BufferViewToTensorPattern
-    : public OpConversionPattern<IREEPublic::BufferViewToTensorOp> {
+    : public OpConversionPattern<IREE::Input::BufferViewToTensorOp> {
   using OpConversionPattern<
-      IREEPublic::BufferViewToTensorOp>::OpConversionPattern;
+      IREE::Input::BufferViewToTensorOp>::OpConversionPattern;
   LogicalResult matchAndRewrite(
-      IREEPublic::BufferViewToTensorOp srcOp, ArrayRef<Value> operands,
+      IREE::Input::BufferViewToTensorOp srcOp, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    IREEPublic::BufferViewToTensorOpAdaptor adaptor(operands);
-    Type resultType = typeConverter->convertType(srcOp.target().getType());
+    TensorType resultType = typeConverter->convertType(srcOp.target().getType())
+                                .dyn_cast_or_null<TensorType>();
     if (!resultType) return failure();
-    rewriter.replaceOpWithNewOp<IREE::HAL::TensorCastOp>(
-        srcOp, resultType, adaptor.source(), adaptor.target_dims());
+    if (adaptor.target_dims().empty() && !resultType.hasStaticShape()) {
+      // For the input dialect, we allow ops that don't have their dims
+      // specified and we reify them here with the specific builder that does
+      // the work.
+      rewriter.replaceOpWithNewOp<IREE::HAL::TensorImportOp>(srcOp, resultType,
+                                                             adaptor.source());
+    } else {
+      // Dynamic dims explicitly provided (or wrong, in which case the verifier
+      // will get it).
+      rewriter.replaceOpWithNewOp<IREE::HAL::TensorImportOp>(
+          srcOp, resultType, adaptor.source(), TypeAttr::get(resultType),
+          adaptor.target_dims());
+    }
     return success();
   }
 };
 
 class TensorToBufferViewPattern
-    : public OpConversionPattern<IREEPublic::TensorToBufferViewOp> {
+    : public OpConversionPattern<IREE::Input::TensorToBufferViewOp> {
   using OpConversionPattern<
-      IREEPublic::TensorToBufferViewOp>::OpConversionPattern;
+      IREE::Input::TensorToBufferViewOp>::OpConversionPattern;
   LogicalResult matchAndRewrite(
-      IREEPublic::TensorToBufferViewOp srcOp, ArrayRef<Value> operands,
+      IREE::Input::TensorToBufferViewOp srcOp, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    IREEPublic::TensorToBufferViewOpAdaptor adaptor(operands);
     Type resultType = typeConverter->convertType(srcOp.target().getType());
-    if (!resultType) return failure();
-    rewriter.replaceOpWithNewOp<IREE::HAL::TensorCastOp>(
-        srcOp, resultType, adaptor.source(), adaptor.source_dims());
+    TensorType sourceType = adaptor.source().getType().dyn_cast<TensorType>();
+    if (!resultType || !sourceType) return failure();
+    if (adaptor.source_dims().empty() && !sourceType.hasStaticShape()) {
+      // For the input dialect, we allow ops that don't have their dims
+      // specified and we reify them here with the specific builder that does
+      // the work.
+      rewriter.replaceOpWithNewOp<IREE::HAL::TensorExportOp>(srcOp, resultType,
+                                                             adaptor.source());
+    } else {
+      // Dynamic dims explicitly provided (or wrong, in which case the verifier
+      // will get it).
+      rewriter.replaceOpWithNewOp<IREE::HAL::TensorExportOp>(
+          srcOp, resultType, adaptor.source(),
+          TypeAttr::get(adaptor.source().getType()), adaptor.source_dims(),
+          /*target_storage=*/nullptr);
+    }
     return success();
   }
 };
 
-class BuiltinFuncOpPattern : public OpConversionPattern<FuncOp> {
-  using OpConversionPattern<FuncOp>::OpConversionPattern;
+class BuiltinFuncOpPattern : public OpConversionPattern<func::FuncOp> {
+  using OpConversionPattern<func::FuncOp>::OpConversionPattern;
   LogicalResult matchAndRewrite(
-      FuncOp srcOp, ArrayRef<Value> operands,
+      func::FuncOp srcOp, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    FunctionType srcFuncType = srcOp.getType();
+    FunctionType srcFuncType = srcOp.getFunctionType();
     TypeConverter::SignatureConversion signatureConversion(
         srcOp.getNumArguments());
 
@@ -146,8 +166,8 @@ class BuiltinFuncOpPattern : public OpConversionPattern<FuncOp> {
     auto newFuncType = mlir::FunctionType::get(
         srcOp.getContext(), signatureConversion.getConvertedTypes(),
         convertedResultTypes);
-    auto newFuncOp =
-        rewriter.create<FuncOp>(srcOp.getLoc(), srcOp.getName(), newFuncType);
+    auto newFuncOp = rewriter.create<func::FuncOp>(
+        srcOp.getLoc(), srcOp.getName(), newFuncType);
     rewriter.inlineRegionBefore(srcOp.getBody(), newFuncOp.getBody(),
                                 newFuncOp.end());
 
@@ -175,10 +195,10 @@ class BuiltinFuncOpPattern : public OpConversionPattern<FuncOp> {
   }
 };
 
-class GlobalOpPattern : public OpConversionPattern<IREEPublic::GlobalOp> {
+class GlobalOpPattern : public OpConversionPattern<IREE::Input::GlobalOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
-      IREEPublic::GlobalOp srcOp, ArrayRef<Value> operands,
+      IREE::Input::GlobalOp srcOp, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     Type newType = typeConverter->convertType(srcOp.type());
     if (!newType) return failure();
@@ -191,7 +211,7 @@ class GlobalOpPattern : public OpConversionPattern<IREEPublic::GlobalOp> {
           rewriter.create<IREE::Util::InitializerOp>(srcOp.getLoc());
       auto ip = rewriter.saveInsertionPoint();
       rewriter.setInsertionPointToStart(initializerOp.addEntryBlock());
-      auto callOp = rewriter.create<mlir::CallOp>(
+      auto callOp = rewriter.create<mlir::func::CallOp>(
           srcOp.getLoc(), srcOp.initializerAttr(), TypeRange{newType});
       rewriter.create<IREE::Util::GlobalStoreOp>(
           srcOp.getLoc(), callOp.getResult(0), srcOp.getName());
@@ -225,7 +245,7 @@ class GenericTypeConvert : public ConversionPattern {
           newRegion->getArgumentTypes(), result);
       rewriter.applySignatureConversion(newRegion, result);
     }
-    Operation *newOp = rewriter.createOperation(state);
+    Operation *newOp = rewriter.create(state);
     rewriter.replaceOp(op, newOp->getResults());
     return success();
   }
@@ -235,20 +255,20 @@ class GenericTypeConvert : public ConversionPattern {
 
 IREETypeConverter::IREETypeConverter() {
   addConversion([](Type t) { return t; });
-  addConversion([=](IREEPublic::BufferViewType t) {
+  addConversion([=](IREE::Input::BufferViewType t) {
     return IREE::HAL::BufferViewType::get(t.getContext());
   });
-  addConversion([=](IREEPublic::ListType t) -> IREE::Util::ListType {
+  addConversion([=](IREE::Input::ListType t) -> IREE::Util::ListType {
     auto subType = convertType(t.getElementType());
     if (!subType) return nullptr;
     return IREE::Util::ListType::get(subType);
   });
-  addConversion([=](IREEPublic::PtrType t) -> IREE::Util::PtrType {
+  addConversion([=](IREE::Input::PtrType t) -> IREE::Util::PtrType {
     auto subType = convertType(t.getTargetType());
     if (!subType) return nullptr;
     return IREE::Util::PtrType::get(subType);
   });
-  addConversion([](IREEPublic::VariantType t) {
+  addConversion([](IREE::Input::VariantType t) {
     return IREE::Util::VariantType::get(t.getContext());
   });
 }
@@ -260,24 +280,13 @@ void IREEImportPublicPass::runOnOperation() {
   target.addLegalDialect<IREE::Flow::FlowDialect>();
   target.addLegalDialect<IREE::HAL::HALDialect>();
   target.addLegalDialect<IREE::Util::UtilDialect>();
-  target.addIllegalDialect<IREEPublic::IREEDialect>();
+  target.addIllegalDialect<IREE::Input::IREEInputDialect>();
 
-  auto ireeDialect = context.getOrLoadDialect<IREEPublic::IREEDialect>();
+  auto ireeDialect = context.getOrLoadDialect<IREE::Input::IREEInputDialect>();
   auto isIllegalType = [&](Type t) {
     return t.getDialect().getTypeID() == ireeDialect->getTypeID();
   };
-
-  target.addDynamicallyLegalOp<FuncOp>([&](FuncOp funcOp) {
-    for (Type type : funcOp.getType().getInputs()) {
-      if (isIllegalType(type)) return false;
-    }
-    for (Type type : funcOp.getType().getResults()) {
-      if (isIllegalType(type)) return false;
-    }
-    return true;
-  });
-
-  target.markUnknownOpDynamicallyLegal([&](Operation *op) {
+  auto isLegallyTypedOp = [&](Operation *op) -> bool {
     for (Type type : op->getResultTypes()) {
       if (isIllegalType(type)) return false;
     }
@@ -285,7 +294,23 @@ void IREEImportPublicPass::runOnOperation() {
       if (isIllegalType(type)) return false;
     }
     return true;
+  };
+
+  target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp funcOp) {
+    for (Type type : funcOp.getFunctionType().getInputs()) {
+      if (isIllegalType(type)) return false;
+    }
+    for (Type type : funcOp.getFunctionType().getResults()) {
+      if (isIllegalType(type)) return false;
+    }
+    for (Block &block : funcOp.getBody()) {
+      for (Type type : block.getArgumentTypes()) {
+        if (isIllegalType(type)) return false;
+      }
+    }
+    return true;
   });
+  target.markUnknownOpDynamicallyLegal(isLegallyTypedOp);
 
   IREETypeConverter typeConverter;
   PatternBenefit specific_benefit = 100;
@@ -298,33 +323,34 @@ void IREEImportPublicPass::runOnOperation() {
                                              specific_benefit);
   patterns.insert<GlobalOpPattern>(typeConverter, &getContext(), 0);
 
-#define ONETOONE(SrcOpTy, TargetOpTy)             \
+#define ONE_TO_ONE(SrcOpTy, TargetOpTy)           \
   patterns.insert<OneToOneConverionPattern>(      \
       typeConverter, SrcOpTy::getOperationName(), \
       TargetOpTy::getOperationName(), &getContext(), specific_benefit)
 
-  ONETOONE(IREEPublic::BufferViewRankOp, IREE::HAL::BufferViewRankOp);
-  ONETOONE(IREEPublic::BufferViewDimOp, IREE::HAL::BufferViewDimOp);
-  ONETOONE(IREEPublic::ListCreateOp, IREE::Util::ListCreateOp);
-  ONETOONE(IREEPublic::ListSizeOp, IREE::Util::ListSizeOp);
-  ONETOONE(IREEPublic::ListResizeOp, IREE::Util::ListResizeOp);
-  ONETOONE(IREEPublic::ListGetOp, IREE::Util::ListGetOp);
-  ONETOONE(IREEPublic::ListSetOp, IREE::Util::ListSetOp);
-  ONETOONE(IREEPublic::NullOp, IREE::Util::NullOp);
-  ONETOONE(IREEPublic::TensorCloneOp, IREE::Flow::TensorCloneOp);
-  ONETOONE(IREEPublic::TensorLoadOp, IREE::Flow::TensorLoadOp);
-  ONETOONE(IREEPublic::TensorReshapeOp, IREE::Flow::TensorReshapeOp);
-  ONETOONE(IREEPublic::TensorSliceOp, IREE::Flow::TensorSliceOp);
-  ONETOONE(IREEPublic::TensorSplatOp, IREE::Flow::TensorSplatOp);
-  ONETOONE(IREEPublic::TensorStoreOp, IREE::Flow::TensorStoreOp);
-  ONETOONE(IREEPublic::TensorUpdateOp, IREE::Flow::TensorUpdateOp);
-  ONETOONE(IREEPublic::TensorTraceOp, IREE::Flow::TensorTraceOp);
-  ONETOONE(IREEPublic::GlobalAddressOp, IREE::Util::GlobalAddressOp);
-  ONETOONE(IREEPublic::GlobalLoadOp, IREE::Util::GlobalLoadOp);
-  ONETOONE(IREEPublic::GlobalLoadIndirectOp, IREE::Util::GlobalLoadIndirectOp);
-  ONETOONE(IREEPublic::GlobalStoreOp, IREE::Util::GlobalStoreOp);
-  ONETOONE(IREEPublic::GlobalStoreIndirectOp,
-           IREE::Util::GlobalStoreIndirectOp);
+  ONE_TO_ONE(IREE::Input::BufferViewRankOp, IREE::HAL::BufferViewRankOp);
+  ONE_TO_ONE(IREE::Input::BufferViewDimOp, IREE::HAL::BufferViewDimOp);
+  ONE_TO_ONE(IREE::Input::ListCreateOp, IREE::Util::ListCreateOp);
+  ONE_TO_ONE(IREE::Input::ListSizeOp, IREE::Util::ListSizeOp);
+  ONE_TO_ONE(IREE::Input::ListResizeOp, IREE::Util::ListResizeOp);
+  ONE_TO_ONE(IREE::Input::ListGetOp, IREE::Util::ListGetOp);
+  ONE_TO_ONE(IREE::Input::ListSetOp, IREE::Util::ListSetOp);
+  ONE_TO_ONE(IREE::Input::NullOp, IREE::Util::NullOp);
+  ONE_TO_ONE(IREE::Input::TensorCloneOp, IREE::Flow::TensorCloneOp);
+  ONE_TO_ONE(IREE::Input::TensorLoadOp, IREE::Flow::TensorLoadOp);
+  ONE_TO_ONE(IREE::Input::TensorReshapeOp, IREE::Flow::TensorReshapeOp);
+  ONE_TO_ONE(IREE::Input::TensorSliceOp, IREE::Flow::TensorSliceOp);
+  ONE_TO_ONE(IREE::Input::TensorSplatOp, IREE::Flow::TensorSplatOp);
+  ONE_TO_ONE(IREE::Input::TensorStoreOp, IREE::Flow::TensorStoreOp);
+  ONE_TO_ONE(IREE::Input::TensorUpdateOp, IREE::Flow::TensorUpdateOp);
+  ONE_TO_ONE(IREE::Input::TensorTraceOp, IREE::Flow::TensorTraceOp);
+  ONE_TO_ONE(IREE::Input::GlobalAddressOp, IREE::Util::GlobalAddressOp);
+  ONE_TO_ONE(IREE::Input::GlobalLoadOp, IREE::Util::GlobalLoadOp);
+  ONE_TO_ONE(IREE::Input::GlobalLoadIndirectOp,
+             IREE::Util::GlobalLoadIndirectOp);
+  ONE_TO_ONE(IREE::Input::GlobalStoreOp, IREE::Util::GlobalStoreOp);
+  ONE_TO_ONE(IREE::Input::GlobalStoreIndirectOp,
+             IREE::Util::GlobalStoreIndirectOp);
 
   if (failed(applyFullConversion(getOperation(), target, std::move(patterns))))
     signalPassFailure();

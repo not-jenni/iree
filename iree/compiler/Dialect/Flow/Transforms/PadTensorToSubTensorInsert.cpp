@@ -14,9 +14,9 @@
 
 #include "iree/compiler/Dialect/Flow/Transforms/PassDetail.h"
 #include "iree/compiler/Dialect/Flow/Transforms/Passes.h"
-#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/Pass.h"
@@ -30,19 +30,18 @@ namespace Flow {
 namespace {
 /// Pattern to convert a linalg.pad_tensor operation into a fill + subtensor
 /// insert. This is needed till pad_tensor op can be fused with its consumers.
-struct PadTensorOpConversion : public OpRewritePattern<linalg::PadTensorOp> {
-  using OpRewritePattern<linalg::PadTensorOp>::OpRewritePattern;
+struct PadTensorOpConversion : public OpRewritePattern<tensor::PadOp> {
+  using OpRewritePattern<tensor::PadOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(linalg::PadTensorOp padTensorOp,
+  LogicalResult matchAndRewrite(tensor::PadOp padTensorOp,
                                 PatternRewriter &rewriter) const override {
     // Check that the region is just a yield operation which is returning a
     // scalar that is not one of the arguments of the linalg operation.
     Region &region = padTensorOp.region();
     Block &block = region.front();
     if (!llvm::hasSingleElement(block)) return failure();
-    auto yieldOp = cast<linalg::YieldOp>(block.getTerminator());
-    if (!llvm::hasSingleElement(yieldOp.values())) return failure();
-    Value yieldVal = yieldOp.values().front();
+    auto yieldOp = cast<tensor::YieldOp>(block.getTerminator());
+    Value yieldVal = yieldOp.value();
     if (llvm::any_of(block.getArguments(),
                      [&](Value v) { return v == yieldVal; })) {
       return failure();
@@ -63,7 +62,11 @@ struct PadTensorOpConversion : public OpRewritePattern<linalg::PadTensorOp> {
       SmallVector<Value> mapValues;
       Value sourceDim = rewriter.createOrFold<tensor::DimOp>(loc, source, dim);
       mapValues.push_back(sourceDim);
-      sourceShape.push_back(sourceDim);
+      if (auto cstDim = sourceDim.getDefiningOp<arith::ConstantIndexOp>()) {
+        sourceShape.push_back(cstDim.getValue());
+      } else {
+        sourceShape.push_back(sourceDim);
+      }
       AffineExpr expr = rewriter.getAffineDimExpr(0);
       unsigned numSymbols = 0;
       auto addValueOrAttr = [&](AffineExpr e, OpFoldResult valueOrAttr) {
@@ -77,10 +80,10 @@ struct PadTensorOpConversion : public OpRewritePattern<linalg::PadTensorOp> {
       };
       expr = addValueOrAttr(expr, lowPad[dim]);
       expr = addValueOrAttr(expr, highPad[dim]);
-      Value v = linalg::applyMapToValues(
+      Value v = applyMapToValues(
           rewriter, loc, AffineMap::get(1, numSymbols, expr), mapValues)[0];
       if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
-        outputShape.push_back(cst.value());
+        outputShape.push_back(cst.getValue());
       } else {
         outputShape.push_back(v);
       }
@@ -99,9 +102,9 @@ struct PadTensorOpConversion : public OpRewritePattern<linalg::PadTensorOp> {
 struct PadTensorToSubTensorInsertPass
     : public PadTensorToSubTensorInsertBase<PadTensorToSubTensorInsertPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<linalg::LinalgDialect, memref::MemRefDialect,
-                    StandardOpsDialect, mlir::math::MathDialect,
-                    mlir::arith::ArithmeticDialect>();
+    registry
+        .insert<linalg::LinalgDialect, memref::MemRefDialect, func::FuncDialect,
+                mlir::math::MathDialect, mlir::arith::ArithmeticDialect>();
   }
 
   void runOnOperation() override {

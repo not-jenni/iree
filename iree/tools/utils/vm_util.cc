@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "iree/base/api.h"
-#include "iree/base/internal/file_io.h"
 #include "iree/base/logging.h"
 #include "iree/base/status_cc.h"
 #include "iree/base/tracing.h"
@@ -23,50 +22,6 @@
 #include "iree/vm/ref_cc.h"
 
 namespace iree {
-
-Status GetFileContents(const char* path, std::string* out_contents) {
-  IREE_TRACE_ZONE_BEGIN(z0);
-  *out_contents = std::string();
-  FILE* file = fopen(path, "rb");
-  if (file == NULL) {
-    IREE_TRACE_ZONE_END(z0);
-    return iree_make_status(iree_status_code_from_errno(errno),
-                            "failed to open file '%s'", path);
-  }
-  iree_status_t status = iree_ok_status();
-  if (fseek(file, 0, SEEK_END) == -1) {
-    status = iree_make_status(iree_status_code_from_errno(errno), "seek (end)");
-  }
-  size_t file_size = 0;
-  if (iree_status_is_ok(status)) {
-    file_size = ftell(file);
-    if (file_size == -1L) {
-      status =
-          iree_make_status(iree_status_code_from_errno(errno), "size query");
-    }
-  }
-  if (iree_status_is_ok(status)) {
-    if (fseek(file, 0, SEEK_SET) == -1) {
-      status =
-          iree_make_status(iree_status_code_from_errno(errno), "seek (beg)");
-    }
-  }
-  std::string contents;
-  if (iree_status_is_ok(status)) {
-    contents.resize(file_size);
-    if (fread((char*)contents.data(), file_size, 1, file) != 1) {
-      status =
-          iree_make_status(iree_status_code_from_errno(errno),
-                           "unable to read entire file contents of '%s'", path);
-    }
-  }
-  if (iree_status_is_ok(status)) {
-    *out_contents = std::move(contents);
-  }
-  fclose(file);
-  IREE_TRACE_ZONE_END(z0);
-  return status;
-}
 
 Status ParseToVariantList(iree_hal_allocator_t* allocator,
                           iree::span<const std::string> input_strings,
@@ -84,14 +39,27 @@ Status ParseToVariantList(iree_hal_allocator_t* allocator,
     bool has_x =
         iree_string_view_find_char(input_view, 'x', 0) != IREE_STRING_VIEW_NPOS;
     if (has_equal || has_x) {
-      // Buffer view (either just a shape or a shape=value).
+      // Buffer view (either just a shape or a shape=value) or buffer.
+      bool is_storage_reference = iree_string_view_consume_prefix(
+          &input_view, iree_make_cstring_view("&"));
       iree_hal_buffer_view_t* buffer_view = nullptr;
       IREE_RETURN_IF_ERROR(
           iree_hal_buffer_view_parse(input_view, allocator, &buffer_view),
           "parsing value '%.*s'", (int)input_view.size, input_view.data);
-      auto buffer_view_ref = iree_hal_buffer_view_move_ref(buffer_view);
-      IREE_RETURN_IF_ERROR(
-          iree_vm_list_push_ref_move(variant_list.get(), &buffer_view_ref));
+      if (is_storage_reference) {
+        // Storage buffer reference; just take the storage for the buffer view -
+        // it'll still have whatever contents were specified (or 0) but we'll
+        // discard the metadata.
+        auto buffer_ref = iree_hal_buffer_retain_ref(
+            iree_hal_buffer_view_buffer(buffer_view));
+        iree_hal_buffer_view_release(buffer_view);
+        IREE_RETURN_IF_ERROR(
+            iree_vm_list_push_ref_move(variant_list.get(), &buffer_ref));
+      } else {
+        auto buffer_view_ref = iree_hal_buffer_view_move_ref(buffer_view);
+        IREE_RETURN_IF_ERROR(
+            iree_vm_list_push_ref_move(variant_list.get(), &buffer_view_ref));
+      }
     } else {
       // Scalar.
       bool has_dot = iree_string_view_find_char(input_view, '.', 0) !=
@@ -121,7 +89,8 @@ Status ParseToVariantList(iree_hal_allocator_t* allocator,
   return OkStatus();
 }
 
-Status PrintVariantList(iree_vm_list_t* variant_list, std::ostream* os) {
+Status PrintVariantList(iree_vm_list_t* variant_list, size_t max_element_count,
+                        std::ostream* os) {
   for (iree_host_size_t i = 0; i < iree_vm_list_size(variant_list); ++i) {
     iree_vm_variant_t variant = iree_vm_variant_empty();
     IREE_RETURN_IF_ERROR(iree_vm_list_get_variant(variant_list, i, &variant),
@@ -162,9 +131,9 @@ Status PrintVariantList(iree_vm_list_t* variant_list, std::ostream* os) {
         iree_status_t status;
         do {
           iree_host_size_t actual_length = 0;
-          status = iree_hal_buffer_view_format(
-              buffer_view, /*max_element_count=*/1024, result_str.size() + 1,
-              &result_str[0], &actual_length);
+          status = iree_hal_buffer_view_format(buffer_view, max_element_count,
+                                               result_str.size() + 1,
+                                               &result_str[0], &actual_length);
           result_str.resize(actual_length);
         } while (iree_status_is_out_of_range(status));
         IREE_RETURN_IF_ERROR(status);

@@ -128,6 +128,13 @@ IREE_API_EXPORT iree_hal_device_t* iree_runtime_session_device(
 IREE_API_EXPORT iree_hal_allocator_t* iree_runtime_session_device_allocator(
     const iree_runtime_session_t* session);
 
+// Trims transient/cached resources used by the session.
+// Upon resuming these resources may be expensive to rematerialize/reload and
+// as such this should only be called when it is known the resources will not
+// be needed soon.
+IREE_API_EXPORT iree_status_t
+iree_runtime_session_trim(iree_runtime_session_t* session);
+
 // Appends the given |module| to the context.
 // The module will be retained by the context.
 //
@@ -168,7 +175,7 @@ iree_runtime_session_append_bytecode_module_from_file(
 // The function name matches the original MLIR module and function symbols.
 // Example:
 //   module @foo {
-//     func @bar()
+//     func.func @bar()
 //   }
 // The full name of '@bar' is 'foo.bar'.
 // By default modules have the name 'module'.

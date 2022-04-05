@@ -6,14 +6,14 @@
 
 #include "iree/compiler/Codegen/PassDetail.h"
 #include "iree/compiler/Codegen/Passes.h"
+#include "mlir/Dialect/Affine/LoopUtils.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/Transforms/Hoisting.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
-#include "mlir/Dialect/Vector/VectorOps.h"
-#include "mlir/Dialect/Vector/VectorTransforms.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/LoopUtils.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -39,7 +39,7 @@ static bool allUsesAreStores(Operation* op, std::vector<Operation*>& uses) {
 
 // Track temporary allocations that are never read from. If this is the case
 // it means both the allocations and associated stores can be removed.
-static void eraseDeadAllocAndStores(FuncOp funcOp) {
+static void eraseDeadAllocAndStores(func::FuncOp funcOp) {
   std::vector<Operation*> opToErase;
   funcOp.walk([&](memref::AllocOp op) {
     if (allUsesAreStores(op, opToErase)) {
@@ -70,38 +70,54 @@ class TransposeUnitDimToShapeCast
         op.getVectorType().getShape(), [](int64_t dim) { return dim != 1; });
     if (numNonUnitSrcDim > 1) return failure();
     rewriter.replaceOpWithNewOp<vector::ShapeCastOp>(op, op.getResultType(),
-                                                     op.vector());
+                                                     op.getVector());
     return success();
   }
 };
 
-static void loopInvariantCodeMotion(FuncOp funcOp) {
+static void loopInvariantCodeMotion(func::FuncOp funcOp) {
   // Walk through all loops in a function in innermost-loop-first order. This
   // way, we first LICM from the inner loop, and place the ops in
   // the outer loop, which in turn can be further LICM'ed.
-  funcOp.walk([&](LoopLikeOpInterface loopLike) {
-    if (failed(moveLoopInvariantCode(loopLike)))
-      llvm_unreachable("Unexpected failure to move invariant code out of loop");
-  });
+  funcOp.walk(
+      [&](LoopLikeOpInterface loopLike) { moveLoopInvariantCode(loopLike); });
 }
 
 struct OptimizeVectorTransferPass
     : public OptimizeVectorTransferBase<OptimizeVectorTransferPass> {
   void runOnOperation() override {
-    FuncOp funcOp = getOperation();
+    func::FuncOp funcOp = getOperation();
     // Generate vector.shape_cast for dropping leading one dimensions in vector
     // ops. This increases the chance that we can forward more transfer writes
     // to transfer reads.
-    OwningRewritePatternList patterns(&getContext());
-    mlir::vector::populateCastAwayVectorLeadingOneDimPatterns(patterns);
-    patterns.add<TransposeUnitDimToShapeCast>(&getContext());
-    (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
+    {
+      RewritePatternSet patterns(&getContext());
+      mlir::vector::populateCastAwayVectorLeadingOneDimPatterns(patterns);
+      vector::ExtractOp::getCanonicalizationPatterns(patterns, &getContext());
+      patterns.add<TransposeUnitDimToShapeCast>(&getContext());
+      mlir::vector::
+          populateVectorTransferCollapseInnerMostContiguousDimsPatterns(
+              patterns);
+      if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+        return signalPassFailure();
+      }
+    }
     // Workaround, run loop invariant code motion before hoist redudant vector
     // transfer to workaround a bug upstream.
     // TODO(thomasraoux): Remove it once the fix is merged.
     loopInvariantCodeMotion(funcOp);
     linalg::hoistRedundantVectorTransfers(funcOp);
     vector::transferOpflowOpt(funcOp);
+
+    // Second stage of patterns to flatten transfer ops.
+    {
+      RewritePatternSet patterns(&getContext());
+      mlir::vector::populateVectorTransferDropUnitDimsPatterns(patterns);
+      mlir::vector::populateFlattenVectorTransferPatterns(patterns);
+      if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+        return signalPassFailure();
+      }
+    }
     // Delete potential dead alloc and associated ops after store to load
     // forwarding.
     eraseDeadAllocAndStores(funcOp);
@@ -110,7 +126,8 @@ struct OptimizeVectorTransferPass
 
 }  // namespace
 
-std::unique_ptr<OperationPass<FuncOp>> createOptimizeVectorTransferPass() {
+std::unique_ptr<OperationPass<func::FuncOp>>
+createOptimizeVectorTransferPass() {
   return std::make_unique<OptimizeVectorTransferPass>();
 }
 

@@ -18,6 +18,7 @@ iree_cc_library(
   SRCS
     "Conversion.cpp"
     "DeduplicateRodata.cpp"
+    "DropEmptyModuleInitializers.cpp"
     "GlobalInitialization.cpp"
     "HoistInlinedRodata.cpp"
     "OrdinalAllocation.cpp"
@@ -27,16 +28,19 @@ iree_cc_library(
     LLVMSupport
     MLIRAffine
     MLIRAffineToStandard
+    MLIRAffineTransforms
+    MLIRAffineUtils
+    MLIRArithmeticTransforms
+    MLIRFunc
     MLIRIR
     MLIRMath
     MLIRMemRef
     MLIRPass
-    MLIRSCFToStandard
+    MLIRSCFToControlFlow
     MLIRSideEffectInterfaces
     MLIRSupport
     MLIRTransformUtils
     MLIRTransforms
-    iree::compiler::Dialect::Shape::IR
     iree::compiler::Dialect::Util::Conversion
     iree::compiler::Dialect::Util::IR
     iree::compiler::Dialect::VM::Conversion

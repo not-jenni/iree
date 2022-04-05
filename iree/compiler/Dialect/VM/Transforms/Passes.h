@@ -77,6 +77,10 @@ createOrdinalAllocationPass();
 // Optimization passes
 //===----------------------------------------------------------------------===//
 
+// Drops __init/__deinit functions that have no ops.
+std::unique_ptr<OperationPass<IREE::VM::ModuleOp>>
+createDropEmptyModuleInitializersPass();
+
 // Sinks defining ops with few uses to their use-sites to reduce the total
 // number of live registers at the cost of additional storage requirements.
 std::unique_ptr<OperationPass<IREE::VM::ModuleOp>> createSinkDefiningOpsPass();
@@ -93,18 +97,19 @@ createConvertStandardToVMTestPass();
 //===----------------------------------------------------------------------===//
 
 inline void registerVMPasses() {
-  auto targetOptions = getTargetOptionsFromFlags();
+  auto targetOptions = TargetOptions::FromFlags::get();
   registerVMTransformPassPipeline();
   createConversionPass(targetOptions);
   createHoistInlinedRodataPass();
   createDeduplicateRodataPass();
+  createDropEmptyModuleInitializersPass();
   createGlobalInitializationPass();
   createOrdinalAllocationPass();
   createSinkDefiningOpsPass();
 }
 
 inline void registerVMTestPasses() {
-  getTargetOptionsFromFlags();
+  TargetOptions::FromFlags::get();
   createConvertStandardToVMTestPass();
 }
 

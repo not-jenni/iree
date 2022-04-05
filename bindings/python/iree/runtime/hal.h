@@ -33,6 +33,14 @@ struct ApiPtrAdapter<iree_hal_device_t> {
 };
 
 template <>
+struct ApiPtrAdapter<iree_hal_allocator_t> {
+  static void Retain(iree_hal_allocator_t* d) { iree_hal_allocator_retain(d); }
+  static void Release(iree_hal_allocator_t* d) {
+    iree_hal_allocator_release(d);
+  }
+};
+
+template <>
 struct ApiPtrAdapter<iree_hal_buffer_t> {
   static void Retain(iree_hal_buffer_t* b) { iree_hal_buffer_retain(b); }
   static void Release(iree_hal_buffer_t* b) { iree_hal_buffer_release(b); }
@@ -67,6 +75,16 @@ class HalDriver : public ApiRefCounted<HalDriver, iree_hal_driver_t> {
   HalDevice CreateDefaultDevice();
 };
 
+class HalAllocator : public ApiRefCounted<HalAllocator, iree_hal_allocator_t> {
+ public:
+  py::dict QueryStatistics();
+  py::str FormattedStatistics();
+
+  py::object AllocateBufferCopy(
+      int memory_type, int allowed_usage, py::object buffer,
+      std::optional<iree_hal_element_types_t> element_type);
+};
+
 struct HalShape {
  public:
   static HalShape FromIntVector(std::vector<int32_t> indices) {
@@ -81,6 +99,7 @@ struct HalShape {
 class HalBufferView
     : public ApiRefCounted<HalBufferView, iree_hal_buffer_view_t> {
  public:
+  py::str Repr();
 };
 
 class HalBuffer : public ApiRefCounted<HalBuffer, iree_hal_buffer_t> {
@@ -91,8 +110,9 @@ class HalBuffer : public ApiRefCounted<HalBuffer, iree_hal_buffer_t> {
 
   void FillZero(iree_device_size_t byte_offset,
                 iree_device_size_t byte_length) {
-    CheckApiStatus(iree_hal_buffer_zero(raw_ptr(), byte_offset, byte_length),
-                   "Error zero filling buffer");
+    CheckApiStatus(
+        iree_hal_buffer_map_zero(raw_ptr(), byte_offset, byte_length),
+        "Error zero filling buffer");
   }
 
   // TODO(laurenzo): make this take element_type instead.
@@ -102,12 +122,14 @@ class HalBuffer : public ApiRefCounted<HalBuffer, iree_hal_buffer_t> {
         IREE_HAL_ELEMENT_TYPE_NONE, element_size * 8);
     iree_hal_encoding_type_t encoding_type =
         IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR;
-    CheckApiStatus(
-        iree_hal_buffer_view_create(raw_ptr(), shape.s.data(), shape.s.size(),
-                                    element_type, encoding_type, &bv),
-        "Error creating buffer view");
-    return HalBufferView::CreateRetained(bv);
+    CheckApiStatus(iree_hal_buffer_view_create(
+                       raw_ptr(), shape.s.data(), shape.s.size(), element_type,
+                       encoding_type, iree_allocator_system(), &bv),
+                   "Error creating buffer view");
+    return HalBufferView::StealFromRawPtr(bv);
   }
+
+  py::str Repr();
 };
 
 // Wrapper around an iree_hal_buffer_mapping_t and iree_hal_buffer_view_t
@@ -134,11 +156,12 @@ class HalMappedMemory {
   static HalMappedMemory Create(HalBufferView& bv) {
     iree_hal_buffer_t* buffer = iree_hal_buffer_view_buffer(bv.raw_ptr());
     iree_device_size_t byte_length = iree_hal_buffer_byte_length(buffer);
-    iree_hal_buffer_mapping_t mapped_memory;
-    CheckApiStatus(iree_hal_buffer_map_range(
-                       buffer, IREE_HAL_MEMORY_ACCESS_READ,
-                       0 /* element_offset */, byte_length, &mapped_memory),
-                   "Could not map memory");
+    iree_hal_buffer_mapping_t mapped_memory = {{0}};
+    CheckApiStatus(
+        iree_hal_buffer_map_range(buffer, IREE_HAL_MAPPING_MODE_SCOPED,
+                                  IREE_HAL_MEMORY_ACCESS_READ, 0, byte_length,
+                                  &mapped_memory),
+        "Could not map memory");
     return HalMappedMemory(mapped_memory, bv.raw_ptr());
   }
 
@@ -149,7 +172,7 @@ class HalMappedMemory {
         "Error getting buffer view shape");
     iree_hal_element_type_t element_type =
         iree_hal_buffer_view_element_type(bv_);
-    int32_t element_size = iree_hal_element_byte_count(element_type);
+    int32_t element_size = iree_hal_element_dense_byte_count(element_type);
     std::vector<py::ssize_t> dims(shape.size());
     for (int i = 0; i < shape.size(); ++i) {
       dims[i] = shape[i];
@@ -167,9 +190,11 @@ class HalMappedMemory {
                            dims, strides);
   }
 
+  iree_hal_buffer_mapping_t& mapped_memory() { return mapped_memory_; }
+
  private:
-  iree_hal_buffer_mapping_t mapped_memory_;
-  iree_hal_buffer_view_t* bv_;
+  iree_hal_buffer_mapping_t mapped_memory_ = {{0}};
+  iree_hal_buffer_view_t* bv_ = nullptr;
 };
 
 void SetupHalBindings(pybind11::module m);

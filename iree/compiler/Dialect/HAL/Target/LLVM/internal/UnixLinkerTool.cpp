@@ -22,16 +22,40 @@ class UnixLinkerTool : public LinkerTool {
  public:
   using LinkerTool::LinkerTool;
 
-  std::string getToolPath() const override {
+  std::string getSystemToolPath() const override {
     // First check for setting the linker explicitly.
-    auto toolPath = LinkerTool::getToolPath();
+    auto toolPath = LinkerTool::getSystemToolPath();
     if (!toolPath.empty()) return toolPath;
 
     // No explicit linker specified, search the environment for common tools.
-    toolPath = findToolInEnvironment({"ld", "ld.gold", "ld.lld"});
+    // We want LLD:
+    // * On Apple, we want the system linker, which is named `ld`
+    if (targetIsApple()) {
+      // On macOS, the standard system linker is `ld`, and it's
+      // unconditionally what we want to use.
+      toolPath = findToolInEnvironment({"ld"});
+    } else {
+      // On Linux, the only linker basename that's standard is `ld` but it could
+      // be any of ld.bfd, ld.gold, ld.lld, which are inequivalent in the way
+      // explained in the comment below on the -shared flag. We specifically
+      // want ld.lld here, however we still search for `ld` as a fallback name,
+      // in case the linker would be ld.lld but would be installed only under
+      // the name `ld`.
+      //
+      // Having `ld` as a fallback name also makes sense (at least
+      // theoretically) on "generic Unix": `ld` is the standard name of the
+      // system linker, and `-static -shared` should in theory be supported by
+      // the system linker (as suggested by both the FreeBSD and GNU man pages
+      // for ld).
+      //
+      // On the other hand, on Linux where the possible fallbacks are ld.bfd or
+      // ld.gold, we are specifically not interested in falling back on any
+      // of these, at least given current behavior.
+      toolPath = findToolInEnvironment({"ld.lld", "ld"});
+    }
     if (!toolPath.empty()) return toolPath;
 
-    llvm::errs() << "No Unix linker tool specified or discovered\n";
+    llvm::errs() << "No Unix linker tool found in environment.\n";
     return "";
   }
 
@@ -50,11 +74,11 @@ class UnixLinkerTool : public LinkerTool {
     artifacts.libraryFile.close();
 
     SmallVector<std::string, 8> flags = {
-        getToolPath(),
+        getSystemToolPath(),
         "-o " + artifacts.libraryFile.path,
     };
 
-    if (targetTriple.isOSDarwin() || targetTriple.isiOS()) {
+    if (targetIsApple()) {
       // Statically link all dependencies so we don't have any runtime deps.
       // We cannot have any imports in the module we produce.
       flags.push_back("-static");
@@ -62,11 +86,9 @@ class UnixLinkerTool : public LinkerTool {
       // Produce a Mach-O dylib file.
       flags.push_back("-dylib");
       flags.push_back("-flat_namespace");
-
-      // HACK: we insert libm calls. This is *not good*.
-      // Until the MLIR LLVM lowering paths no longer introduce these,
-      // we are stuck with this.
-      flags.push_back("-undefined suppress");
+      flags.push_back(
+          "-L /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib "
+          "-lSystem");
     } else {
       // Avoids including any libc/startup files that initialize the CRT as
       // we don't use any of that. Our shared libraries must be freestanding.
@@ -74,14 +96,23 @@ class UnixLinkerTool : public LinkerTool {
 
       // Statically link all dependencies so we don't have any runtime deps.
       // We cannot have any imports in the module we produce.
-      // flags.push_back("-static");
+      flags.push_back("-static");
 
-      // HACK: we insert mallocs and libm calls. This is *not good*.
-      // We need hermetic binaries that pull in no imports; the MLIR LLVM
-      // lowering paths introduce a bunch, though, so this is what we are
-      // stuck with.
+      // Generate a dynamic library (ELF type: ET_DYN), otherwise dlopen()
+      // won't succeed on it. This is not incompatible with -static. The GNU
+      // man page for ld, `man ld`, says the following:
+      //
+      //   -static
+      //       Do not link against shared libraries. [...] This option can be
+      //       used with -shared. Doing so means that a shared library is
+      //       being created but that all of the library's external references
+      //       must be resolved by pulling in entries from static libraries.
+      //
+      // While that much is said in the GNU ld man page, the reality is that
+      // out of ld.bfd, ld.gold and ld.lld, only ld.lld actually implements
+      // that. Meanwhile, ld.bfd interprets -static -shared as just -static,
+      // and ld.gold rejects -static -shared outright as "incompatible".
       flags.push_back("-shared");
-      flags.push_back("-undefined suppress");
     }
 
     // Strip debug information (only, no relocations) when not requested.
@@ -98,6 +129,11 @@ class UnixLinkerTool : public LinkerTool {
     auto commandLine = llvm::join(flags, " ");
     if (failed(runLinkCommand(commandLine))) return llvm::None;
     return artifacts;
+  }
+
+ private:
+  bool targetIsApple() const {
+    return targetTriple.isOSDarwin() || targetTriple.isiOS();
   }
 };
 

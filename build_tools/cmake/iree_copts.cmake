@@ -125,6 +125,12 @@ iree_select_compiler_opts(IREE_DEFAULT_COPTS
     # but it's better to not get spurious failures during LTCG.
     # https://docs.microsoft.com/en-us/cpp/build/reference/bigobj-increase-number-of-sections-in-dot-obj-file
     "/bigobj"
+
+    # Use the modern C preprocessor to more closely match standards/clang/gcc behavior.
+    "/Zc:preprocessor"
+
+    # Enable C11 standards conforming mode.
+    "$<$<COMPILE_LANGUAGE:C>:/std:c11>"
 )
 
 # Compiler diagnostics.
@@ -298,6 +304,21 @@ else()
   # Android provides its own pthreads support with no linking required.
 endif()
 
+# Emscripten needs -pthread specified in link _and_ compile options when using
+# atomics, shared memory, or pthreads. If we bring our own threading impl and
+# try to omit this, we get this error:
+#   `--shared-memory is disallowed because it was not compiled with 'atomics'
+#    or 'bulk-memory' features`
+# TODO(scotttodd): Figure out how to use atomics and/or shared memory without
+#                  Specifying this flag
+# https://emscripten.org/docs/porting/pthreads.html#compiling-with-pthreads-enabled
+if(EMSCRIPTEN AND ${IREE_ENABLE_THREADING})
+  iree_select_compiler_opts(IREE_DEFAULT_COPTS
+    ALL
+      "-pthread"
+  )
+endif()
+
 if(ANDROID)
   # logging.h on Android needs llog to link in Android logging.
   iree_select_compiler_opts(_IREE_LOGGING_LINKOPTS
@@ -328,25 +349,15 @@ endif()
 # Size-optimized build flags
 #-------------------------------------------------------------------------------
 
-  # TODO(#898): add a dedicated size-constrained configuration.
+# TODO(#898): add a dedicated size-constrained configuration.
 if(${IREE_SIZE_OPTIMIZED})
   iree_select_compiler_opts(IREE_SIZE_OPTIMIZED_DEFAULT_COPTS
-    CLANG_OR_GCC
-      "-DIREE_STATUS_MODE=0"
-      "-DIREE_HAL_MODULE_STRING_UTIL_ENABLE=0"
-      "-DIREE_VM_EXT_I64_ENABLE=0"
-      "-DIREE_VM_EXT_F32_ENABLE=0"
     MSVC_OR_CLANG_CL
       "/GS-"
       "/GL"
       "/Gw"
       "/Gy"
       "/DNDEBUG"
-      "/DIREE_STATUS_MODE=0"
-      "/DIREE_FLAGS_ENABLE_CLI=0"
-      "/DIREE_HAL_MODULE_STRING_UTIL_ENABLE=0"
-      "/DIREE_VM_EXT_I64_ENABLE=0"
-      "/DIREE_VM_EXT_F32_ENABLE=0"
       "/Os"
       "/Oy"
       "/Zi"
@@ -359,12 +370,23 @@ if(${IREE_SIZE_OPTIMIZED})
       "-opt:ref,icf"
   )
   # TODO(#898): make this only impact the runtime (IREE_RUNTIME_DEFAULT_...).
+  # These flags come from iree/base/config.h:
   set(IREE_DEFAULT_COPTS
       "${IREE_DEFAULT_COPTS}"
-      "${IREE_SIZE_OPTIMIZED_DEFAULT_COPTS}")
+      "${IREE_SIZE_OPTIMIZED_DEFAULT_COPTS}"
+      "-DIREE_STATUS_MODE=0"
+      "-DIREE_STATISTICS_ENABLE=0"
+      "-DIREE_HAL_MODULE_STRING_UTIL_ENABLE=0"
+      "-DIREE_HAL_COMMAND_BUFFER_VALIDATION_ENABLE=0"
+      "-DIREE_VM_BACKTRACE_ENABLE=0"
+      "-DIREE_VM_EXT_I64_ENABLE=0"
+      "-DIREE_VM_EXT_F32_ENABLE=0"
+      "-DIREE_VM_EXT_F64_ENABLE=0"
+  )
   set(IREE_DEFAULT_LINKOPTS
       "${IREE_DEFAULT_LINKOPTS}"
-      "${IREE_SIZE_OPTIMIZED_DEFAULT_LINKOPTS}")
+      "${IREE_SIZE_OPTIMIZED_DEFAULT_LINKOPTS}"
+  )
 endif()
 
 #-------------------------------------------------------------------------------
@@ -393,11 +415,4 @@ if(IREE_BUILD_COMPILER)
   # iree-tblgen is not defined using the add_tablegen mechanism as other TableGen
   # tools in LLVM.
   iree_get_executable_path(IREE_TABLEGEN_EXE iree-tblgen)
-endif()
-#-------------------------------------------------------------------------------
-# Third party: mlir-emitc
-#-------------------------------------------------------------------------------
-
-if(IREE_ENABLE_EMITC)
-  add_definitions(-DIREE_HAVE_EMITC_DIALECT)
 endif()

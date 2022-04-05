@@ -23,9 +23,11 @@ cc_library(
         "Utils.h",
     ],
     deps = [
+        "//iree/compiler/Codegen/Interfaces:ProcessorOpInterfaces",
         "//iree/compiler/Dialect/Flow/IR",
+        "//iree/compiler/Dialect/Flow/IR:PartitionableLoopsInterface",
         "//iree/compiler/Dialect/HAL/IR",
-        "//iree/compiler/Dialect/LinalgExt/IR",
+        "//llvm-external-projects/iree-dialects:IREELinalgExtDialect",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:LinalgOps",

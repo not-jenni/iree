@@ -94,6 +94,19 @@ iree_cc_test(
 
 iree_cc_library(
   NAME
+    cpu
+  HDRS
+    "cpu.h"
+  SRCS
+    "cpu.c"
+  DEPS
+    iree::base
+    iree::base::core_headers
+  PUBLIC
+)
+
+iree_cc_library(
+  NAME
     dynamic_library
   HDRS
     "dynamic_library.h"
@@ -193,9 +206,9 @@ iree_lit_test_suite(
     flags_test
   SRCS
     "flags_test.txt"
-  DATA
+  TOOLS
     ::flags_demo
-    iree::tools::IreeFileCheck
+    FileCheck
   LABELS
     "hostonly"
 )
@@ -214,7 +227,7 @@ iree_cc_library(
   PUBLIC
 )
 
-iree_cc_test(
+iree_cc_binary_benchmark(
   NAME
     fpu_state_benchmark
   SRCS
@@ -224,6 +237,7 @@ iree_cc_test(
     benchmark
     iree::base
     iree::testing::benchmark_main
+  TESTONLY
 )
 
 iree_cc_test(
@@ -296,7 +310,7 @@ iree_cc_library(
   PUBLIC
 )
 
-iree_cc_binary(
+iree_cc_binary_benchmark(
   NAME
     synchronization_benchmark
   SRCS
@@ -306,15 +320,6 @@ iree_cc_binary(
     benchmark
     iree::testing::benchmark_main
   TESTONLY
-)
-
-iree_run_binary_test(
-  NAME
-    "synchronization_benchmark_test"
-  ARGS
-    "--benchmark_min_time=0"
-  TEST_BINARY
-    ::synchronization_benchmark
 )
 
 iree_cc_test(
@@ -328,9 +333,61 @@ iree_cc_test(
     iree::testing::gtest_main
 )
 
+iree_cc_library(
+  NAME
+    wait_handle
+  HDRS
+    "wait_handle.h"
+  SRCS
+    "wait_handle.c"
+    "wait_handle_epoll.c"
+    "wait_handle_impl.h"
+    "wait_handle_inproc.c"
+    "wait_handle_kqueue.c"
+    "wait_handle_null.c"
+    "wait_handle_poll.c"
+    "wait_handle_posix.c"
+    "wait_handle_posix.h"
+    "wait_handle_win32.c"
+  DEPS
+    ::synchronization
+    iree::base
+    iree::base::core_headers
+    iree::base::tracing
+  PUBLIC
+)
+
+iree_cc_test(
+  NAME
+    wait_handle_test
+  SRCS
+    "wait_handle_test.cc"
+  DEPS
+    ::wait_handle
+    iree::testing::gtest
+    iree::testing::gtest_main
+)
+
 if(NOT ${IREE_ENABLE_THREADING})
   return()
 endif()
+
+iree_cc_library(
+  NAME
+    event_pool
+  HDRS
+    "event_pool.h"
+  SRCS
+    "event_pool.c"
+  DEPS
+    ::internal
+    ::synchronization
+    ::wait_handle
+    iree::base
+    iree::base::core_headers
+    iree::base::tracing
+  PUBLIC
+)
 
 iree_cc_library(
   NAME
@@ -364,38 +421,6 @@ iree_cc_test(
     ::synchronization
     ::threading
     iree::base::cc
-    iree::testing::gtest
-    iree::testing::gtest_main
-)
-
-iree_cc_library(
-  NAME
-    wait_handle
-  HDRS
-    "wait_handle.h"
-  SRCS
-    "wait_handle.c"
-    "wait_handle_epoll.c"
-    "wait_handle_impl.h"
-    "wait_handle_kqueue.c"
-    "wait_handle_poll.c"
-    "wait_handle_posix.c"
-    "wait_handle_posix.h"
-    "wait_handle_win32.c"
-  DEPS
-    iree::base
-    iree::base::core_headers
-    iree::base::tracing
-  PUBLIC
-)
-
-iree_cc_test(
-  NAME
-    wait_handle_test
-  SRCS
-    "wait_handle_test.cc"
-  DEPS
-    ::wait_handle
     iree::testing::gtest
     iree::testing::gtest_main
 )

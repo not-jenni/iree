@@ -51,7 +51,7 @@ typedef struct iree_task_scope_t {
   IREE_TRACE(uint32_t task_trace_color;)
 
   // A permanent status code set when a task within the scope fails. All pending
-  // tasks will be cancelled, though any in-flight tasks may continue executing
+  // tasks will be aborted, though any in-flight tasks may continue executing
   // to completion.
   iree_atomic_intptr_t permanent_status;
 
@@ -104,6 +104,11 @@ iree_string_view_t iree_task_scope_name(iree_task_scope_t* scope);
 iree_task_dispatch_statistics_t iree_task_scope_consume_statistics(
     iree_task_scope_t* scope);
 
+// Returns true if the scope has failed.
+// iree_task_scope_consume_status can be used once to get the full status
+// describing the failure and subsequent calls will return the status code.
+bool iree_task_scope_has_failed(iree_task_scope_t* scope);
+
 // Returns the permanent scope failure status to the caller (transfering
 // ownership). The scope will remain in a failed state with the status code.
 iree_status_t iree_task_scope_consume_status(iree_task_scope_t* scope);
@@ -116,13 +121,12 @@ iree_status_t iree_task_scope_consume_status(iree_task_scope_t* scope);
 // the previous error status is preserved.
 void iree_task_scope_abort(iree_task_scope_t* scope);
 
-// Marks the scope as having encountered an error while processing |task|.
+// Marks the scope as having encountered an error while processing a task.
 // The scope will be moved into a permanent failure state and all pending tasks
 // will be aborted. In-flight tasks may continue executing prior to
 // iree_task_scope_wait_idle returning true. If the scope has already been
 // marked as failing then the status is ignored.
-void iree_task_scope_fail(iree_task_scope_t* scope, iree_task_t* task,
-                          iree_status_t status);
+void iree_task_scope_fail(iree_task_scope_t* scope, iree_status_t status);
 
 // Notifies the scope that a new execution task assigned to the scope has begun.
 // The scope is considered active until it is notified execution has completed

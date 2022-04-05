@@ -4,13 +4,19 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtDialect.h"
+#include "iree-dialects/Dialect/LinalgTransform/LinalgTransformOps.h"
 #include "iree/compiler/Codegen/Dialect/IREECodegenDialect.h"
 #include "iree/compiler/Codegen/LLVMCPU/KernelDispatch.h"
 #include "iree/compiler/Codegen/PassDetail.h"
 #include "iree/compiler/Codegen/Passes.h"
+#include "iree/compiler/Codegen/Utils/Utils.h"
 #include "iree/compiler/Dialect/HAL/IR/HALDialect.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/PDL/IR/PDL.h"
+#include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -29,16 +35,25 @@ class LLVMCPULowerExecutableTargetPass
     : public LLVMCPULowerExecutableTargetBase<
           LLVMCPULowerExecutableTargetPass> {
  public:
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<IREE::Codegen::IREECodegenDialect, IREE::HAL::HALDialect,
-                    linalg::LinalgDialect, LLVM::LLVMDialect,
-                    vector::VectorDialect>();
-  }
-
-  LLVMCPULowerExecutableTargetPass(bool vectorize = true)
-      : lowerToVectors(vectorize) {}
+  LLVMCPULowerExecutableTargetPass() = default;
   LLVMCPULowerExecutableTargetPass(
       const LLVMCPULowerExecutableTargetPass &pass) {}
+  void getDependentDialects(DialectRegistry &registry) const override {
+    // clang-format off
+    registry.insert<IREE::Codegen::IREECodegenDialect,
+                    IREE::HAL::HALDialect,
+                    IREE::LinalgExt::IREELinalgExtDialect,
+                    bufferization::BufferizationDialect,
+                    linalg::LinalgDialect,
+                    linalg::transform::LinalgTransformDialect,
+                    LLVM::LLVMDialect,
+                    pdl::PDLDialect,
+                    pdl_interp::PDLInterpDialect,
+                    scf::SCFDialect,
+                    tensor::TensorDialect,
+                    vector::VectorDialect>();
+    // clang-format on
+  }
 
   void runOnOperation() override;
 
@@ -67,13 +82,6 @@ class LLVMCPULowerExecutableTargetPass
       llvm::cl::desc(
           "Specifies the workload per workgroup to use in x, y, z order. Is "
           "expected for use only with use-lowering-pipeline option")};
-
-  /// TODO(ravishankarm): Option to not generate any `vector.` instructions. The
-  /// VMVX backend uses the same lowering as the CPU pass but there is no
-  /// lowering of these `vector.` operations to scalar code. So as a WAR do the
-  /// same tiling scheme but avoid generating vector instructions. When VMVX can
-  /// handle vector instructions, drop this options.
-  bool lowerToVectors;
 };
 }  // namespace
 
@@ -92,9 +100,29 @@ static StringRef sanitizePipelineString(StringRef input) {
   return input;
 }
 
+/// Verify that valid configuration is set for all ops within the compiled
+/// module.
+template <typename F>
+static LogicalResult verifyLoweringConfiguration(
+    ModuleOp module, IREE::Codegen::TranslationInfoAttr translationInfo,
+    F verificationFn) {
+  auto walkResult = module.walk([&](Operation *op) -> WalkResult {
+    IREE::Codegen::LoweringConfigAttr loweringConfig = getLoweringConfig(op);
+    if (!loweringConfig) return WalkResult::advance();
+    return verificationFn(op, loweringConfig, translationInfo,
+                          ArrayRef<int64_t>{});
+  });
+  return failure(walkResult.wasInterrupted());
+}
+
 void LLVMCPULowerExecutableTargetPass::runOnOperation() {
   IREE::HAL::ExecutableVariantOp variantOp = getOperation();
   ModuleOp moduleOp = variantOp.getInnerModule();
+  if (!variantOp || !moduleOp) {
+    getOperation()->emitError(
+        "Expected a variantOp root with an inner ModuleOp");
+    return signalPassFailure();
+  }
 
   OpPassManager executableLoweringPipeline(
       IREE::HAL::ExecutableVariantOp::getOperationName());
@@ -118,50 +146,84 @@ void LLVMCPULowerExecutableTargetPass::runOnOperation() {
     }
 
     // There might be multiple entry points in the module. Currently, all of
-    // them need to have the same pipeline.
+    // them need to have the same translation info.
     // TODO(ravishankarm): This is strange that this is not enforced
-    // structurally, but something to address later on. For now this restriction
+    // structurally, but something to address later on. The main issue is how
+    // to invoke separate dynamic pass pipelines on  entry point functions, when
+    // the passes might have module level changes. For now this restriction
     // is fine.
     llvm::StringMap<IREE::HAL::ExecutableEntryPointOp> entryPoints =
         getAllEntryPoints(moduleOp);
-    Optional<IREE::Codegen::DispatchLoweringPassPipeline> passPipeline;
+    Optional<IREE::Codegen::TranslationInfoAttr> translationInfo;
     for (auto &it : entryPoints) {
       auto entryPointOp = it.second;
-      if (IREE::Codegen::TranslationInfoAttr translationInfo =
+      if (IREE::Codegen::TranslationInfoAttr currTranslationInfo =
               getTranslationInfo(entryPointOp)) {
-        IREE::Codegen::DispatchLoweringPassPipeline currPipeline =
-            translationInfo.getDispatchLoweringPassPipeline();
-        if (passPipeline) {
-          if (currPipeline != passPipeline.getValue()) {
-            moduleOp.emitError(
-                "unhandled compilation of entry point function with different "
-                "pass pipelines within a module");
-            return signalPassFailure();
+        if (translationInfo) {
+          if (currTranslationInfo != translationInfo.getValue()) {
+            moduleOp.emitOpError(
+                "unhandled compilation of entry point functions with different "
+                "translation info");
           }
-          continue;
+        } else {
+          translationInfo = currTranslationInfo;
         }
-        passPipeline = currPipeline;
       }
     }
 
-    executableLoweringPipeline.addPass(createSetNumWorkgroupsPass());
-    executableLoweringPipeline.addPass(createCanonicalizerPass());
-    if (!testLoweringConfiguration && passPipeline.hasValue()) {
-      OpPassManager &nestedModulePM =
-          executableLoweringPipeline.nest<ModuleOp>();
-      switch (passPipeline.getValue()) {
-        case IREE::Codegen::DispatchLoweringPassPipeline::CPUDefault:
-        case IREE::Codegen::DispatchLoweringPassPipeline::None:
-          addCPUDefaultPassPipeline(nestedModulePM);
+    // Verify the configuration.
+    if (translationInfo.hasValue()) {
+      LogicalResult verificationStatus = success();
+      switch (translationInfo.getValue().getDispatchLoweringPassPipeline()) {
+        case IREE::Codegen::DispatchLoweringPassPipeline::CPUDoubleTilingExpert:
+          verificationStatus = verifyLoweringConfiguration(
+              moduleOp, translationInfo.getValue(),
+              verifyDoubleTilingExpertPassPipelineConfig);
           break;
-        case IREE::Codegen::DispatchLoweringPassPipeline::CPUVectorization:
-          addCPUVectorizationPassPipeline(nestedModulePM, lowerToVectors);
-          break;
-        case IREE::Codegen::DispatchLoweringPassPipeline::CPUTensorToVectors:
-          addTensorToVectorsPassPipeline(nestedModulePM, lowerToVectors);
-          break;
-        default:
-          llvm_unreachable("Unsupported pipeline on CPU target.");
+        default:;
+      }
+      if (failed(verificationStatus)) {
+        return signalPassFailure();
+      }
+
+      bool lowerToVectors = !isVMVXBackend(variantOp);
+      bool lowerToAVX2 = hasAVX2Features(variantOp);
+      if (!testLoweringConfiguration) {
+        OpPassManager &nestedModulePM =
+            executableLoweringPipeline.nest<ModuleOp>();
+        switch (translationInfo.getValue().getDispatchLoweringPassPipeline()) {
+          case IREE::Codegen::DispatchLoweringPassPipeline::CPUDefault:
+          case IREE::Codegen::DispatchLoweringPassPipeline::None:
+            addCPUDefaultPassPipeline(nestedModulePM);
+            break;
+          case IREE::Codegen::DispatchLoweringPassPipeline::
+              CPUBufferOpsTileAndVectorize:
+            addCPUBufferOpsTileAndVectorizePipeline(nestedModulePM);
+            break;
+          case IREE::Codegen::DispatchLoweringPassPipeline::
+              CPUSingleTilingExpert:
+            addSingleTilingExpertPassPipeline(nestedModulePM);
+            break;
+          case IREE::Codegen::DispatchLoweringPassPipeline::
+              CPUDoubleTilingExpert:
+            addDoubleTilingExpertPassPipeline(nestedModulePM, lowerToAVX2);
+            break;
+          case IREE::Codegen::DispatchLoweringPassPipeline::
+              CPUConvTileAndDecomposeExpert:
+            addConvTileAndDecomposeExpertPassPipeline(nestedModulePM);
+            break;
+          case IREE::Codegen::DispatchLoweringPassPipeline::
+              LinalgTransformInterpCodegen:
+            addLinalgTransformInterpPasses(executableLoweringPipeline);
+            break;
+          case IREE::Codegen::DispatchLoweringPassPipeline::
+              CPUTileFuseAndVectorize:
+            addTileFuseAndVectorizePassPipeline(nestedModulePM, lowerToVectors);
+            break;
+          default:
+            variantOp.emitOpError("Unsupported pipeline on CPU target.");
+            return signalPassFailure();
+        }
       }
     }
   }
@@ -172,8 +234,8 @@ void LLVMCPULowerExecutableTargetPass::runOnOperation() {
 }
 
 std::unique_ptr<OperationPass<IREE::HAL::ExecutableVariantOp>>
-createLLVMCPULowerExecutableTargetPass(bool lowerToVectors) {
-  return std::make_unique<LLVMCPULowerExecutableTargetPass>(lowerToVectors);
+createLLVMCPULowerExecutableTargetPass() {
+  return std::make_unique<LLVMCPULowerExecutableTargetPass>();
 }
 
 }  // namespace iree_compiler

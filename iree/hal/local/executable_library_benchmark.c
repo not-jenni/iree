@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "iree/base/api.h"
+#include "iree/base/internal/file_io.h"
 #include "iree/base/internal/flags.h"
 #include "iree/base/tracing.h"
 #include "iree/hal/api.h"
@@ -147,59 +148,6 @@ static iree_status_t iree_hal_executable_library_create_loader(
       FLAG_executable_format);
 }
 
-// TODO(benvanik): use this to replace file_io.cc.
-static iree_status_t iree_file_read_contents(const char* path,
-                                             iree_allocator_t allocator,
-                                             iree_byte_span_t* out_contents) {
-  IREE_TRACE_ZONE_BEGIN(z0);
-  *out_contents = iree_make_byte_span(NULL, 0);
-  FILE* file = fopen(path, "rb");
-  if (file == NULL) {
-    IREE_TRACE_ZONE_END(z0);
-    return iree_make_status(iree_status_code_from_errno(errno),
-                            "failed to open file '%s'", path);
-  }
-  iree_status_t status = iree_ok_status();
-  if (fseek(file, 0, SEEK_END) == -1) {
-    status = iree_make_status(iree_status_code_from_errno(errno), "seek (end)");
-  }
-  size_t file_size = 0;
-  if (iree_status_is_ok(status)) {
-    file_size = ftell(file);
-    if (file_size == -1L) {
-      status =
-          iree_make_status(iree_status_code_from_errno(errno), "size query");
-    }
-  }
-  if (iree_status_is_ok(status)) {
-    if (fseek(file, 0, SEEK_SET) == -1) {
-      status =
-          iree_make_status(iree_status_code_from_errno(errno), "seek (beg)");
-    }
-  }
-  // Allocate +1 to force a trailing \0 in case this is a string.
-  char* contents = NULL;
-  if (iree_status_is_ok(status)) {
-    status = iree_allocator_malloc(allocator, file_size + 1, (void**)&contents);
-  }
-  if (iree_status_is_ok(status)) {
-    if (fread(contents, file_size, 1, file) != 1) {
-      status =
-          iree_make_status(iree_status_code_from_errno(errno),
-                           "unable to read entire file contents of '%s'", path);
-    }
-  }
-  if (iree_status_is_ok(status)) {
-    contents[file_size] = 0;  // NUL
-    *out_contents = iree_make_byte_span(contents, file_size);
-  } else {
-    iree_allocator_free(allocator, contents);
-  }
-  fclose(file);
-  IREE_TRACE_ZONE_END(z0);
-  return status;
-}
-
 // NOTE: error handling is here just for better diagnostics: it is not tracking
 // allocations correctly and will leak. Don't use this as an example for how to
 // write robust code.
@@ -216,31 +164,32 @@ static iree_status_t iree_hal_executable_library_run(
   // Setup the specification used to perform the executable load.
   // This information is normally used to select the appropriate loader but in
   // this benchmark we only have a single one.
-  iree_hal_executable_spec_t executable_spec;
-  iree_hal_executable_spec_initialize(&executable_spec);
-  executable_spec.caching_mode =
+  iree_hal_executable_params_t executable_params;
+  iree_hal_executable_params_initialize(&executable_params);
+  executable_params.caching_mode =
       IREE_HAL_EXECUTABLE_CACHING_MODE_ALLOW_OPTIMIZATION |
       IREE_HAL_EXECUTABLE_CACHING_MODE_ALIAS_PROVIDED_DATA |
       IREE_HAL_EXECUTABLE_CACHING_MODE_DISABLE_VERIFICATION;
-  executable_spec.executable_format =
+  executable_params.executable_format =
       iree_make_cstring_view(FLAG_executable_format);
 
   // Load the executable data.
-  IREE_RETURN_IF_ERROR(iree_file_read_contents(
-      FLAG_executable_file, host_allocator,
-      (iree_byte_span_t*)&executable_spec.executable_data));
+  iree_file_contents_t* file_contents = NULL;
+  IREE_RETURN_IF_ERROR(iree_file_read_contents(FLAG_executable_file,
+                                               host_allocator, &file_contents));
+  executable_params.executable_data = file_contents->const_buffer;
 
   // Setup the layouts defining how each entry point is interpreted.
   // NOTE: we know for the embedded library loader that this is not required.
   // Other loaders may need it in which case it'll have to be provided.
-  executable_spec.executable_layout_count = 0;
-  executable_spec.executable_layouts = NULL;
+  executable_params.executable_layout_count = 0;
+  executable_params.executable_layouts = NULL;
 
   // Perform the load, which will fail if the executable cannot be loaded or
   // there was an issue with the layouts.
   iree_hal_executable_t* executable = NULL;
   IREE_RETURN_IF_ERROR(iree_hal_executable_loader_try_load(
-      executable_loader, &executable_spec, &executable));
+      executable_loader, &executable_params, &executable));
   iree_hal_local_executable_t* local_executable =
       iree_hal_local_executable_cast(executable);
 
@@ -263,7 +212,8 @@ static iree_status_t iree_hal_executable_library_run(
   // memory accessed by the invocation will come from here.
   iree_hal_allocator_t* heap_allocator = NULL;
   IREE_RETURN_IF_ERROR(iree_hal_allocator_create_heap(
-      iree_make_cstring_view("benchmark"), host_allocator, &heap_allocator));
+      iree_make_cstring_view("benchmark"), host_allocator, host_allocator,
+      &heap_allocator));
   iree_hal_buffer_view_t* buffer_views[IREE_HAL_LOCAL_MAX_TOTAL_BINDING_COUNT];
   void* binding_ptrs[IREE_HAL_LOCAL_MAX_TOTAL_BINDING_COUNT];
   size_t binding_lengths[IREE_HAL_LOCAL_MAX_TOTAL_BINDING_COUNT];
@@ -273,33 +223,28 @@ static iree_status_t iree_hal_executable_library_run(
     iree_hal_buffer_t* buffer = iree_hal_buffer_view_buffer(buffer_views[i]);
     iree_device_size_t buffer_length =
         iree_hal_buffer_view_byte_length(buffer_views[i]);
-    iree_hal_buffer_mapping_t buffer_mapping;
+    iree_hal_buffer_mapping_t buffer_mapping = {{0}};
     IREE_RETURN_IF_ERROR(iree_hal_buffer_map_range(
-        buffer, IREE_HAL_MEMORY_ACCESS_READ | IREE_HAL_MEMORY_ACCESS_WRITE, 0,
+        buffer, IREE_HAL_MAPPING_MODE_PERSISTENT,
+        IREE_HAL_MEMORY_ACCESS_READ | IREE_HAL_MEMORY_ACCESS_WRITE, 0,
         buffer_length, &buffer_mapping));
     binding_ptrs[i] = buffer_mapping.contents.data;
     binding_lengths[i] = (size_t)buffer_mapping.contents.data_length;
   }
 
   // Setup dispatch state.
-  iree_hal_executable_dispatch_state_v0_t dispatch_state = {
-      .workgroup_count = {{
-          .x = FLAG_workgroup_count_x,
-          .y = FLAG_workgroup_count_y,
-          .z = FLAG_workgroup_count_z,
-      }},
-      .workgroup_size = {{
-          .x = FLAG_workgroup_size_x,
-          .y = FLAG_workgroup_size_y,
-          .z = FLAG_workgroup_size_z,
-      }},
+  const iree_hal_executable_dispatch_state_v0_t dispatch_state = {
+      .workgroup_count_x = FLAG_workgroup_count_x,
+      .workgroup_count_y = FLAG_workgroup_count_y,
+      .workgroup_count_z = FLAG_workgroup_count_z,
+      .workgroup_size_x = FLAG_workgroup_size_x,
+      .workgroup_size_y = FLAG_workgroup_size_y,
+      .workgroup_size_z = FLAG_workgroup_size_z,
       .push_constant_count = dispatch_params.push_constant_count,
       .push_constants = &dispatch_params.push_constants[0].ui32,
       .binding_count = dispatch_params.binding_count,
       .binding_ptrs = binding_ptrs,
       .binding_lengths = binding_lengths,
-      .import_thunk = NULL,  // not yet implemented
-      .imports = NULL,       // not yet implemented
   };
 
   // Execute benchmark the workgroup invocation.
@@ -310,7 +255,7 @@ static iree_status_t iree_hal_executable_library_run(
   int64_t dispatch_count = 0;
   while (iree_benchmark_keep_running(benchmark_state, /*batch_count=*/1)) {
     IREE_RETURN_IF_ERROR(iree_hal_local_executable_issue_dispatch_inline(
-        local_executable, FLAG_entry_point, &dispatch_state, local_memory));
+        local_executable, FLAG_entry_point, &dispatch_state, 0, local_memory));
     ++dispatch_count;
   }
 
@@ -318,8 +263,8 @@ static iree_status_t iree_hal_executable_library_run(
   // invocations dispatched. That gives us both total dispatch and single
   // invocation times in the reporter output.
   int64_t total_invocations =
-      dispatch_count * dispatch_state.workgroup_count.x *
-      dispatch_state.workgroup_count.y * dispatch_state.workgroup_count.z;
+      dispatch_count * dispatch_state.workgroup_count_x *
+      dispatch_state.workgroup_count_y * dispatch_state.workgroup_count_z;
   iree_benchmark_set_items_processed(benchmark_state, total_invocations);
 
   // Deallocate buffers.
@@ -329,10 +274,9 @@ static iree_status_t iree_hal_executable_library_run(
   iree_hal_allocator_release(heap_allocator);
 
   // Unload.
-  iree_allocator_free(host_allocator,
-                      (void*)executable_spec.executable_data.data);
   iree_hal_executable_release(executable);
   iree_hal_executable_loader_release(executable_loader);
+  iree_file_contents_free(file_contents);
 
   return iree_ok_status();
 }
@@ -355,7 +299,7 @@ int main(int argc, char** argv) {
       "Example --flagfile:\n"
       "  --executable_format=EX_ELF\n"
       "  --executable_file=iree/hal/local/elf/testdata/"
-      "simple_mul_dispatch_x86_64.so\n"
+      "elementwise_mul_x86_64.so\n"
       "  --entry_point=0\n"
       "  --workgroup_count_x=1\n"
       "  --workgroup_count_y=1\n"

@@ -16,7 +16,6 @@ iree_cc_library(
   HDRS
     "Transforms.h"
   SRCS
-    "AffineMinCanonicalization.cpp"
     "AffineMinDistributedSCFCanonicalization.cpp"
     "RemoveSingleIterationLoop.cpp"
     "Transforms.cpp"
@@ -24,11 +23,11 @@ iree_cc_library(
     LLVMSupport
     MLIRAffine
     MLIRAffineUtils
+    MLIRFunc
     MLIRIR
     MLIRLinalg
     MLIRMemRef
     MLIRPass
-    MLIRStandard
     MLIRSupport
     MLIRTransforms
     MLIRVector

@@ -21,8 +21,9 @@ class ResolveCommandBufferDispatchOrdinals
       IREE::HAL::CommandBufferDispatchSymbolOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(IREE::HAL::CommandBufferDispatchSymbolOp op,
                                 PatternRewriter &rewriter) const override {
-    auto entryPointOp = dyn_cast<IREE::HAL::ExecutableEntryPointOp>(
-        SymbolTable::lookupNearestSymbolFrom(op, op.entry_point()));
+    auto symbol = SymbolTable::lookupNearestSymbolFrom(op, op.entry_point());
+    assert(symbol && "missing ExecutableEntryPoint symbol");
+    auto entryPointOp = cast<IREE::HAL::ExecutableEntryPointOp>(symbol);
 
     // Lookup the device for our command buffer, then the executable from the
     // entry point's nested reference.
@@ -50,8 +51,9 @@ class ResolveCommandBufferDispatchIndirectOrdinals
   LogicalResult matchAndRewrite(
       IREE::HAL::CommandBufferDispatchIndirectSymbolOp op,
       PatternRewriter &rewriter) const override {
-    auto entryPointOp = dyn_cast<IREE::HAL::ExecutableEntryPointOp>(
-        SymbolTable::lookupNearestSymbolFrom(op, op.entry_point()));
+    auto symbol = SymbolTable::lookupNearestSymbolFrom(op, op.entry_point());
+    assert(symbol && "missing ExecutableEntryPoint symbol");
+    auto entryPointOp = cast<IREE::HAL::ExecutableEntryPointOp>(symbol);
 
     // Lookup the device for our command buffer, then the executable from the
     // entry point's nested reference.
@@ -84,10 +86,13 @@ class ResolveEntryPointOrdinalsPass
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
-    OwningRewritePatternList patterns(&getContext());
+    RewritePatternSet patterns(&getContext());
     patterns.insert<ResolveCommandBufferDispatchOrdinals>(context);
     patterns.insert<ResolveCommandBufferDispatchIndirectOrdinals>(context);
-    (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+    if (failed(applyPatternsAndFoldGreedily(getOperation(),
+                                            std::move(patterns)))) {
+      return signalPassFailure();
+    }
   }
 };
 

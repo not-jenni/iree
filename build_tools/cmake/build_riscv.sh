@@ -40,11 +40,12 @@ fi
   -DCMAKE_INSTALL_PREFIX="${BUILD_HOST_DIR?}/install" \
   -DCMAKE_C_COMPILER=clang \
   -DCMAKE_CXX_COMPILER=clang++ \
+  -DIREE_ENABLE_ASSERTIONS=ON \
   -DIREE_BUILD_COMPILER=ON \
   -DIREE_BUILD_TESTS=OFF \
   -DIREE_BUILD_SAMPLES=OFF \
   "${ROOT_DIR?}"
-"${CMAKE_BIN?}" --build "${BUILD_HOST_DIR?}" --target install
+"${CMAKE_BIN?}" --build "${BUILD_HOST_DIR?}" --target install -- -k 0
 # --------------------------------------------------------------------------- #
 
 
@@ -66,6 +67,7 @@ args=(
   -DCMAKE_TOOLCHAIN_FILE="$(realpath ${ROOT_DIR?}/build_tools/cmake/riscv.toolchain.cmake)"
   -DIREE_HOST_BINARY_ROOT="$(realpath ${BUILD_HOST_DIR?}/install)"
   -DRISCV_CPU="${RISCV_CONFIG?}"
+  -DIREE_ENABLE_ASSERTIONS=ON
   -DIREE_BUILD_COMPILER=OFF
   -DIREE_BUILD_SAMPLES=ON
 )
@@ -87,4 +89,4 @@ fi
 
 args_str=$(IFS=' ' ; echo "${args[*]}")
 "${CMAKE_BIN?}" ${args_str} "${ROOT_DIR?}"
-"${CMAKE_BIN?}" --build "${BUILD_RISCV_DIR?}"
+"${CMAKE_BIN?}" --build "${BUILD_RISCV_DIR?}" -- -k 0

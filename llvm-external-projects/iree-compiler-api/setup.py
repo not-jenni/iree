@@ -21,6 +21,7 @@
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -48,7 +49,7 @@ except FileNotFoundError:
   print("version_info.json not found. Using defaults")
   version_info = {}
 
-PACKAGE_SUFFIX = version_info.get("package-suffix") or "-dev"
+PACKAGE_SUFFIX = version_info.get("package-suffix") or ""
 PACKAGE_VERSION = version_info.get("package-version") or "0.1dev1"
 
 
@@ -70,6 +71,8 @@ class CMakeExtension(Extension):
 class CMakeBuildPy(_build_py):
 
   def run(self):
+    version_py_content = generate_version_py()
+    print(f"Generating version.py:\n{version_py_content}", file=sys.stderr)
     subprocess.check_call(["cmake", "--version"])
 
     target_dir = os.path.abspath(self.build_lib)
@@ -88,12 +91,18 @@ class CMakeBuildPy(_build_py):
     cfg = "Release"
     cmake_args = [
         "-GNinja",
+        "--log-level=VERBOSE",
         "-DCMAKE_INSTALL_PREFIX={}".format(cmake_install_dir),
         "-DPython3_EXECUTABLE={}".format(sys.executable),
         "-DPython3_INCLUDE_DIRS={}".format(sysconfig.get_path("include")),
         "-DIREE_VERSION_INFO={}".format(self.distribution.get_version()),
         "-DCMAKE_BUILD_TYPE={}".format(cfg),
     ]
+
+    # Enable CUDA if specified.
+    cuda_target_option = os.getenv("IREE_TARGET_BACKEND_CUDA")
+    if cuda_target_option:
+      cmake_args.append(f"-DIREE_TARGET_BACKEND_CUDA={cuda_target_option}")
 
     build_args = []
     if os.path.exists(cmake_install_dir):
@@ -118,6 +127,12 @@ class CMakeBuildPy(_build_py):
                     symlinks=False)
     print("Target populated.", file=sys.stderr)
 
+    # Write version.py.
+    version_py_file = os.path.join(target_dir, "iree", "compiler", "version.py")
+    os.makedirs(os.path.dirname(version_py_file), exist_ok=True)
+    with open(version_py_file, "wt") as f:
+      f.write(version_py_content)
+
 
 class NoopBuildExtension(_build_ext):
 
@@ -128,6 +143,43 @@ class NoopBuildExtension(_build_ext):
     pass
 
 
+def generate_version_py():
+  return f"""# Auto-generated version info.
+PACKAGE_SUFFIX = "{PACKAGE_SUFFIX}"
+VERSION = "{PACKAGE_VERSION}"
+REVISIONS = {json.dumps(find_git_versions())}
+"""
+
+
+def find_git_versions():
+  revisions = {}
+  try:
+    revisions["IREE"] = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=IREESRC_DIR).decode("utf-8").strip()
+  except subprocess.SubprocessError as e:
+    print(f"ERROR: Could not get IREE revision: {e}", file=sys.stderr)
+  revisions["LLVM_PROJECT"] = find_git_submodule_revision(
+      "third_party/llvm-project")
+  revisions["TENSORFLOW"] = find_git_submodule_revision(
+      "third_party/tensorflow")
+  revisions["MLIR_HLO"] = find_git_submodule_revision("third_party/mlir-hlo")
+  return revisions
+
+
+def find_git_submodule_revision(submodule_path):
+  try:
+    data = subprocess.check_output(["git", "ls-tree", "HEAD", submodule_path],
+                                   cwd=IREESRC_DIR).decode("utf-8").strip()
+    columns = re.split("\\s+", data)
+    return columns[2]
+  except Exception as e:
+    print(
+        f"ERROR: Could not get submodule revision for {submodule_path}"
+        f" ({e})",
+        file=sys.stderr)
+    return ""
+
+
 setup(
     name=f"iree-compiler{PACKAGE_SUFFIX}",
     version=f"{PACKAGE_VERSION}",
@@ -135,9 +187,16 @@ setup(
     author_email="iree-discuss@googlegroups.com",
     description="IREE Compiler API",
     long_description="",
+    license="Apache-2.0",
+    classifiers=[
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+    ],
     ext_modules=[
         CMakeExtension("iree.compiler._mlir_libs._mlir"),
         CMakeExtension("iree.compiler._mlir_libs._ireeDialects"),
+        CMakeExtension("iree.compiler._mlir_libs._ireecTransforms"),
         CMakeExtension("iree.compiler._mlir_libs._mlirHlo"),
         CMakeExtension("iree.compiler._mlir_libs._mlirLinalgPasses"),
     ],
@@ -153,9 +212,10 @@ setup(
     ],),
     entry_points={
         "console_scripts": [
+            "iree-compile = iree.compiler.tools.scripts.ireec.__main__:main",
+            # TODO: We have renamed to iree-compile on 2022-03-18. Remove
+            # this alias once no longer needed.
             "ireec = iree.compiler.tools.scripts.ireec.__main__:main",
-            # Transitional note: iree-translate resolves to ireec.
-            "iree-translate = iree.compiler.tools.scripts.ireec.__main__:main",
         ],
     },
     install_requires=[

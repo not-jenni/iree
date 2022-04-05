@@ -9,7 +9,7 @@
 #include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "llvm/ADT/BitVector.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
@@ -166,11 +166,11 @@ struct FoldBlockArgumentsPattern
 // all incoming edges and elides the arguments.
 //
 // Example:
-//  func @foo(%arg0: index) {
+//  func.func @foo(%arg0: index) {
 //    br ^bb1(%arg0 : index)
 //  ^bb1(%0: index):
 // ->
-//  func @foo(%arg0: index) {
+//  func.func @foo(%arg0: index) {
 //    br ^bb1
 //  ^bb1:  // %0 remapped to %arg0
 struct ElideBranchOperandsPattern
@@ -293,8 +293,7 @@ struct ElideBranchOperandsPattern
 
 }  // namespace
 
-void populateCommonPatterns(MLIRContext *context,
-                            OwningRewritePatternList &patterns) {
+void populateCommonPatterns(MLIRContext *context, RewritePatternSet &patterns) {
   context->getOrLoadDialect<IREE::Util::UtilDialect>()
       ->getCanonicalizationPatterns(patterns);
 

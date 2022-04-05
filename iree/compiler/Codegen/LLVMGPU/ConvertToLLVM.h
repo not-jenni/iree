@@ -13,13 +13,18 @@ namespace mlir {
 namespace iree_compiler {
 
 void populateLLVMConversionPatterns(MLIRContext *context,
-                                    OwningRewritePatternList &patterns,
-                                    LLVMTypeConverter &converter, bool useROCM);
+                                    RewritePatternSet &patterns,
+                                    LLVMTypeConverter &converter);
 
 void populateScalarizeMathOps(RewritePatternSet &patterns);
 
+/// Lower hal.interface ops to the equivalent gpu ops.
+void populateLowerHALInterfaceOp(RewritePatternSet &patterns);
+
 /// Add patterns to convert AllocOp of shared memory to a global variable.
 void populateConvertSharedMemoryAllocOps(RewritePatternSet &patterns);
+
+void ConvertToDynamicSharedMemory(ModuleOp moduleOp);
 
 }  // namespace iree_compiler
 }  // namespace mlir

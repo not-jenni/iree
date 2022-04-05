@@ -7,10 +7,11 @@
 #include "iree/base/api.h"
 #include "iree/base/target_platform.h"
 #include "iree/hal/local/elf/elf_module.h"
+#include "iree/hal/local/executable_environment.h"
 #include "iree/hal/local/executable_library.h"
 
 // ELF modules for various platforms embedded in the binary:
-#include "iree/hal/local/elf/testdata/simple_mul_dispatch.h"
+#include "iree/hal/local/elf/testdata/elementwise_mul.h"
 
 static iree_status_t query_arch_test_file_data(
     iree_const_byte_span_t* out_file_data) {
@@ -34,8 +35,8 @@ static iree_status_t query_arch_test_file_data(
 #endif  // IREE_ARCH_*
 
   if (!iree_string_view_is_empty(pattern)) {
-    for (size_t i = 0; i < simple_mul_dispatch_size(); ++i) {
-      const struct iree_file_toc_t* file_toc = &simple_mul_dispatch_create()[i];
+    for (size_t i = 0; i < elementwise_mul_size(); ++i) {
+      const struct iree_file_toc_t* file_toc = &elementwise_mul_create()[i];
       if (iree_string_view_match_pattern(iree_make_cstring_view(file_toc->name),
                                          pattern)) {
         *out_file_data =
@@ -60,6 +61,10 @@ static iree_status_t run_test() {
   IREE_RETURN_IF_ERROR(iree_elf_module_initialize_from_memory(
       file_data, &import_table, iree_allocator_system(), &module));
 
+  iree_hal_executable_environment_v0_t environment;
+  iree_hal_executable_environment_initialize(iree_allocator_system(),
+                                             &environment);
+
   void* query_fn_ptr = NULL;
   IREE_RETURN_IF_ERROR(iree_elf_module_lookup_export(
       &module, IREE_HAL_EXECUTABLE_LIBRARY_EXPORT_NAME, &query_fn_ptr));
@@ -70,20 +75,19 @@ static iree_status_t run_test() {
   } library;
   library.header =
       (const iree_hal_executable_library_header_t**)iree_elf_call_p_ip(
-          query_fn_ptr, IREE_HAL_EXECUTABLE_LIBRARY_LATEST_VERSION,
-          /*reserved=*/NULL);
+          query_fn_ptr, IREE_HAL_EXECUTABLE_LIBRARY_VERSION_LATEST,
+          &environment);
   if (library.header == NULL) {
     return iree_make_status(IREE_STATUS_NOT_FOUND, "library header is empty");
   }
 
   const iree_hal_executable_library_header_t* header = *library.header;
-  if (header->version != IREE_HAL_EXECUTABLE_LIBRARY_VERSION_0) {
+  if (header->version != IREE_HAL_EXECUTABLE_LIBRARY_VERSION_LATEST) {
     return iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
                             "library version error");
   }
 
-  if (strncmp(header->name, "simple_mul_dispatch_0", strlen(header->name)) !=
-      0) {
+  if (strncmp(header->name, "ex", strlen(header->name)) != 0) {
     return iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
                             "library name mismatches");
   }
@@ -109,20 +113,26 @@ static iree_status_t run_test() {
       arg1,
       ret0,
   };
-  iree_hal_vec3_t workgroup_count = {{1, 1, 1}};
-  iree_hal_vec3_t workgroup_size = {{1, 1, 1}};
-  iree_hal_executable_dispatch_state_v0_t dispatch_state;
-  memset(&dispatch_state, 0, sizeof(dispatch_state));
-  dispatch_state.workgroup_count = workgroup_count;
-  dispatch_state.workgroup_size = workgroup_size;
-  dispatch_state.binding_count = 1;
-  dispatch_state.binding_lengths = binding_lengths;
-  dispatch_state.binding_ptrs = binding_ptrs;
-  iree_hal_vec3_t workgroup_id = {{0, 0, 0}};
-  void* local_memory = NULL;
+  const iree_hal_executable_dispatch_state_v0_t dispatch_state = {
+      .workgroup_size_x = 1,
+      .workgroup_size_y = 1,
+      .workgroup_size_z = 1,
+      .workgroup_count_x = 1,
+      .workgroup_count_y = 1,
+      .workgroup_count_z = 1,
+      .binding_count = 1,
+      .binding_lengths = binding_lengths,
+      .binding_ptrs = binding_ptrs,
+  };
+  const iree_hal_executable_workgroup_state_v0_t workgroup_state = {
+      .workgroup_id_x = 0,
+      .workgroup_id_y = 0,
+      .workgroup_id_z = 0,
+      .processor_id = iree_cpu_query_processor_id(),
+  };
   int ret = iree_elf_call_i_ppp((const void*)library.v0->exports.ptrs[0],
-                                (void*)&dispatch_state, (void*)&workgroup_id,
-                                local_memory);
+                                (void*)&environment, (void*)&dispatch_state,
+                                (void*)&workgroup_state);
   if (ret != 0) {
     return iree_make_status(IREE_STATUS_INTERNAL,
                             "dispatch function returned failure: %d", ret);

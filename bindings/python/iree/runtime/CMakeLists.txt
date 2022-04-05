@@ -24,19 +24,27 @@ iree_pyext_module(
     PyExtRt
   MODULE_NAME binding
   SRCS
-    "initialize_module.cc"
     "binding.h"
+    "initialize_module.cc"
+    "invoke.h"
+    "invoke.cc"
     "hal.h"
-    "vm.h"
     "hal.cc"
     "status_utils.cc"
     "status_utils.h"
+    "vm.h"
     "vm.cc"
   UNIX_LINKER_SCRIPT
     "unix_version.lds"
+  DEFINES
+    # Pybind code seems to be incompatible with C++ allocation tracing
+    # hooks so disable it.
+    IREE_TRACING_HOOK_CPP_NEW_DELETE=0
   DEPS
     iree::base
     iree::base::cc
+    iree::base::internal::flags
+    iree::base::tracing
     iree::hal
     iree::hal::drivers
     iree::modules::hal
@@ -49,6 +57,8 @@ iree_py_library(
     runtime
   SRCS
     "__init__.py"
+    "array_interop.py"
+    "flags.py"
     "function.py"
     "system_api.py"
     "tracing.py"
@@ -89,6 +99,20 @@ endif()
 ################################################################################
 # Tests
 ################################################################################
+
+iree_py_test(
+  NAME
+    array_interop_test
+  SRCS
+    "array_interop_test.py"
+)
+
+iree_py_test(
+  NAME
+    flags_test
+  SRCS
+    "flags_test.py"
+)
 
 iree_py_test(
   NAME

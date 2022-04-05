@@ -87,7 +87,7 @@ class GenericTypeConvert : public ConversionPattern {
           newRegion->getArgumentTypes(), result);
       rewriter.applySignatureConversion(newRegion, result);
     }
-    Operation *newOp = rewriter.createOperation(state);
+    Operation *newOp = rewriter.create(state);
     rewriter.replaceOp(op, newOp->getResults());
     return success();
   }
@@ -97,7 +97,7 @@ class GenericTypeConvert : public ConversionPattern {
                                 ConversionPatternRewriter &rewriter,
                                 SmallVectorImpl<NamedAttribute> &newAttrs) {
     for (auto attr : attrs) {
-      if (auto fpAttr = attr.second.dyn_cast<DenseFPElementsAttr>()) {
+      if (auto fpAttr = attr.getValue().dyn_cast<DenseFPElementsAttr>()) {
         std::vector<llvm::APFloat> args;
         if (!fpAttr.getType().getElementType().isF32()) continue;
         for (llvm::APFloat f : fpAttr.getValues<APFloat>()) {
@@ -107,16 +107,15 @@ class GenericTypeConvert : public ConversionPattern {
         }
         auto tensorType = RankedTensorType::get(fpAttr.getType().getShape(),
                                                 rewriter.getF16Type());
-        newAttrs.push_back(std::make_pair(
-            attr.first, DenseElementsAttr::get(tensorType, args)));
-      } else if (auto typeAttr = attr.second.dyn_cast<TypeAttr>()) {
+        newAttrs.emplace_back(attr.getName(),
+                              DenseElementsAttr::get(tensorType, args));
+      } else if (auto typeAttr = attr.getValue().dyn_cast<TypeAttr>()) {
         if (isIllegalType(typeAttr.getValue())) {
           if (auto tensorType =
                   typeAttr.getValue().dyn_cast<RankedTensorType>()) {
             Type newType = RankedTensorType::get(tensorType.getShape(),
                                                  rewriter.getF16Type());
-            newAttrs.push_back(
-                std::make_pair(attr.first, TypeAttr::get(newType)));
+            newAttrs.emplace_back(attr.getName(), TypeAttr::get(newType));
           }
         }
       } else {
@@ -132,20 +131,21 @@ struct DemoteF32ToF16Pass : public DemoteF32ToF16Base<DemoteF32ToF16Pass> {
     ModuleOp moduleOp = getOperation();
 
     FloatTypeConverter converter;
-    OwningRewritePatternList patterns(&getContext());
+    RewritePatternSet patterns(&getContext());
     patterns.insert<GenericTypeConvert>(context, converter);
-    populateFuncOpTypeConversionPattern(patterns, converter);
+    populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns,
+                                                                   converter);
     ConversionTarget target(*context);
     // Operations are legal if they don't contain any illegal type.
     target.markUnknownOpDynamicallyLegal([](Operation *op) {
       if (auto globalOp = dyn_cast<IREE::Util::GlobalOp>(op)) {
         return !isIllegalType(globalOp.type());
       }
-      if (auto funcOp = dyn_cast<FuncOp>(op)) {
-        for (Type type : funcOp.getType().getInputs()) {
+      if (auto funcOp = dyn_cast<func::FuncOp>(op)) {
+        for (Type type : funcOp.getFunctionType().getInputs()) {
           if (isIllegalType(type)) return false;
         }
-        for (Type type : funcOp.getType().getResults()) {
+        for (Type type : funcOp.getFunctionType().getResults()) {
           if (isIllegalType(type)) return false;
         }
       }

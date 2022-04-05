@@ -83,7 +83,11 @@ class VmVariantList {
 
   iree_vm_list_t* raw_ptr() { return list_; }
   const iree_vm_list_t* raw_ptr() const { return list_; }
-
+  iree_vm_list_t* steal_raw_ptr() {
+    iree_vm_list_t* stolen = list_;
+    list_ = nullptr;
+    return stolen;
+  }
   void AppendNullRef() {
     iree_vm_ref_t null_ref = {0};
     CheckApiStatus(iree_vm_list_push_ref_move(raw_ptr(), &null_ref),
@@ -94,10 +98,9 @@ class VmVariantList {
   void PushFloat(double fvalue);
   void PushInt(int64_t ivalue);
   void PushList(VmVariantList& other);
-  void PushBufferView(HalDevice& device, py::object py_buffer_object,
-                      iree_hal_element_type_t element_type);
+  void PushBufferView(HalBufferView& buffer_view);
   py::object GetAsList(int index);
-  py::object GetAsNdarray(int index);
+  py::object GetAsBufferView(int index);
   py::object GetVariant(int index);
   py::object GetAsSerializedTraceValue(int index);
 

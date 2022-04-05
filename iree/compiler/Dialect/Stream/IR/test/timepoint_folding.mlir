@@ -1,7 +1,30 @@
-// RUN: iree-opt -split-input-file -canonicalize %s | IreeFileCheck %s
+// RUN: iree-opt -split-input-file -canonicalize %s | FileCheck %s
+
+// CHECK-LABEL: @FoldTimepointExport
+func.func @FoldTimepointExport(%arg0: !hal.semaphore, %arg1: index) -> (!hal.semaphore, index) {
+  // CHECK-NOT: stream.timepoint.import
+  %0 = stream.timepoint.import %arg0, %arg1 : (!hal.semaphore, index) => !stream.timepoint
+  // CHECK-NOT: stream.timepoint.export
+  %1:2 = stream.timepoint.export %0 => (!hal.semaphore, index)
+  // CHECK: return %arg0, %arg1
+  return %1#0, %1#1 : !hal.semaphore, index
+}
+
+// -----
+
+// CHECK-LABEL: @DontFoldTimepointExportMismatch
+func.func @DontFoldTimepointExportMismatch(%arg0: !hal.semaphore, %arg1: index) -> (!hal.semaphore, i32) {
+  // CHECK: stream.timepoint.import
+  %0 = stream.timepoint.import %arg0, %arg1 : (!hal.semaphore, index) => !stream.timepoint
+  // CHECK-NEXT: stream.timepoint.export
+  %1:2 = stream.timepoint.export %0 => (!hal.semaphore, i32)
+  return %1#0, %1#1 : !hal.semaphore, i32
+}
+
+// -----
 
 // CHECK-LABEL: @FoldTimepointJoinOp
-func @FoldTimepointJoinOp(%arg0: !stream.timepoint) -> !stream.timepoint {
+func.func @FoldTimepointJoinOp(%arg0: !stream.timepoint) -> !stream.timepoint {
   // CHECK-NOT: stream.timepoint.join
   %0 = stream.timepoint.join max(%arg0) => !stream.timepoint
   // CHECK: return %arg0
@@ -11,7 +34,7 @@ func @FoldTimepointJoinOp(%arg0: !stream.timepoint) -> !stream.timepoint {
 // -----
 
 // CHECK-LABEL: @ElideImmediateTimepointJoinOperands
-func @ElideImmediateTimepointJoinOperands(%arg0: !stream.timepoint, %arg1: !stream.timepoint) -> !stream.timepoint {
+func.func @ElideImmediateTimepointJoinOperands(%arg0: !stream.timepoint, %arg1: !stream.timepoint) -> !stream.timepoint {
   %0 = stream.timepoint.immediate => !stream.timepoint
   %1 = stream.timepoint.immediate => !stream.timepoint
   // CHECK: = stream.timepoint.join max(%arg0, %arg1)
@@ -22,7 +45,7 @@ func @ElideImmediateTimepointJoinOperands(%arg0: !stream.timepoint, %arg1: !stre
 // -----
 
 // CHECK-LABEL: @ElideImmediateTimepointJoinOperandsAll
-func @ElideImmediateTimepointJoinOperandsAll() -> !stream.timepoint {
+func.func @ElideImmediateTimepointJoinOperandsAll() -> !stream.timepoint {
   %0 = stream.timepoint.immediate => !stream.timepoint
   %1 = stream.timepoint.immediate => !stream.timepoint
   // CHECK-NOT: stream.timepoint.join
@@ -35,7 +58,7 @@ func @ElideImmediateTimepointJoinOperandsAll() -> !stream.timepoint {
 // -----
 
 // CHECK-LABEL: @FoldDuplicateTimepointJoinOperands
-func @FoldDuplicateTimepointJoinOperands(%arg0: !stream.timepoint, %arg1: !stream.timepoint) -> !stream.timepoint {
+func.func @FoldDuplicateTimepointJoinOperands(%arg0: !stream.timepoint, %arg1: !stream.timepoint) -> !stream.timepoint {
   // CHECK: = stream.timepoint.join max(%arg0, %arg1)
   %0 = stream.timepoint.join max(%arg0, %arg1, %arg0, %arg1) => !stream.timepoint
   return %0 : !stream.timepoint
@@ -43,8 +66,19 @@ func @FoldDuplicateTimepointJoinOperands(%arg0: !stream.timepoint, %arg1: !strea
 
 // -----
 
+// CHECK-LABEL: @ExpandTimepointJoinOperands
+func.func @ExpandTimepointJoinOperands(%arg0: !stream.timepoint, %arg1: !stream.timepoint, %arg2: !stream.timepoint, %arg3: !stream.timepoint) -> !stream.timepoint {
+  %join0 = stream.timepoint.join max(%arg0, %arg1) => !stream.timepoint
+  // CHECK: %[[JOIN:.+]] = stream.timepoint.join max(%arg2, %arg0, %arg1, %arg3)
+  %join1 = stream.timepoint.join max(%arg2, %join0, %arg3) => !stream.timepoint
+  // CHECK: return %[[JOIN]]
+  return %join1 : !stream.timepoint
+}
+
+// -----
+
 // CHECK-LABEL: @ElideImmediateAwaits
-func @ElideImmediateAwaits(%arg0: !stream.resource<staging>) -> !stream.resource<staging> {
+func.func @ElideImmediateAwaits(%arg0: !stream.resource<staging>) -> !stream.resource<staging> {
   %c100 = arith.constant 100 : index
   // CHECK-NOT: stream.timepoint.immediate
   %0 = stream.timepoint.immediate => !stream.timepoint
@@ -60,7 +94,7 @@ func @ElideImmediateAwaits(%arg0: !stream.resource<staging>) -> !stream.resource
 // use the awaited resources.
 
 // CHECK-LABEL: @SinkAwaitToFirstConsumer
-func @SinkAwaitToFirstConsumer(
+func.func @SinkAwaitToFirstConsumer(
   %arg0: i1, %arg1: i1,
   %arg2: !stream.resource<constant>,
   %arg3: !stream.resource<staging>,
@@ -71,23 +105,23 @@ func @SinkAwaitToFirstConsumer(
   %c200 = arith.constant 200 : index
   // CHECK-NOT: stream.timepoint.await
   %0:2 = stream.timepoint.await %arg5 => %arg2, %arg3 : !stream.resource<constant>{%c100}, !stream.resource<staging>{%c200}
-  // CHECK: cond_br %arg0, ^bb1, ^bb4
-  cond_br %arg0, ^bb1, ^bb4(%arg4 : !stream.resource<external>)
+  // CHECK: cf.cond_br %arg0, ^bb1, ^bb4
+  cf.cond_br %arg0, ^bb1, ^bb4(%arg4 : !stream.resource<external>)
 // CHECK: ^bb1:
 ^bb1:
   // CHECK: %[[READY:.+]]:2 = stream.timepoint.await %arg5 => %arg2, %arg3 : !stream.resource<constant>{%c100}, !stream.resource<staging>{%c200}
-  // CHECK-NEXT: cond_br %arg1, ^bb2, ^bb3
-  cond_br %arg1, ^bb2, ^bb3
+  // CHECK-NEXT: cf.cond_br %arg1, ^bb2, ^bb3
+  cf.cond_br %arg1, ^bb2, ^bb3
 // CHECK: ^bb2:
 ^bb2:
   // CHECK: = stream.async.transfer %[[READY]]#0
   %1 = stream.async.transfer %0#0 : !stream.resource<constant>{%c100} -> !stream.resource<external>{%c100}
-  br ^bb4(%1 : !stream.resource<external>)
+  cf.br ^bb4(%1 : !stream.resource<external>)
 // CHECK: ^bb3:
 ^bb3:
   // CHECK: = stream.async.transfer %[[READY]]#1
   %2 = stream.async.transfer %0#1 : !stream.resource<staging>{%c200} -> !stream.resource<external>{%c200}
-  br ^bb4(%2 : !stream.resource<external>)
+  cf.br ^bb4(%2 : !stream.resource<external>)
 // CHECK: ^bb4(
 ^bb4(%arg6: !stream.resource<external>):
   return %arg6 : !stream.resource<external>
@@ -96,7 +130,7 @@ func @SinkAwaitToFirstConsumer(
 // -----
 
 // CHECK-LABEL: @SinkSubviewsAcrossAwaits
-func @SinkSubviewsAcrossAwaits(
+func.func @SinkSubviewsAcrossAwaits(
   %arg0: !stream.resource<*>, %arg1: index,
   %arg2: !stream.timepoint
 ) -> !stream.resource<*> {
@@ -113,7 +147,7 @@ func @SinkSubviewsAcrossAwaits(
 // -----
 
 // CHECK-LABEL: @GroupAwaitsByTimepoint
-func @GroupAwaitsByTimepoint(
+func.func @GroupAwaitsByTimepoint(
   %arg0: !stream.timepoint,
   %arg1: !stream.resource<*>,
   %arg2: !stream.resource<*>,
@@ -136,7 +170,7 @@ func @GroupAwaitsByTimepoint(
 // -----
 
 // CHECK-LABEL: @FoldDuplicateAwaitResources
-func @FoldDuplicateAwaitResources(
+func.func @FoldDuplicateAwaitResources(
   %arg0: !stream.timepoint,
   %arg1: !stream.resource<staging>, %arg2: !stream.resource<*>
 ) -> (!stream.resource<staging>, !stream.resource<*>, !stream.resource<staging>, !stream.resource<staging>) {
@@ -151,7 +185,7 @@ func @FoldDuplicateAwaitResources(
 // -----
 
 // CHECK-LABEL: @ElideUnusedTimepointAwaitOp
-func @ElideUnusedTimepointAwaitOp(
+func.func @ElideUnusedTimepointAwaitOp(
   %arg0: !stream.timepoint,
   %arg1: !stream.resource<staging>, %arg2: !stream.resource<*>
 ) {

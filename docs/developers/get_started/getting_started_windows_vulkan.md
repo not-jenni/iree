@@ -63,11 +63,8 @@ Run the
 ```powershell
 # -- CMake --
 > set VK_LOADER_DEBUG=all
-> cmake --build ..\iree-build\ --target iree_hal_cts_driver_test
-> ..\iree-build\iree\hal\cts\iree_hal_cts_driver_test.exe
-
-# -- Bazel --
-> bazel test iree/hal/cts:driver_test --test_env=VK_LOADER_DEBUG=all --test_output=all
+> cmake --build ..\iree-build\ --target iree_hal_vulkan_cts_vulkan_driver_test
+> ctest -R iree/hal/vulkan/cts/vulkan_driver_test
 ```
 
 If these tests pass, you can skip down to the next section.
@@ -110,15 +107,15 @@ test --test_env="VK_ICD_FILENAMES={PATH_TO_IREE}\\build-swiftshader\\Windows\\vk
 
 ### Compiling for the Vulkan HAL
 
-Pass the flag `-iree-hal-target-backends=vulkan-spirv` to `iree-translate.exe`:
+Pass the flag `-iree-hal-target-backends=vulkan-spirv` to `iree-compile.exe`:
 
 ```powershell
 # -- CMake --
-> cmake --build ..\iree-build\ --target iree_tools_iree-translate
-> ..\iree-build\iree\tools\iree-translate.exe -iree-mlir-to-vm-bytecode-module -iree-hal-target-backends=vulkan-spirv .\iree\tools\test\iree-run-module.mlir -o .\build\module.vmfb
+> cmake --build ..\iree-build\ --target iree_tools_iree-compile
+> ..\iree-build\iree\tools\iree-compile.exe -iree-mlir-to-vm-bytecode-module -iree-hal-target-backends=vulkan-spirv .\iree\tools\test\iree-run-module.mlir -o .\build\module.vmfb
 
 # -- Bazel --
-> bazel run iree/tools:iree-translate -- -iree-mlir-to-vm-bytecode-module -iree-hal-target-backends=vulkan-spirv .\iree\tools\test\iree-run-module.mlir -o .\build\module.vmfb
+> bazel run iree/tools:iree-compile -- -iree-mlir-to-vm-bytecode-module -iree-hal-target-backends=vulkan-spirv .\iree\tools\test\iree-run-module.mlir -o .\build\module.vmfb
 ```
 
 > Tip:<br>

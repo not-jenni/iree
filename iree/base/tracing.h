@@ -466,12 +466,6 @@ enum {
 #define IREE_TRACE_FREE_NAMED(name, ptr)
 #endif  // IREE_TRACING_FEATURE_ALLOCATION_TRACKING
 
-#if defined(__cplusplus) && \
-    (IREE_TRACING_FEATURES & IREE_TRACING_FEATURE_ALLOCATION_TRACKING)
-void* operator new(size_t count) noexcept;
-void operator delete(void* ptr) noexcept;
-#endif  // __cplusplus && IREE_TRACING_FEATURE_ALLOCATION_TRACKING
-
 //===----------------------------------------------------------------------===//
 // Instrumentation C++ RAII types, wrappers, and macros
 //===----------------------------------------------------------------------===//

@@ -24,17 +24,29 @@ iree_cc_library(
     "KernelConfig.cpp"
     "LLVMGPUDistributeSharedMemoryCopy.cpp"
     "LLVMGPULowerExecutableTarget.cpp"
+    "LLVMGPUMultiBuffering.cpp"
     "LLVMGPUPipelining.cpp"
-    "LLVMGPURemoveTrivialLoops.cpp"
+    "LLVMGPUReduceBankConflicts.cpp"
+    "LLVMGPUTensorCoreVectorization.cpp"
     "LLVMGPUTileAndDistribute.cpp"
+    "LLVMGPUUtils.cpp"
     "LLVMGPUVectorLowering.cpp"
+    "LLVMGPUVectorToGPU.cpp"
     "LLVMGPUVectorization.cpp"
     "Passes.cpp"
+    "Verifiers.cpp"
   DEPS
+    IREELinalgExtDialect
+    IREELinalgExtPasses
     LLVMSupport
     MLIRAffine
     MLIRAffineToStandard
     MLIRArithmeticToLLVM
+    MLIRArithmeticTransforms
+    MLIRControlFlowToLLVM
+    MLIRFunc
+    MLIRFuncToLLVM
+    MLIRFuncTransforms
     MLIRGPUOps
     MLIRGPUToNVVMTransforms
     MLIRGPUToROCDLTransforms
@@ -45,21 +57,22 @@ iree_cc_library(
     MLIRLinalgTransforms
     MLIRMath
     MLIRMathToLLVM
+    MLIRMemRef
     MLIRMemRefToLLVM
     MLIRMemRefTransforms
     MLIRNVVMIR
     MLIRPass
     MLIRROCDLIR
     MLIRSCF
-    MLIRSCFToStandard
-    MLIRStandard
-    MLIRStandardOpsTransforms
-    MLIRStandardToLLVM
+    MLIRSCFToControlFlow
+    MLIRSCFTransforms
     MLIRSupport
     MLIRTransforms
     MLIRVector
+    MLIRVectorToGPU
     MLIRVectorToLLVM
     MLIRVectorToSCF
+    MLIRVectorTransforms
     iree::compiler::Codegen::Common
     iree::compiler::Codegen::Dialect::IREECodegenDialect
     iree::compiler::Codegen::PassHeaders
@@ -67,11 +80,7 @@ iree_cc_library(
     iree::compiler::Codegen::Utils
     iree::compiler::Dialect::Flow::IR
     iree::compiler::Dialect::HAL::IR
-    iree::compiler::Dialect::LinalgExt::IR
-    iree::compiler::Dialect::LinalgExt::Transforms
-    iree::compiler::Dialect::Shape::Transforms
     iree::compiler::Dialect::Util::IR
-    tensorflow::mlir_hlo
   PUBLIC
 )
 

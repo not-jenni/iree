@@ -10,8 +10,7 @@
 #ifndef IREE_BASE_INTERNAL_WAIT_HANDLE_POSIX_H_
 #define IREE_BASE_INTERNAL_WAIT_HANDLE_POSIX_H_
 
-// NOTE: we could be tighter here, but we today only have win32 or not-win32.
-#if !defined(IREE_PLATFORM_WINDOWS)
+#if defined(IREE_WAIT_API_POSIX_LIKE)
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,7 +33,7 @@ extern "C" {
 
 // Creates a wait primitive of the type native to the current platform.
 // May fail if resources are exhausted or wait handles are not supported.
-// The handle must be closed with iree_wait_primitive_close to release its
+// The handle must be closed with iree_wait_handle_close to release its
 // resources.
 iree_status_t iree_wait_primitive_create_native(bool initial_state,
                                                 iree_wait_handle_t* out_handle);
@@ -42,7 +41,7 @@ iree_status_t iree_wait_primitive_create_native(bool initial_state,
 // Closes an existing handle from iree_wait_primitive_create_native or
 // iree_wait_primitive_clone. Must not be called while there are any waiters on
 // the handle.
-void iree_wait_primitive_close(iree_wait_handle_t* handle);
+void iree_wait_handle_close(iree_wait_handle_t* handle);
 
 // Returns true if the two handles are identical in representation.
 // Note that two unique handles may point to the same underlying primitive
@@ -73,6 +72,6 @@ iree_status_t iree_wait_primitive_clear(iree_wait_handle_t* handle);
 }  // extern "C"
 #endif  // __cplusplus
 
-#endif  // !IREE_PLATFORM_WINDOWS
+#endif  // IREE_WAIT_API_POSIX_LIKE
 
 #endif  // IREE_BASE_INTERNAL_WAIT_HANDLE_POSIX_H_

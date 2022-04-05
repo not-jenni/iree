@@ -1,10 +1,10 @@
-// RUN: iree-opt -split-input-file -iree-vm-conversion %s | IreeFileCheck %s
+// RUN: iree-opt -split-input-file -iree-vm-conversion %s | FileCheck %s
 
 // CHECK-LABEL: @list_ops
 module @list_ops { module {
   // CHECK: vm.func private @my_fn
   // CHECK-SAME: (%[[BUFFER_VIEW:.+]]: !vm.ref<!hal.buffer_view>)
-  func @my_fn(%buffer_view: !hal.buffer_view) {
+  func.func @my_fn(%buffer_view: !hal.buffer_view) {
     // CHECK: %[[CAPACITY:.+]] = vm.const.i32 5
     %capacity = arith.constant 5 : index
     // CHECK: %[[LIST:.+]] = vm.list.alloc %[[CAPACITY]] : (i32) -> !vm.list<?>

@@ -15,6 +15,7 @@
 
 namespace mlir {
 namespace iree_compiler {
+namespace MHLO {
 
 struct VerifyCompilerMHLOInputLegalityPass
     : public VerifyCompilerMHLOInputLegalityBase<
@@ -22,7 +23,7 @@ struct VerifyCompilerMHLOInputLegalityPass
   void runOnOperation() override {
     auto *context = &getContext();
     ConversionTarget conversionTarget(*context);
-    OwningRewritePatternList conversionPatterns(&getContext());
+    RewritePatternSet conversionPatterns(&getContext());
 
     // Note that we would prefer allow-lists of what we positively support.
     // However, it is so common to sneak input-level ops into the pipeline
@@ -69,5 +70,6 @@ createVerifyCompilerMHLOInputLegality() {
   return std::make_unique<VerifyCompilerMHLOInputLegalityPass>();
 }
 
+}  // namespace MHLO
 }  // namespace iree_compiler
 }  // namespace mlir

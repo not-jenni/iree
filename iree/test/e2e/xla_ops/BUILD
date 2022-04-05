@@ -20,7 +20,7 @@ package(
 )
 
 iree_check_single_backend_test_suite(
-    name = "check_cuda",
+    name = "check_cuda_graph",
     srcs = enforce_glob(
         # keep sorted
         [
@@ -44,6 +44,7 @@ iree_check_single_backend_test_suite(
             "dynamic_slice.mlir",
             "dynamic_update_slice.mlir",
             "exponential.mlir",
+            "exponential_fp16.mlir",
             "exponential_minus_one.mlir",
             "fft.mlir",
             "finite.mlir",
@@ -65,6 +66,7 @@ iree_check_single_backend_test_suite(
             "reverse.mlir",
             "rng_normal.mlir",
             "rng_uniform.mlir",
+            "round.mlir",
             "rsqrt.mlir",
             "scatter.mlir",
             "scatter_dynamic.mlir",
@@ -80,12 +82,10 @@ iree_check_single_backend_test_suite(
             "while.mlir",
         ],
         include = ["*.mlir"],
-        exclude = [
-            "round.mlir",
-        ],
     ),
     compiler_flags = ["-iree-input-type=mhlo"],
     driver = "cuda",
+    runner_args = ["--cuda_use_streams=false"],
     tags = [
         # CUDA cuInit fails with sanitizer on.
         "noasan",
@@ -97,8 +97,9 @@ iree_check_single_backend_test_suite(
     target_backend = "cuda",
 )
 
+# Run cuda tests using stream command buffer
 iree_check_single_backend_test_suite(
-    name = "check_dylib_embedded-llvm-aot_dylib",
+    name = "check_cuda_streams",
     srcs = enforce_glob(
         # keep sorted
         [
@@ -122,6 +123,7 @@ iree_check_single_backend_test_suite(
             "dynamic_slice.mlir",
             "dynamic_update_slice.mlir",
             "exponential.mlir",
+            "exponential_fp16.mlir",
             "exponential_minus_one.mlir",
             "fft.mlir",
             "finite.mlir",
@@ -135,6 +137,7 @@ iree_check_single_backend_test_suite(
             "multiply.mlir",
             "negate.mlir",
             "pad.mlir",
+            "pow.mlir",
             "reduce.mlir",
             "reduce_window.mlir",
             "remainder.mlir",
@@ -142,6 +145,7 @@ iree_check_single_backend_test_suite(
             "reverse.mlir",
             "rng_normal.mlir",
             "rng_uniform.mlir",
+            "round.mlir",
             "rsqrt.mlir",
             "scatter.mlir",
             "scatter_dynamic.mlir",
@@ -157,19 +161,19 @@ iree_check_single_backend_test_suite(
             "while.mlir",
         ],
         include = ["*.mlir"],
-        exclude = [
-            #TODO(GH-7415): Enable this after failures with bazel bot
-            #and cmake-swiftshared bot are addressed
-            "pow.mlir",
-            "round.mlir",
-        ],
     ),
-    compiler_flags = [
-        "-iree-input-type=mhlo",
-        "-iree-llvm-link-embedded=true",
+    compiler_flags = ["-iree-input-type=mhlo"],
+    driver = "cuda",
+    runner_args = ["--cuda_use_streams=true"],
+    tags = [
+        # CUDA cuInit fails with sanitizer on.
+        "noasan",
+        "nomsan",
+        "notsan",
+        "noubsan",
+        "requires-gpu-nvidia",
     ],
-    driver = "dylib",
-    target_backend = "dylib-llvm-aot",
+    target_backend = "cuda",
 )
 
 iree_check_single_backend_test_suite(
@@ -197,6 +201,7 @@ iree_check_single_backend_test_suite(
             "dynamic_slice.mlir",
             "dynamic_update_slice.mlir",
             "exponential.mlir",
+            "exponential_fp16.mlir",
             "exponential_minus_one.mlir",
             "fft.mlir",
             "finite.mlir",
@@ -218,6 +223,7 @@ iree_check_single_backend_test_suite(
             "reverse.mlir",
             "rng_normal.mlir",
             "rng_uniform.mlir",
+            "round.mlir",
             "rsqrt.mlir",
             "scatter.mlir",
             "scatter_dynamic.mlir",
@@ -233,9 +239,6 @@ iree_check_single_backend_test_suite(
             "while.mlir",
         ],
         include = ["*.mlir"],
-        exclude = [
-            "round.mlir",
-        ],
     ),
     compiler_flags = ["-iree-input-type=mhlo"],
     driver = "dylib",
@@ -286,9 +289,12 @@ iree_check_single_backend_test_suite(
             "reshape.mlir",
             "reverse.mlir",
             "rsqrt.mlir",
+            "scatter.mlir",
+            "scatter_dynamic.mlir",
             "select.mlir",
             "sine.mlir",
             "slice.mlir",
+            "sort.mlir",
             "sqrt.mlir",
             "subtract.mlir",
             "tanh.mlir",
@@ -298,13 +304,11 @@ iree_check_single_backend_test_suite(
         ],
         include = ["*.mlir"],
         exclude = [
-            "fft.mlir",  # TODO(GH-6601): Eanble the test.
-            "round.mlir",
-            "scatter.mlir",  # TODO(GH-6601): Enable the test.
-            "scatter_dynamic.mlir",  # TODO(GH-6601): Enable the test.
-            "sort.mlir",
-            "rng_uniform.mlir",  # TODO(GH-6995): Enable the test.
-            "rng_normal.mlir",  # TODO(GH-6995): Enable the test.
+            "exponential_fp16.mlir",
+            "fft.mlir",  # TODO(#6601): Eanble the test.
+            "rng_uniform.mlir",  # TODO(#6995): Enable the test.
+            "rng_normal.mlir",  # TODO(#6995): Enable the test.
+            "round.mlir",  # TODO(#7618): Fix and enable (math.copysign -> VM)
         ],
     ),
     compiler_flags = ["-iree-input-type=mhlo"],
@@ -357,6 +361,7 @@ iree_check_single_backend_test_suite(
             "reverse.mlir",
             "rng_normal.mlir",
             "rng_uniform.mlir",
+            "round.mlir",
             "rsqrt.mlir",
             "scatter.mlir",
             "scatter_dynamic.mlir",
@@ -374,7 +379,7 @@ iree_check_single_backend_test_suite(
         include = ["*.mlir"],
         exclude = [
             "bitcast_convert.mlir",
-            "round.mlir",
+            "exponential_fp16.mlir",
         ],
     ),
     compiler_flags = ["-iree-input-type=mhlo"],
@@ -382,9 +387,169 @@ iree_check_single_backend_test_suite(
     target_backend = "vulkan-spirv",
 )
 
+# Check WebAssembly compilation (LLVM backend with wasm target triple).
+# Note:
+#   * no 'driver' arg is set, so this does not test execution
+#   * the test suite name is missing "_driver" from "check_target_driver"
+#   * this isn't an "end to end" test suite in the same sense as the other
+#     test suites in this file, but the test coverage is still useful
+# Hopefully at some point we can build WebAssembly execution testing into our
+# infrastructure and this will no longer bend our testing definitions as much.
+iree_check_single_backend_test_suite(
+    name = "check_wasm-llvm-aot",
+    srcs = enforce_glob(
+        # keep sorted
+        [
+            "abs.mlir",
+            "add.mlir",
+            "batch_norm_inference.mlir",
+            "bitcast_convert.mlir",
+            "broadcast.mlir",
+            "broadcast_add.mlir",
+            "broadcast_in_dim.mlir",
+            "clamp.mlir",
+            "compare.mlir",
+            "concatenate.mlir",
+            "constant.mlir",
+            "convert.mlir",
+            "convolution.mlir",
+            "cosine.mlir",
+            "divide.mlir",
+            "dot.mlir",
+            "dot_general.mlir",
+            "dynamic_slice.mlir",
+            "dynamic_update_slice.mlir",
+            "exponential.mlir",
+            "exponential_fp16.mlir",
+            "exponential_minus_one.mlir",
+            "fft.mlir",
+            "finite.mlir",
+            "floor.mlir",
+            "gather.mlir",
+            "iota.mlir",
+            "log.mlir",
+            "log_plus_one.mlir",
+            "maximum.mlir",
+            "minimum.mlir",
+            "multiply.mlir",
+            "negate.mlir",
+            "pad.mlir",
+            "pow.mlir",
+            "reduce.mlir",
+            "reduce_window.mlir",
+            "remainder.mlir",
+            "reshape.mlir",
+            "reverse.mlir",
+            "rng_normal.mlir",
+            "rng_uniform.mlir",
+            "round.mlir",
+            "rsqrt.mlir",
+            "scatter.mlir",
+            "scatter_dynamic.mlir",
+            "select.mlir",
+            "sine.mlir",
+            "slice.mlir",
+            "sort.mlir",
+            "sqrt.mlir",
+            "subtract.mlir",
+            "tanh.mlir",
+            "torch_index_select.mlir",
+            "transpose.mlir",
+            "while.mlir",
+        ],
+        include = ["*.mlir"],
+    ),
+    compiler_flags = [
+        "-iree-input-type=mhlo",
+        "-iree-llvm-target-triple=wasm32-unknown-emscripten",
+    ],
+    # driver = "wasm",  # No driver yet, only test compilation.
+    target_backend = "dylib-llvm-aot",
+)
+
+# Check host features compilation (LLVM backend with host cpu features).
+iree_check_single_backend_test_suite(
+    name = "check_dylib-llvm-aot-host_dylib",
+    srcs = enforce_glob(
+        # keep sorted
+        [
+            "abs.mlir",
+            "add.mlir",
+            "batch_norm_inference.mlir",
+            "bitcast_convert.mlir",
+            "broadcast.mlir",
+            "broadcast_add.mlir",
+            "broadcast_in_dim.mlir",
+            "clamp.mlir",
+            "compare.mlir",
+            "concatenate.mlir",
+            "constant.mlir",
+            "convert.mlir",
+            "convolution.mlir",
+            "cosine.mlir",
+            "divide.mlir",
+            "dot.mlir",
+            "dot_general.mlir",
+            "dynamic_slice.mlir",
+            "dynamic_update_slice.mlir",
+            "exponential.mlir",
+            "exponential_fp16.mlir",
+            "exponential_minus_one.mlir",
+            "fft.mlir",
+            "finite.mlir",
+            "floor.mlir",
+            "gather.mlir",
+            "iota.mlir",
+            "log.mlir",
+            "log_plus_one.mlir",
+            "maximum.mlir",
+            "minimum.mlir",
+            "multiply.mlir",
+            "negate.mlir",
+            "pad.mlir",
+            "pow.mlir",
+            "reduce.mlir",
+            "reduce_window.mlir",
+            "remainder.mlir",
+            "reshape.mlir",
+            "reverse.mlir",
+            "rng_normal.mlir",
+            "rng_uniform.mlir",
+            "round.mlir",
+            "rsqrt.mlir",
+            "scatter.mlir",
+            "scatter_dynamic.mlir",
+            "select.mlir",
+            "sine.mlir",
+            "slice.mlir",
+            "sort.mlir",
+            "sqrt.mlir",
+            "subtract.mlir",
+            "tanh.mlir",
+            "torch_index_select.mlir",
+            "transpose.mlir",
+            "while.mlir",
+        ],
+        include = ["*.mlir"],
+    ),
+    compiler_flags = [
+        "-iree-input-type=mhlo",
+        "-iree-llvm-target-cpu-features=host",
+    ],
+    driver = "dylib",
+    # Building and testing must be on the same architecture, which doesn't work
+    # with remote execution in general.
+    tags = [
+        "hostonly",
+        "local",
+    ],
+    target_backend = "dylib-llvm-aot",
+)
+
 test_suite(
     name = "check",
     tests = [
+        ":check_dylib-llvm-aot-host_dylib",
         ":check_dylib-llvm-aot_dylib",
         ":check_vmvx_vmvx",
         ":check_vulkan-spirv_vulkan",

@@ -31,7 +31,9 @@ iree_cc_library(
     MLIRLinalgTransforms
     MLIRPass
     MLIRTransforms
+    iree::compiler::Codegen::Dialect::IREECodegenDialect
     iree::compiler::Dialect::HAL::IR
+    iree::compiler::Utils
   PUBLIC
 )
 
@@ -44,9 +46,11 @@ iree_cc_library(
     ::PassHeaders
     ::PassesIncGen
     iree::compiler::Codegen::Common
+    iree::compiler::Codegen::Dialect::IREECodegenDialect
     iree::compiler::Codegen::LLVMCPU
     iree::compiler::Codegen::LLVMGPU
     iree::compiler::Codegen::SPIRV
+    iree::compiler::Codegen::Sandbox
   PUBLIC
 )
 

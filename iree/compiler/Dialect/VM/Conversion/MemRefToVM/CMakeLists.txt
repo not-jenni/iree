@@ -19,10 +19,12 @@ iree_cc_library(
     "ConvertMemRefToVM.cpp"
   DEPS
     MLIRAffine
+    MLIRArithmetic
+    MLIRBufferization
+    MLIRFunc
     MLIRIR
     MLIRMemRef
     MLIRPass
-    MLIRStandard
     MLIRTransformUtils
     MLIRTransforms
     iree::compiler::Dialect::Util::IR

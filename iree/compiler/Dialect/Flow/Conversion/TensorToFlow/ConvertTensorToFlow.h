@@ -16,12 +16,8 @@ namespace IREE {
 namespace Flow {
 
 // Adds patterns for Tensor->Flow, for running before dispatch region formation.
-void populateTensorToFlowPatternsBeforeDispatchFormation(
-    MLIRContext *context, OwningRewritePatternList &patterns);
-
-// Adds patterns for Tensor->Flow, for running after dispatch region formation.
-void populateTensorToFlowPatternsAfterDispatchFormation(
-    MLIRContext *context, OwningRewritePatternList &patterns);
+void populateTensorToFlowConversionPatterns(MLIRContext *context,
+                                            RewritePatternSet &patterns);
 
 }  // namespace Flow
 }  // namespace IREE

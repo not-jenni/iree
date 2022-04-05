@@ -10,7 +10,7 @@
 include "iree/compiler/Dialect/Stream/IR/StreamInterfaces.td"
 include "iree/compiler/Dialect/Util/IR/UtilBase.td"
 include "iree/compiler/Dialect/Util/IR/UtilInterfaces.td"
-include "iree/compiler/Dialect/Shape/IR/ShapeBase.td"
+include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/SubElementInterfaces.td"
 
 //===----------------------------------------------------------------------===//
@@ -108,10 +108,9 @@ def Stream_Dialect : Dialect {
 // Base stream dialect op classes
 //===----------------------------------------------------------------------===//
 
-class Stream_Op<string mnemonic, list<OpTrait> traits = []> :
+class Stream_Op<string mnemonic, list<Trait> traits = []> :
     Op<Stream_Dialect, mnemonic, traits> {
-  let parser = [{ return parse$cppClass(parser, &result); }];
-  let printer = [{ return print$cppClass(p, *this); }];
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -119,6 +118,8 @@ class Stream_Op<string mnemonic, list<OpTrait> traits = []> :
 //===----------------------------------------------------------------------===//
 
 def Stream_PrimitiveType : AnyTypeOf<[Index, AnyInteger, AnyFloat]>;
+def Stream_FillPatternType : AnyTypeOf<[I8, I16, I32]>;
+
 def Stream_Offset : TypeAlias<Index>;
 def Stream_Size : TypeAlias<Index>;
 
@@ -173,13 +174,13 @@ def Stream_AffinityAttr : AttrDef<Stream_Dialect, "Affinity", []> {
 }
 
 def Stream_Favor_Debug : I32EnumAttrCase<"Debug", 0, "debug">;
-def Stream_Favor_Concurrency : I32EnumAttrCase<"Concurrency", 1, "concurrency">;
-def Stream_Favor_MinPeakMemory : I32EnumAttrCase<"MinPeakMemory", 2, "min-peak-memory">;
+def Stream_Favor_MinPeakMemory : I32EnumAttrCase<"MinPeakMemory", 1, "min-peak-memory">;
+def Stream_Favor_MaxConcurrency : I32EnumAttrCase<"MaxConcurrency", 2, "max-concurrency">;
 def Stream_FavorAttr :
     I32EnumAttr<"Favor", "IREE partitioning bias", [
       Stream_Favor_Debug,
-      Stream_Favor_Concurrency,
       Stream_Favor_MinPeakMemory,
+      Stream_Favor_MaxConcurrency,
     ]> {
   let cppNamespace = "::mlir::iree_compiler::IREE::Stream";
 }
@@ -217,6 +218,8 @@ def Stream_PartitioningConfigAttr :
     // `stream.partitioning` attribute is found.
     static PartitioningConfigAttr lookup(Operation *op);
   }];
+
+  let hasCustomAssemblyFormat = 1;
 }
 
 def Stream_ResourceConfigAttr :
@@ -268,6 +271,8 @@ def Stream_ResourceConfigAttr :
     // configuration, or as a fallback returns a conservative configuration.
     static ResourceConfigAttr lookup(Operation *op);
   }];
+
+  let hasCustomAssemblyFormat = 1;
 }
 
 def Stream_ResourceAccess_None : BitEnumAttrCase<"None", 0x0000>;
@@ -313,12 +318,12 @@ def Stream_TimepointAttr : AttrDef<Stream_Dialect, "Timepoint", []> {
   let description = [{}];
   let parameters = (ins AttributeSelfTypeParameter<"">:$type);
   let valueType = Stream_Timepoint;
-  let typeBuilder = "IREE::Stream::TimepointType::get($_value.getContext())";
   let constBuilderCall = [{
     IREE::Stream::TimepointAttr::get(
         $_builder.getContext(),
-        IREE::Stream::TimepointType::get($_value.getContext()));
+        IREE::Stream::TimepointType::get($_builder.getContext()));
   }];
+  let hasCustomAssemblyFormat = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -366,6 +371,9 @@ def Stream_Resource : TypeDef<Stream_Dialect, "Resource", [
   DeclareTypeInterfaceMethods<Util_GlobalTypeInterface, [
     "isAccessStorageCompatible",
   ]>,
+  DeclareTypeInterfaceMethods<Util_InferTypeSize, [
+    "inferSizeFromValue",
+  ]>,
 ]> {
   let mnemonic = "resource";
 
@@ -396,6 +404,8 @@ def Stream_Resource : TypeDef<Stream_Dialect, "Resource", [
       return $_get(lifetime.getContext(), lifetime.getValue());
     }]>,
   ];
+
+  let hasCustomAssemblyFormat = 1;
 }
 
 def Stream_ResourceLifetimeUnknown : CPred<[{

@@ -8,7 +8,7 @@
 #include "iree/compiler/Codegen/Passes.h"
 #include "mlir/Conversion/VectorToSCF/VectorToSCF.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
-#include "mlir/Dialect/Vector/VectorTransforms.h"
+#include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -26,21 +26,23 @@ struct LLVMGPUVectorLoweringPass
     registry.insert<vector::VectorDialect>();
   }
   void runOnOperation() override {
-    FuncOp funcOp = getOperation();
+    func::FuncOp funcOp = getOperation();
     RewritePatternSet vectorToLoopsPatterns(&getContext());
     VectorTransferToSCFOptions vectorToSCFOptions;
-    vectorToSCFOptions.setUnroll(true);
+    vectorToSCFOptions.enableFullUnroll();
     populateVectorToSCFConversionPatterns(vectorToLoopsPatterns,
                                           vectorToSCFOptions);
     memref::populateFoldSubViewOpPatterns(vectorToLoopsPatterns);
     vector::populateVectorTransferLoweringPatterns(vectorToLoopsPatterns);
-    (void)applyPatternsAndFoldGreedily(funcOp,
-                                       std::move(vectorToLoopsPatterns));
+    if (failed(applyPatternsAndFoldGreedily(
+            funcOp, std::move(vectorToLoopsPatterns)))) {
+      return signalPassFailure();
+    }
   }
 };
 }  // namespace
 
-std::unique_ptr<OperationPass<FuncOp>> createLLVMGPUVectorLoweringPass() {
+std::unique_ptr<OperationPass<func::FuncOp>> createLLVMGPUVectorLoweringPass() {
   return std::make_unique<LLVMGPUVectorLoweringPass>();
 }
 

@@ -13,10 +13,6 @@ package(
     licenses = ["notice"],  # Apache 2.0
 )
 
-exports_files([
-    "run_lit.sh",
-])
-
 cc_binary(
     name = "iree-benchmark-module",
     srcs = ["iree-benchmark-module-main.cc"],
@@ -81,13 +77,12 @@ cc_binary(
 
 cc_binary(
     name = "iree-dump-module",
-    srcs = ["iree-dump-module-main.cc"],
+    srcs = ["iree-dump-module-main.c"],
     deps = [
         "//iree/base",
         "//iree/base/internal:file_io",
         "//iree/base/internal/flatcc:debugging",
         "//iree/schemas:bytecode_module_def_c_fbs",
-        "//iree/tools/utils:vm_util",
     ],
 )
 
@@ -101,18 +96,16 @@ cc_library(
         "//iree/compiler/Bindings/Native/Transforms",
         "//iree/compiler/Bindings/TFLite/Transforms",
         "//iree/compiler/Codegen/Dialect:IREECodegenDialect",
+        "//iree/compiler/Codegen/Interfaces",
+        "//iree/compiler/ConstEval",
         "//iree/compiler/Dialect/Flow/IR",
         "//iree/compiler/Dialect/Flow/Transforms",
         "//iree/compiler/Dialect/HAL/IR:HALDialect",
         "//iree/compiler/Dialect/HAL/Transforms",
-        "//iree/compiler/Dialect/LinalgExt/IR",
-        "//iree/compiler/Dialect/LinalgExt/IR:TiledOpInterface",
-        "//iree/compiler/Dialect/LinalgExt/Transforms",
         "//iree/compiler/Dialect/Modules/VMVX/IR:VMVXDialect",
         "//iree/compiler/Dialect/Modules/VMVX/Transforms",
-        "//iree/compiler/Dialect/Shape/IR",
-        "//iree/compiler/Dialect/Shape/Transforms",
         "//iree/compiler/Dialect/Stream/IR",
+        "//iree/compiler/Dialect/Stream/Transforms",
         "//iree/compiler/Dialect/Util/IR",
         "//iree/compiler/Dialect/Util/Transforms",
         "//iree/compiler/Dialect/VM/Analysis",
@@ -121,9 +114,15 @@ cc_library(
         "//iree/compiler/Dialect/Vulkan/IR",
         "//iree/compiler/InputConversion/Common",
         "//iree/compiler/InputConversion/MHLO",
+        "//iree/compiler/InputConversion/TMTensor",
         "//iree/compiler/InputConversion/TOSA",
+        "//iree/compiler/Translation:HALExecutable",
         "//iree/compiler/Translation:IREEVM",
-        "//llvm-external-projects/iree-dialects:IREEDialect",
+        "//llvm-external-projects/iree-dialects:IREEInputDialect",
+        "//llvm-external-projects/iree-dialects:IREELinalgExtDialect",
+        "//llvm-external-projects/iree-dialects:IREELinalgExtPasses",
+        "//llvm-external-projects/iree-dialects:IREELinalgTransformDialect",
+        "//llvm-external-projects/iree-dialects:IREELinalgTransformDialectTransforms",
         "//llvm-external-projects/iree-dialects:IREEPyDMDialect",
         "@llvm-project//mlir:IR",
     ],
@@ -136,9 +135,17 @@ cc_library(
         "init_mlir_passes.h",
     ],
     deps = [
+        "//iree/compiler/Dialect/VM/Target/C:Enabled",
         "@llvm-project//mlir:Affine",
         "@llvm-project//mlir:AffineTransforms",
+        "@llvm-project//mlir:ArmNeon",
+        "@llvm-project//mlir:ArmNeon2dToIntr",
+        "@llvm-project//mlir:BufferizationDialect",
+        "@llvm-project//mlir:ControlFlowOps",
         "@llvm-project//mlir:ConversionPasses",
+        "@llvm-project//mlir:EmitC",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:FuncToSPIRV",
         "@llvm-project//mlir:GPUDialect",
         "@llvm-project//mlir:GPUToSPIRV",
         "@llvm-project//mlir:GPUTransforms",
@@ -158,8 +165,7 @@ cc_library(
         "@llvm-project//mlir:SPIRVDialect",
         "@llvm-project//mlir:SPIRVTransforms",
         "@llvm-project//mlir:Shape",
-        "@llvm-project//mlir:StandardOps",
-        "@llvm-project//mlir:StandardToSPIRV",
+        "@llvm-project//mlir:TensorInferTypeOpInterfaceImpl",
         "@llvm-project//mlir:Transforms",
         "@llvm-project//mlir:VectorOps",
     ],
@@ -175,6 +181,7 @@ cc_library(
         ":init_compiler_modules",
         ":init_iree_passes_and_dialects",
         ":init_mlir_passes_and_dialects",
+        ":init_torch_mlir_dialects",
         ":init_xla_dialects",
         "//iree/compiler/Codegen",
         "//iree/compiler/Dialect/HAL/Conversion:Passes",
@@ -194,7 +201,7 @@ cc_library(
     srcs = ["init_targets.cc"],
     hdrs = ["init_targets.h"],
     local_defines = [
-        "IREE_HAVE_CUDA_TARGET",
+        # "IREE_HAVE_CUDA_TARGET",
         "IREE_HAVE_LLVMAOT_TARGET",
         "IREE_HAVE_METALSPIRV_TARGET",
         "IREE_HAVE_ROCM_TARGET",
@@ -202,7 +209,7 @@ cc_library(
         "IREE_HAVE_VULKANSPIRV_TARGET",
     ],
     deps = [
-        "//iree/compiler/Dialect/HAL/Target/CUDA",
+        # "//iree/compiler/Dialect/HAL/Target/CUDA",
         "//iree/compiler/Dialect/HAL/Target/LLVM",
         "//iree/compiler/Dialect/HAL/Target/MetalSPIRV",
         "//iree/compiler/Dialect/HAL/Target/ROCM",
@@ -217,6 +224,7 @@ cc_library(
         "init_translations.h",
     ],
     deps = [
+        "//iree/compiler/Translation:HALExecutable",
         "//iree/compiler/Translation:IREEVM",
         "@llvm-project//mlir:SPIRVTranslateRegistration",
     ],
@@ -231,6 +239,27 @@ cc_library(
         "@llvm-project//mlir:IR",
         "@mlir-hlo//:hlo",
         "@mlir-hlo//:lhlo",
+    ],
+)
+
+cc_library(
+    name = "init_torch_mlir_dialects",
+    hdrs = [
+        "init_torch_mlir_dialects.h",
+    ],
+    deps = [
+        "@torch-mlir-dialects//:TorchMLIRTMTensorDialect",
+    ],
+)
+
+cc_library(
+    name = "init_llvmir_translations",
+    hdrs = [
+        "init_llvmir_translations.h",
+    ],
+    deps = [
+        "@llvm-project//mlir:ArmNeonToLLVMIRTranslation",
+        "@llvm-project//mlir:ToLLVMIRTranslation",
     ],
 )
 
@@ -336,6 +365,26 @@ cc_binary(
 )
 
 cc_binary(
+    name = "iree-e2e-matmul-test",
+    srcs = ["iree-e2e-matmul-test.c"],
+    deps = [
+        "//iree/base",
+        "//iree/base:core_headers",
+        "//iree/base:tracing",
+        "//iree/base/internal:file_path",
+        "//iree/base/internal:flags",
+        "//iree/hal",
+        "//iree/hal/drivers",
+        "//iree/modules/hal",
+        "//iree/tools/utils:cpu_features",
+        "//iree/tools/utils:trace_replay",
+        "//iree/tools/utils:yaml_util",
+        "//iree/vm",
+        "@com_github_yaml_libyaml//:yaml",
+    ],
+)
+
+cc_binary(
     name = "iree-tblgen",
     srcs = [
         "//iree/compiler/Dialect/Util/Tools:GenSrcs",
@@ -344,6 +393,7 @@ cc_binary(
     tags = ["hostonly"],
     deps = [
         "//build_tools:default_linkopts",
+        "//iree/compiler/Utils",
         "@llvm-project//llvm:Support",
         "@llvm-project//llvm:TableGen",
         "@llvm-project//mlir:MlirTableGenMain",
@@ -354,27 +404,32 @@ cc_binary(
 
 cc_library(
     name = "iree_translate_lib",
-    srcs = ["iree_translate_lib.cc"],
+    srcs = [
+        "iree_compile_lib.cc",
+        "iree_translate_lib.cc",
+    ],
     hdrs = ["iree_translate_lib.h"],
     deps = [
-        ":init_compiler_modules",
-        ":init_iree_passes_and_dialects",
-        ":init_mlir_passes_and_dialects",
+        ":init_llvmir_translations",
         ":init_passes_and_dialects",
         ":init_targets",
         ":init_translations",
-        ":init_xla_dialects",
         "//iree/compiler/Codegen",
+        "//iree/compiler/ConstEval",
         "//iree/compiler/Dialect/VM/Target:init_targets",
         "//iree/compiler/Dialect/VM/Target/Bytecode",
+        "//iree/compiler/Dialect/VM/Target/C",
+        "//iree/compiler/Pipelines",
+        "//iree/compiler/Translation:HALExecutable",
         "//iree/compiler/Translation:IREEVM",
+        "//iree/compiler/Utils",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:LLVMToLLVMIRTranslation",
+        "@llvm-project//mlir:Parser",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:SCFTransforms",
         "@llvm-project//mlir:Support",
-        "@llvm-project//mlir:ToLLVMIRTranslation",
         "@llvm-project//mlir:Translation",
     ],
 )
@@ -388,10 +443,11 @@ cc_binary(
     ],
 )
 
-sh_binary(
-    name = "IreeFileCheck",
-    testonly = True,
-    srcs = ["IreeFileCheck.sh"],
-    data = ["@llvm-project//llvm:FileCheck"],
+cc_binary(
+    name = "iree-compile",
+    srcs = ["iree-compile-main.cc"],
     tags = ["hostonly"],
+    deps = [
+        ":iree_translate_lib",
+    ],
 )

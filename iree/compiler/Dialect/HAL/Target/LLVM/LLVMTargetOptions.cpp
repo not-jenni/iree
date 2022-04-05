@@ -51,6 +51,11 @@ LLVMTargetOptions getDefaultLLVMTargetOptions() {
     // TODO(benvanik): add an option for this.
     targetOptions.optLevel = llvm::OptimizationLevel::O3;
     targetOptions.options.FloatABIType = llvm::FloatABI::Hard;
+
+    // Force `-ffunction-sections` so we can strip unused code.
+    targetOptions.options.FunctionSections = true;
+    targetOptions.options.DataSections = true;
+    targetOptions.options.UniqueSectionNames = true;
   });
   return targetOptions;
 }
@@ -79,13 +84,14 @@ LLVMTargetOptions getLLVMTargetOptionsFromFlags() {
       "iree-llvm-loop-vectorization", llvm::cl::init(true),
       llvm::cl::desc("Enable LLVM loop vectorization opt"));
   static llvm::cl::opt<bool> llvmLoopUnrolling(
-      "iree-llvm-loop-unrolling", llvm::cl::init(false),
+      "iree-llvm-loop-unrolling", llvm::cl::init(true),
       llvm::cl::desc("Enable LLVM loop unrolling opt"));
   static llvm::cl::opt<bool> llvmSLPVectorization(
       "iree-llvm-slp-vectorization", llvm::cl::init(false),
       llvm::cl::desc("Enable LLVM SLP Vectorization opt"));
 
   targetOptions.targetTriple = clTargetTriple;
+  llvm::Triple targetTriple(targetOptions.targetTriple);
   if (clTargetCPU != "host") {
     targetOptions.targetCPU = clTargetCPU;
   }
@@ -103,7 +109,9 @@ LLVMTargetOptions getLLVMTargetOptionsFromFlags() {
       "iree-llvm-sanitize", llvm::cl::desc("Apply LLVM sanitize feature"),
       llvm::cl::init(SanitizerKind::kNone),
       llvm::cl::values(clEnumValN(SanitizerKind::kAddress, "address",
-                                  "Address sanitizer support")));
+                                  "Address sanitizer support"),
+                       clEnumValN(SanitizerKind::kThread, "thread",
+                                  "Thread sanitizer support")));
   targetOptions.sanitizerKind = clSanitizerKind;
 
   static llvm::cl::opt<std::string> clTargetABI(
@@ -131,18 +139,26 @@ LLVMTargetOptions getLLVMTargetOptionsFromFlags() {
       llvm::cl::init(targetOptions.debugSymbols));
   targetOptions.debugSymbols = clDebugSymbols;
 
-  static llvm::cl::opt<std::string> clLinkerPath(
-      "iree-llvm-linker-path",
-      llvm::cl::desc("Tool used to link shared libraries produced by IREE."),
+  static llvm::cl::opt<std::string> clSystemLinkerPath(
+      "iree-llvm-system-linker-path",
+      llvm::cl::desc("Tool used to link system shared libraries produced by "
+                     "IREE (for -iree-llvm-link-embedded=false)."),
       llvm::cl::init(""));
-  targetOptions.linkerPath = clLinkerPath;
+  targetOptions.systemLinkerPath = clSystemLinkerPath;
 
   static llvm::cl::opt<std::string> clEmbeddedLinkerPath(
       "iree-llvm-embedded-linker-path",
       llvm::cl::desc("Tool used to link embedded ELFs produced by IREE (for "
-                     "-iree-llvm-link-embedded)."),
-      llvm::cl::init("ld.lld"));
+                     "-iree-llvm-link-embedded=true)."),
+      llvm::cl::init(""));
   targetOptions.embeddedLinkerPath = clEmbeddedLinkerPath;
+
+  static llvm::cl::opt<std::string> clWasmLinkerPath(
+      "iree-llvm-wasm-linker-path",
+      llvm::cl::desc("Tool used to link WebAssembly modules produced by "
+                     "IREE (for -iree-llvm-target-triple=wasm32-*)."),
+      llvm::cl::init(""));
+  targetOptions.wasmLinkerPath = clWasmLinkerPath;
 
   static llvm::cl::opt<bool> clLinkEmbedded(
       "iree-llvm-link-embedded",
@@ -150,6 +166,18 @@ LLVMTargetOptions getLLVMTargetOptionsFromFlags() {
                      "by the embedded IREE ELF loader"),
       llvm::cl::init(targetOptions.linkEmbedded));
   targetOptions.linkEmbedded = clLinkEmbedded;
+  if (targetTriple.isWasm()) {
+    // The embedded ELF loader is not supported on WebAssembly, so force it off.
+    targetOptions.linkEmbedded = false;
+  }
+  if (targetOptions.linkEmbedded) {
+    // Force the triple to something compatible with embedded linking.
+    targetTriple.setVendor(llvm::Triple::VendorType::UnknownVendor);
+    targetTriple.setEnvironment(llvm::Triple::EnvironmentType::EABI);
+    targetTriple.setOS(llvm::Triple::OSType::UnknownOS);
+    targetTriple.setObjectFormat(llvm::Triple::ObjectFormatType::ELF);
+    targetOptions.targetTriple = targetTriple.str();
+  }
 
   static llvm::cl::opt<bool> clLinkStatic(
       "iree-llvm-link-static",
@@ -182,17 +210,6 @@ LLVMTargetOptions getLLVMTargetOptionsFromFlags() {
   if (clListTargets) {
     llvm::TargetRegistry::printRegisteredTargetsForVersion(llvm::outs());
     exit(0);
-  }
-
-  // Force the triple to something compatible with embedded linking when
-  // enabled.
-  if (targetOptions.linkEmbedded) {
-    llvm::Triple triple(targetOptions.targetTriple);
-    triple.setVendor(llvm::Triple::VendorType::UnknownVendor);
-    triple.setEnvironment(llvm::Triple::EnvironmentType::EABI);
-    triple.setOS(llvm::Triple::OSType::UnknownOS);
-    triple.setObjectFormat(llvm::Triple::ObjectFormatType::ELF);
-    targetOptions.targetTriple = triple.str();
   }
 
   return targetOptions;

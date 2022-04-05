@@ -15,8 +15,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "mlir/Conversion/TosaToStandard/TosaToStandard.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
@@ -53,7 +53,7 @@ class ConversionPass
     typeConverter.addConversion([](Type type) { return type; });
 
     // Run a pre-pass that updates the entry function signature.
-    for (auto funcOp : getOperation().getOps<FuncOp>()) {
+    for (auto funcOp : getOperation().getOps<func::FuncOp>()) {
       if (funcOp.isPublic()) {
         if (failed(updateHALToVMVXEntryFuncOp(funcOp, typeConverter))) {
           return signalPassFailure();
@@ -67,13 +67,13 @@ class ConversionPass
     conversionTarget.addIllegalDialect<tensor::TensorDialect>();
     conversionTarget.addLegalDialect<IREE::Util::UtilDialect>();
     conversionTarget.addLegalDialect<IREE::VMVX::VMVXDialect>();
-    conversionTarget.addLegalDialect<mlir::StandardOpsDialect,
+    conversionTarget.addLegalDialect<mlir::func::FuncDialect,
                                      mlir::arith::ArithmeticDialect>();
     conversionTarget.addLegalDialect<mlir::AffineDialect>();
     conversionTarget.addLegalDialect<memref::MemRefDialect>();
     conversionTarget.addLegalOp<mlir::UnrealizedConversionCastOp>();
 
-    OwningRewritePatternList conversionPatterns(&getContext());
+    RewritePatternSet conversionPatterns(&getContext());
     populateHALToVMVXPatterns(context, conversionPatterns, typeConverter);
     populateStandardToVMVXPatterns(context, conversionPatterns, typeConverter);
 

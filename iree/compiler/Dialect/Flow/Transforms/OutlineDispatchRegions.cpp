@@ -9,11 +9,9 @@
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "iree/compiler/Dialect/Flow/Transforms/PassDetail.h"
 #include "iree/compiler/Dialect/Flow/Transforms/Passes.h"
-#include "iree/compiler/Dialect/Shape/IR/Builders.h"
-#include "iree/compiler/Dialect/Shape/IR/ShapeOps.h"
-#include "iree/compiler/Dialect/Shape/IR/ShapeTypes.h"
+#include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "llvm/Support/Debug.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -32,7 +30,7 @@ namespace {
 // Creates a flow.executable out of a set of functions, pulling in all other
 // functions reachable by the provided functions.
 static ExecutableOp createExecutable(Location loc, StringRef executableName,
-                                     ArrayRef<mlir::FuncOp> funcOps,
+                                     ArrayRef<mlir::func::FuncOp> funcOps,
                                      ModuleOp parentModuleOp) {
   assert(!funcOps.empty() && "must have at least one entry function");
 
@@ -68,40 +66,13 @@ static LogicalResult convertToDispatchOp(DispatchWorkgroupsOp regionOp,
   // Insert at the same place as the original region.
   OpBuilder builder(regionOp);
 
-  // Perform shape to primitive type expansion.
-  // NOTE: this may insert new shape values at |builder|, which is prior to
-  // our dispatch operation. All new values that are built can only depend
-  // on SSA values that are defined prior to the region op.
-  SmallVector<Value, 4> newOperands;
-  SmallVector<Value, 4> operandDynamicDims;
-  SmallVector<Value, 4> resultDynamicDims;
-  for (auto operand : regionOp.operands()) {
-    newOperands.push_back(operand);
-  }
-  for (auto operand : regionOp.operands()) {
-    if (operand.getType().isa<ShapedType>()) {
-      auto dynamicDims = Shape::buildOrFindDynamicDimsForValue(
-          regionOp.getLoc(), operand, builder);
-      operandDynamicDims.append(dynamicDims);
-      newOperands.append(dynamicDims);
-    }
-  }
-  for (auto result : regionOp.results()) {
-    if (result.getType().isa<ShapedType>()) {
-      auto dynamicDims = Shape::buildOrFindDynamicDimsForValue(
-          regionOp.getLoc(), result, builder);
-      resultDynamicDims.append(dynamicDims);
-      newOperands.append(dynamicDims);
-    }
-  }
-
   // Create the dispatch op to the executable function.
   // Note that we copy the tied operand indices from the workgroups op - it
   // lines up 1:1 with the dispatch once we've outlined things.
   auto dispatchOp = builder.create<DispatchOp>(
       regionOp.getLoc(), entryPointOp, regionOp.workgroup_count(),
-      regionOp.getResultTypes(), resultDynamicDims, newOperands,
-      operandDynamicDims, regionOp.tied_operandsAttr());
+      regionOp.getResultTypes(), regionOp.result_dims(), regionOp.operands(),
+      regionOp.operand_dims(), regionOp.tied_operandsAttr());
 
   // Replace uses of the existing results with the new results.
   for (int i = 0; i < regionOp.getNumResults(); ++i) {
@@ -115,75 +86,24 @@ static LogicalResult convertToDispatchOp(DispatchWorkgroupsOp regionOp,
 }
 
 // Converts a dispatch region body to a free-floating function.
-// The contents of the function will be updated to propagate shape information
-// across the function call boundary and ensure we have all the metadata we need
-// on the inside in order to manipulate dynamic shapes.
-static mlir::FuncOp createWorkgroupFunc(Location loc, StringRef functionName,
-                                        Region &region) {
-  // Build function type matching the region signature + the dynamic dims.
-  //
-  // At this stage we'll insert all dynamic dimension values even if some are
-  // duplicates (same value providing the dynamic dimension); we need
-  // canonicalization/CSE/etc to run before we can dedupe them.
-  SmallVector<Type, 4> operandTypes;
-  int64_t totalDynamicDims = 0;
-  for (auto &operand : region.getArguments()) {
-    if (auto tensorType = operand.getType().dyn_cast<DispatchTensorType>()) {
-      operandTypes.push_back(tensorType);
-      totalDynamicDims += tensorType.getNumDynamicDims();
-    } else {
-      // Pass-through.
-      operandTypes.push_back(operand.getType());
-    }
-  }
-  auto indexType = IndexType::get(region.getContext());
-  for (int64_t i = 0; i < totalDynamicDims; ++i) {
-    operandTypes.push_back(indexType);
-  }
-  auto functionType =
-      FunctionType::get(region.getContext(), operandTypes, /*results=*/{});
+static mlir::func::FuncOp createWorkgroupFunc(Location loc,
+                                              StringRef functionName,
+                                              Region &region) {
+  // Build function type matching the region signature.
+  auto functionType = FunctionType::get(
+      region.getContext(), region.getArgumentTypes(), /*results=*/{});
 
   // Clone region into the function body.
-  auto funcOp = mlir::FuncOp::create(loc, functionName, functionType);
+  auto funcOp = mlir::func::FuncOp::create(loc, functionName, functionType);
   BlockAndValueMapping mapping;
   region.cloneInto(&funcOp.getBody(), mapping);
-  auto *entryBlock = &funcOp.getBody().front();
-  for (int64_t i = 0; i < totalDynamicDims; ++i) {
-    entryBlock->addArgument(indexType);
-  }
-
-  // Insert the shapes for each I/O and tie them together.
-  unsigned int dynamicDimArgIndex = region.getNumArguments();
-  auto entryBuilder = OpBuilder::atBlockBegin(entryBlock);
-  for (auto &oldOperand : region.getArguments()) {
-    if (auto ioType = oldOperand.getType().dyn_cast<DispatchTensorType>()) {
-      // Avoid shape tie noise from fully-static shapes.
-      if (ioType.hasStaticShape()) continue;
-
-      // Create the ranked shape type from the dynamic dimension arguments.
-      SmallVector<Value, 4> dimValues;
-      dimValues.reserve(ioType.getNumDynamicDims());
-      for (int64_t i = 0; i < ioType.getNumDynamicDims(); ++i) {
-        dimValues.push_back(entryBlock->getArgument(dynamicDimArgIndex++));
-      }
-      auto shapeOp = entryBuilder.create<Shape::MakeRankedShapeOp>(
-          funcOp.getLoc(), ioType.asRankedShapeType(), dimValues);
-
-      // Tie shape to the I/O argument and fix up SSA usage to the tied value.
-      auto operand = mapping.lookup<Value>(oldOperand);
-      auto tieOp = entryBuilder.create<DispatchTieShapeOp>(
-          funcOp.getLoc(), operand.getType(), operand, shapeOp.getResult());
-      SmallPtrSet<Operation *, 1> tieOpSet = {tieOp};
-      operand.replaceAllUsesExcept(tieOp.result(), tieOpSet);
-    }
-  }
 
   // Replace flow.return with std.return.
   // NOTE: in the dispatch workgroups case the return should have no values.
   for (auto &block : funcOp.getBlocks()) {
     if (auto returnOp = dyn_cast<IREE::Flow::ReturnOp>(block.back())) {
       OpBuilder builder(returnOp);
-      builder.create<mlir::ReturnOp>(
+      builder.create<mlir::func::ReturnOp>(
           returnOp.getLoc(), llvm::to_vector<4>(returnOp.getOperands()));
       returnOp.erase();
     }
@@ -204,7 +124,7 @@ static LogicalResult outlineDispatchWorkgroupsOp(
   }
 
   // Create the executable with the region cloned into it.
-  auto parentFuncOp = regionOp->getParentOfType<mlir::FuncOp>();
+  auto parentFuncOp = regionOp->getParentOfType<FunctionOpInterface>();
   auto executableOp =
       createExecutable(regionOp.getLoc(), namePrefix, {workgroupFuncOp},
                        parentFuncOp->getParentOfType<mlir::ModuleOp>());
@@ -231,13 +151,29 @@ class OutlineDispatchRegionsPass
 
   void runOnOperation() override {
     // Convert each dispatch region into a flow.executable + dispatch op.
-    for (auto funcOp : getOperation().getOps<mlir::FuncOp>()) {
+    int initializerCount = 0;
+    for (auto it :
+         llvm::enumerate(getOperation().getOps<FunctionOpInterface>())) {
+      FunctionOpInterface op = it.value();
+      Operation *operation = op;
+
+      // Generate a nice name if possible.
+      std::string opName;
+      if (auto funcOp = llvm::dyn_cast<mlir::func::FuncOp>(operation)) {
+        opName = funcOp.getName().str();
+      } else if (llvm::isa<IREE::Util::InitializerOp>(operation)) {
+        opName =
+            std::string("_initializer_") + std::to_string(initializerCount++);
+      } else {
+        opName = std::string("_function_like_") + std::to_string(it.index());
+      }
+
+      auto &bodyRegion = op.getBody();
       // Outline all of the dispatch regions ops in this function.
       auto dispatchWorkgroupsOps =
-          llvm::to_vector<8>(funcOp.getOps<DispatchWorkgroupsOp>());
+          llvm::to_vector<8>(bodyRegion.getOps<DispatchWorkgroupsOp>());
       for (int i = 0; i < dispatchWorkgroupsOps.size(); ++i) {
-        std::string namePrefix =
-            funcOp.getName().str() + "_dispatch_" + std::to_string(i);
+        std::string namePrefix = (opName + "_dispatch_" + llvm::Twine(i)).str();
         if (failed(outlineDispatchWorkgroupsOp(namePrefix,
                                                dispatchWorkgroupsOps[i]))) {
           return signalPassFailure();

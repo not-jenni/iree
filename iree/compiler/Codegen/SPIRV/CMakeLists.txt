@@ -24,24 +24,37 @@ iree_cc_library(
     "MaliConfig.cpp"
     "NVIDIAConfig.cpp"
     "Passes.cpp"
-    "SPIRVCopyToWorkgroupMemory.cpp"
-    "SPIRVDistributeToGlobalID.cpp"
-    "SPIRVFoldGPUProcessorIDUses.cpp"
+    "SPIRVCreateFastSlowPath.cpp"
+    "SPIRVDistribute.cpp"
+    "SPIRVFuseTensorPadWithConsumer.cpp"
+    "SPIRVInitConfigPass.cpp"
     "SPIRVLowerExecutableTargetPass.cpp"
-    "SPIRVRemoveOneTripTiledLoops.cpp"
+    "SPIRVTile.cpp"
     "SPIRVTileAndDistribute.cpp"
     "SPIRVTileAndVectorizeToCooperativeOps.cpp"
     "SPIRVVectorToCooperativeOps.cpp"
     "SPIRVVectorize.cpp"
     "SPIRVVectorizeLoadStore.cpp"
+    "SPIRVVectorizePad.cpp"
     "Utils.cpp"
   DEPS
+    IREELinalgExtDialect
+    IREELinalgExtPasses
     LLVMSupport
     MLIRAffine
+    MLIRAffineAnalysis
     MLIRAffineToStandard
+    MLIRAffineUtils
     MLIRAnalysis
     MLIRArithmetic
     MLIRArithmeticToSPIRV
+    MLIRArithmeticTransforms
+    MLIRArithmeticUtils
+    MLIRBufferization
+    MLIRControlFlowToSPIRV
+    MLIRFunc
+    MLIRFuncToSPIRV
+    MLIRFuncTransforms
     MLIRGPUOps
     MLIRGPUToSPIRV
     MLIRGPUTransforms
@@ -56,20 +69,23 @@ iree_cc_library(
     MLIRSCF
     MLIRSCFToGPU
     MLIRSCFToSPIRV
+    MLIRSCFTransforms
+    MLIRSCFUtils
     MLIRSPIRV
     MLIRSPIRVConversion
     MLIRSPIRVTransforms
     MLIRSideEffectInterfaces
-    MLIRStandard
-    MLIRStandardOpsTransforms
-    MLIRStandardToSPIRV
     MLIRSupport
+    MLIRTensor
+    MLIRTensorToSPIRV
+    MLIRTensorTransforms
     MLIRTosa
     MLIRTosaToStandard
     MLIRTransforms
     MLIRVector
     MLIRVectorInterfaces
     MLIRVectorToSPIRV
+    MLIRVectorTransforms
     iree::compiler::Codegen::Common
     iree::compiler::Codegen::Dialect::IREECodegenDialect
     iree::compiler::Codegen::PassHeaders
@@ -78,12 +94,7 @@ iree_cc_library(
     iree::compiler::Dialect::Flow::IR
     iree::compiler::Dialect::HAL::IR
     iree::compiler::Dialect::HAL::IR::HALDialect
-    iree::compiler::Dialect::LinalgExt::IR
-    iree::compiler::Dialect::LinalgExt::Transforms
-    iree::compiler::Dialect::Shape::IR
-    iree::compiler::Dialect::Shape::Transforms
     iree::compiler::Dialect::Util::IR
-    tensorflow::mlir_hlo
   PUBLIC
 )
 

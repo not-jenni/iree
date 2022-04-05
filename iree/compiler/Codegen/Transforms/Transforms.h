@@ -12,9 +12,10 @@
 #ifndef IREE_COMPILER_CODEGEN_COMMON_TRANSFORMS_H_
 #define IREE_COMPILER_CODEGEN_COMMON_TRANSFORMS_H_
 
-#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
+#include "llvm/Support/Debug.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
-#include "mlir/Dialect/Vector/VectorOps.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
 
@@ -29,7 +30,7 @@ namespace iree_compiler {
 using WorkgroupCountRegionBuilder = std::function<std::array<Value, 3>(
     OpBuilder &b, Location loc, std::array<Value, 3> workload)>;
 LogicalResult defineWorkgroupCountRegion(
-    OpBuilder &builder, FuncOp funcOp,
+    OpBuilder &builder, func::FuncOp funcOp,
     WorkgroupCountRegionBuilder regionBuilder);
 
 /// Insert patterns to perform folding of AffineMinOp by matching the pattern
@@ -54,11 +55,6 @@ using GetMinMaxExprFn =
 /// |getMinMaxFn| for some know values.
 void populateRemoveSingleIterationLoopPattern(RewritePatternSet &patterns,
                                               GetMinMaxExprFn getMinMaxFn);
-
-/// Insert pattern to fold chains of `affine.min` operations.
-// TODO: It is not clear what this pattern is doing and should be deprecated.
-void populateAffineMinCanonicalizationPattern(RewritePatternSet &patterns);
-
 }  // namespace iree_compiler
 }  // namespace mlir
 

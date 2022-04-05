@@ -10,18 +10,19 @@
 #include "iree/compiler/Codegen/Utils/Utils.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
 #include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/Passes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
-#include "mlir/Dialect/Vector/VectorOps.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -51,7 +52,7 @@ struct ConvertToROCDLPass : public ConvertToROCDLBase<ConvertToROCDLPass> {
     // conversion pass.
     // Run Vector -> Vector transformations ahead of conversion to LLVM.
     {
-      OwningRewritePatternList patterns(&getContext());
+      RewritePatternSet patterns(&getContext());
       populateScalarizeMathOps(patterns);
       populateConvertSharedMemoryAllocOps(patterns);
       vector::populateVectorToVectorCanonicalizationPatterns(patterns);
@@ -64,28 +65,34 @@ struct ConvertToROCDLPass : public ConvertToROCDLBase<ConvertToROCDLPass> {
       vector::populateVectorShapeCastLoweringPatterns(patterns);
       mlir::vector::populateVectorTransposeLoweringPatterns(patterns);
       vector::populateVectorTransferLoweringPatterns(patterns);
-      (void)applyPatternsAndFoldGreedily(m, std::move(patterns));
+      if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns)))) {
+        return signalPassFailure();
+      }
     }
     {
-      OwningRewritePatternList patterns(&getContext());
+      RewritePatternSet patterns(&getContext());
       populateGpuRewritePatterns(patterns);
-      (void)applyPatternsAndFoldGreedily(m, std::move(patterns));
+      if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns)))) {
+        return signalPassFailure();
+      }
     }
     {
-      OwningRewritePatternList llvmPatterns(&getContext());
-      populateLLVMConversionPatterns(&getContext(), llvmPatterns, converter,
-                                     true);
+      RewritePatternSet llvmPatterns(&getContext());
+      populateLowerHALInterfaceOp(llvmPatterns);
+      populateLLVMConversionPatterns(&getContext(), llvmPatterns, converter);
       populateMathToLLVMConversionPatterns(converter, llvmPatterns);
       populateMemRefToLLVMConversionPatterns(converter, llvmPatterns);
-      populateStdToLLVMConversionPatterns(converter, llvmPatterns);
+      populateFuncToLLVMConversionPatterns(converter, llvmPatterns);
+      cf::populateControlFlowToLLVMConversionPatterns(converter, llvmPatterns);
       arith::populateArithmeticToLLVMConversionPatterns(converter,
                                                         llvmPatterns);
       populateVectorToLLVMConversionPatterns(converter, llvmPatterns);
-      populateGpuToROCDLConversionPatterns(converter, llvmPatterns);
+      populateGpuToROCDLConversionPatterns(converter, llvmPatterns,
+                                           gpu::amd::Runtime::Unknown);
       LLVMConversionTarget target(getContext());
-      populateStdToLLVMFuncOpConversionPattern(converter, llvmPatterns);
+      populateFuncToLLVMFuncOpConversionPattern(converter, llvmPatterns);
       configureGpuToROCDLConversionLegality(target);
-      target.addDynamicallyLegalOp<FuncOp>([&](FuncOp funcOp) {
+      target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp funcOp) {
         if (isEntryPoint(funcOp)) return false;
         return true;
       });

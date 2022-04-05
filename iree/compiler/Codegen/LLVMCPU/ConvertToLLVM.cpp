@@ -9,14 +9,18 @@
 #include "iree/compiler/Codegen/Utils/Utils.h"
 #include "iree/compiler/Dialect/HAL/IR/HALDialect.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
-#include "iree/compiler/Dialect/Shape/IR/ShapeDialect.h"
 #include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/Support/Mutex.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Analysis/DataLayoutAnalysis.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
+#include "mlir/Conversion/ArmNeon2dToIntr/ArmNeon2dToIntr.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -25,20 +29,19 @@
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
-#include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
-#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/TosaToStandard/TosaToStandard.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
 #include "mlir/Conversion/VectorToSCF/VectorToSCF.h"
+#include "mlir/Dialect/ArmNeon/ArmNeonDialect.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Func/Transforms/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Math/Transforms/Passes.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
-#include "mlir/Dialect/StandardOps/Transforms/Passes.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
-#include "mlir/Dialect/Vector/VectorOps.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
@@ -61,55 +64,200 @@ namespace {
 // versions in the same compiled output.
 class HALDispatchABI {
  public:
-  // Returns a Type representing iree_hal_vec3_t.
-  static Type getVec3Type(MLIRContext *context) {
+  // Matches the field order in iree_hal_processor_v0_t.
+  enum class ProcessorField {
+    data = 0,
+  };
+
+  // Matches IREE_HAL_PROCESSOR_DATA_CAPACITY_V0.
+  static constexpr int ProcessorDataCapacity = 8;
+
+  // Returns a Type representing iree_hal_processor_v0_t.
+  static LLVM::LLVMStructType getProcessorType(
+      MLIRContext *context, LLVMTypeConverter *typeConverter) {
+    static llvm::sys::Mutex mutex;
+    llvm::sys::ScopedLock lock(mutex);
+    auto structType =
+        LLVM::LLVMStructType::getIdentified(context, "iree_hal_processor_v0_t");
+    if (structType.isInitialized()) return structType;
+
+    auto uint64Type = IntegerType::get(context, 64);
+    SmallVector<Type> fieldTypes;
+
+    // uint64_t data[IREE_HAL_PROCESSOR_DATA_CAPACITY_V0];
+    fieldTypes.push_back(
+        LLVM::LLVMArrayType::get(uint64Type, ProcessorDataCapacity));
+
+    LogicalResult bodySet = structType.setBody(fieldTypes, /*isPacked=*/false);
+    assert(succeeded(bodySet) &&
+           "could not set the body of an identified struct");
+    (void)bodySet;
+
+    return structType;
+  }
+
+  // Matches the field order in iree_hal_executable_environment_v0_t.
+  enum class EnvironmentField {
+    constants,
+    import_thunk,
+    imports,
+    processor,
+  };
+
+  // Returns a Type representing iree_hal_executable_environment_v0_t.
+  static LLVM::LLVMStructType getEnvironmentType(
+      MLIRContext *context, LLVMTypeConverter *typeConverter,
+      LLVM::LLVMStructType processorType) {
+    static llvm::sys::Mutex mutex;
+    llvm::sys::ScopedLock lock(mutex);
+    auto structType = LLVM::LLVMStructType::getIdentified(
+        context, "iree_hal_executable_environment_v0_t");
+    if (structType.isInitialized()) return structType;
+
+    auto int8Type = IntegerType::get(context, 8);
     auto uint32Type = IntegerType::get(context, 32);
-    return LLVM::LLVMArrayType::get(uint32Type, 3);
+    auto int8PtrType = LLVM::LLVMPointerType::get(int8Type);
+    auto uint32PtrType = LLVM::LLVMPointerType::get(uint32Type);
+    SmallVector<Type, 4> fieldTypes;
+
+    // const uint32_t* constants;
+    fieldTypes.push_back(uint32PtrType);
+
+    // iree_hal_executable_import_thunk_v0_t import_thunk;
+    // const iree_hal_executable_import_v0_t* imports;
+    auto importType = LLVM::LLVMFunctionType::get(uint32Type, int8PtrType);
+    auto importPtrType = LLVM::LLVMPointerType::get(importType);
+    auto importThunkType =
+        LLVM::LLVMFunctionType::get(uint32Type, {importPtrType, int8PtrType});
+    fieldTypes.push_back(LLVM::LLVMPointerType::get(importThunkType));
+    fieldTypes.push_back(LLVM::LLVMPointerType::get(importPtrType));
+
+    // iree_hal_processor_v0_t processor;
+    fieldTypes.push_back(processorType);
+
+    LogicalResult bodySet = structType.setBody(fieldTypes, /*isPacked=*/false);
+    assert(succeeded(bodySet) &&
+           "could not set the body of an identified struct");
+    (void)bodySet;
+
+    return structType;
   }
 
   // Matches the field order in iree_hal_executable_dispatch_state_v0_t.
-  enum class Field {
-    workgroup_count = 0,
-    workgroup_size = 1,
-    push_constant_count = 2,
-    push_constants = 3,
-    binding_count = 4,
-    binding_ptrs = 5,
-    binding_lengths = 6,
+  enum class DispatchStateField {
+    /*uint32_t*/ workgroup_size_x,
+    /*uint32_t*/ workgroup_size_y,
+    /*uint16_t*/ workgroup_size_z,
+    /*uint16_t*/ push_constant_count,
+    /*uint32_t*/ workgroup_count_x,
+    /*uint32_t*/ workgroup_count_y,
+    /*uint16_t*/ workgroup_count_z,
+    /*uint16_t*/ binding_count,
+    /*intptr_t*/ push_constants,
+    /*intptr_t*/ binding_ptrs,
+    /*intptr_t*/ binding_lengths,
   };
+  friend DispatchStateField operator+(DispatchStateField lhs, int32_t rhs) {
+    return static_cast<DispatchStateField>(static_cast<int32_t>(lhs) + rhs);
+  }
 
   // Returns a Type representing iree_hal_executable_dispatch_state_v0_t.
   static LLVM::LLVMStructType getDispatchStateType(
       MLIRContext *context, LLVMTypeConverter *typeConverter) {
+    static llvm::sys::Mutex mutex;
+    llvm::sys::ScopedLock lock(mutex);
     auto structType = LLVM::LLVMStructType::getIdentified(
         context, "iree_hal_executable_dispatch_state_v0_t");
     if (structType.isInitialized()) return structType;
 
     auto indexType = typeConverter->convertType(IndexType::get(context));
     auto int8Type = IntegerType::get(context, 8);
+    auto uint16Type = IntegerType::get(context, 16);
     auto uint32Type = IntegerType::get(context, 32);
-    auto vec3Type = getVec3Type(context);
+    auto int8PtrType = LLVM::LLVMPointerType::get(int8Type);
+    auto uint32PtrType = LLVM::LLVMPointerType::get(uint32Type);
     SmallVector<Type, 4> fieldTypes;
 
-    // iree_hal_vec3_t workgroup_count;
-    // iree_hal_vec3_t workgroup_size;
-    fieldTypes.push_back(vec3Type);
-    fieldTypes.push_back(vec3Type);
+    // uint32_t workgroup_size_x;
+    // uint32_t workgroup_size_y;
+    // uint16_t workgroup_size_z;
+    fieldTypes.push_back(uint32Type);
+    fieldTypes.push_back(uint32Type);
+    fieldTypes.push_back(uint16Type);
 
-    // size_t push_constant_count;
+    // uint16_t push_constant_count;
+    fieldTypes.push_back(uint16Type);
+
+    // uint32_t workgroup_count_x;
+    // uint32_t workgroup_count_y;
+    // uint16_t workgroup_count_z;
+    fieldTypes.push_back(uint32Type);
+    fieldTypes.push_back(uint32Type);
+    fieldTypes.push_back(uint16Type);
+
+    // uint16_t binding_count;
+    fieldTypes.push_back(uint16Type);
+
     // const uint32_t * push_constants;
-    fieldTypes.push_back(indexType);
-    fieldTypes.push_back(LLVM::LLVMPointerType::get(uint32Type));
-
-    // size_t binding_count;
+    fieldTypes.push_back(uint32PtrType);
     // void *const * binding_ptrs;
     // const size_t * binding_lengths;
-    fieldTypes.push_back(indexType);
-    fieldTypes.push_back(
-        LLVM::LLVMPointerType::get(LLVM::LLVMPointerType::get(int8Type)));
+    fieldTypes.push_back(LLVM::LLVMPointerType::get(int8PtrType));
     fieldTypes.push_back(LLVM::LLVMPointerType::get(indexType));
 
-    // TODO(benvanik): import_thunk/import and a callImport() helper function.
+    LogicalResult bodySet = structType.setBody(fieldTypes, /*isPacked=*/false);
+    assert(succeeded(bodySet) &&
+           "could not set the body of an identified struct");
+    (void)bodySet;
+
+    return structType;
+  }
+
+  enum class WorkgroupStateField {
+    /*uint32_t*/ workgroup_id_x = 0,
+    /*uint32_t*/ workgroup_id_y,
+    /*uint16_t*/ workgroup_id_z,
+    /*uint16_t*/ reserved,
+    /*uint32_t*/ processor_id,
+    /*intptr_t*/ local_memory,
+    /*uint32_t*/ local_memory_size,
+  };
+  friend WorkgroupStateField operator+(WorkgroupStateField lhs, int32_t rhs) {
+    return static_cast<WorkgroupStateField>(static_cast<int32_t>(lhs) + rhs);
+  }
+
+  // Returns a Type representing iree_hal_executable_workgroup_state_v0_t.
+  static LLVM::LLVMStructType getWorkgroupStateType(
+      MLIRContext *context, LLVMTypeConverter *typeConverter) {
+    static llvm::sys::Mutex mutex;
+    llvm::sys::ScopedLock lock(mutex);
+    auto structType = LLVM::LLVMStructType::getIdentified(
+        context, "iree_hal_executable_workgroup_state_v0_t");
+    if (structType.isInitialized()) return structType;
+
+    auto int8Type = IntegerType::get(context, 8);
+    auto uint16Type = IntegerType::get(context, 16);
+    auto uint32Type = IntegerType::get(context, 32);
+    auto int8PtrType = LLVM::LLVMPointerType::get(int8Type);
+    SmallVector<Type, 4> fieldTypes;
+
+    // uint32_t workgroup_id_x;
+    // uint32_t workgroup_id_y;
+    // uint16_t workgroup_id_z;
+    fieldTypes.push_back(uint32Type);
+    fieldTypes.push_back(uint32Type);
+    fieldTypes.push_back(uint16Type);
+
+    // uint16_t reserved;
+    fieldTypes.push_back(uint16Type);
+
+    // uint32_t processor_id;
+    fieldTypes.push_back(uint32Type);
+
+    // void* local_memory;
+    // uint32_t local_memory_size;
+    fieldTypes.push_back(LLVM::LLVMPointerType::get(int8PtrType));
+    fieldTypes.push_back(uint32Type);
 
     LogicalResult bodySet = structType.setBody(fieldTypes, /*isPacked=*/false);
     assert(succeeded(bodySet) &&
@@ -124,15 +272,28 @@ class HALDispatchABI {
   // `iree/hal/local/executable_library.h`.
   static SmallVector<Type, 5> getInputTypes(MLIRContext *context,
                                             LLVMTypeConverter *typeConverter) {
+    auto environmentType = LLVM::LLVMStructType::getIdentified(
+        context, "iree_hal_executable_environment_v0_t");
+    assert(environmentType &&
+           "environment type must be defined by ConvertToLLVM");
+    auto dispatchStateType = LLVM::LLVMStructType::getIdentified(
+        context, "iree_hal_executable_dispatch_state_v0_t");
+    assert(dispatchStateType &&
+           "dispatch state type must be defined by ConvertToLLVM");
+    auto workgroupStateType = LLVM::LLVMStructType::getIdentified(
+        context, "iree_hal_executable_workgroup_state_v0_t");
+    assert(workgroupStateType &&
+           "workgroup state type must be defined by ConvertToLLVM");
     return SmallVector<Type, 5>{
+        // const iree_hal_executable_environment_v0_t* IREE_RESTRICT
+        //   environment
+        LLVM::LLVMPointerType::get(environmentType),
         // const iree_hal_executable_dispatch_state_v0_t* IREE_RESTRICT
         //   dispatch_state
-        LLVM::LLVMPointerType::get(
-            getDispatchStateType(context, typeConverter)),
-        // const iree_hal_vec3_t* IREE_RESTRICT workgroup_id
-        LLVM::LLVMPointerType::get(getVec3Type(context)),
-        // void* IREE_RESTRICT local_memory
-        LLVM::LLVMPointerType::get(IntegerType::get(context, 8)),
+        LLVM::LLVMPointerType::get(dispatchStateType),
+        // const iree_hal_executable_workgroup_state_v0_t* IREE_RESTRICT
+        //   workgroup_state
+        LLVM::LLVMPointerType::get(workgroupStateType),
     };
   }
 
@@ -140,52 +301,60 @@ class HALDispatchABI {
                           LLVMTypeConverter *typeConverter)
       : funcOp(funcOp),
         typeConverter(typeConverter),
+        processorType(getProcessorType(funcOp.getContext(), typeConverter)),
+        environmentType(getEnvironmentType(funcOp.getContext(), typeConverter,
+                                           processorType)),
         dispatchStateType(
-            getDispatchStateType(funcOp.getContext(), typeConverter)) {}
+            getDispatchStateType(funcOp.getContext(), typeConverter)),
+        workgroupStateType(
+            getWorkgroupStateType(funcOp.getContext(), typeConverter)) {}
+
+  LLVM::LLVMFuncOp getFuncOp() { return funcOp; }
 
   // Loads the workgroup_id[dim] value (XYZ) and casts it to |resultType|.
   Value loadWorkgroupID(Location loc, int32_t dim, Type resultType,
                         OpBuilder &builder) {
-    auto workgroupIdPtrValue = funcOp.getArgument(1);
-    auto workgroupIdValue =
-        builder.createOrFold<LLVM::LoadOp>(loc, workgroupIdPtrValue);
-    auto dimValue = builder.createOrFold<LLVM::ExtractValueOp>(
-        loc, builder.getIntegerType(32), workgroupIdValue,
-        builder.getI64ArrayAttr({dim}));
+    auto dimValue =
+        loadFieldValue(loc, WorkgroupStateField::workgroup_id_x + dim, builder);
     return castValueToType(loc, dimValue, resultType, builder);
   }
 
   // Loads the workgroup_count[dim] value (XYZ) and casts it to |resultType|.
   Value loadWorkgroupCount(Location loc, int32_t dim, Type resultType,
                            OpBuilder &builder) {
-    auto workgroupCountValue =
-        loadFieldValue(loc, Field::workgroup_count, builder);
-    auto dimValue = builder.createOrFold<LLVM::ExtractValueOp>(
-        loc, builder.getIntegerType(32), workgroupCountValue,
-        builder.getI64ArrayAttr(dim));
+    auto dimValue = loadFieldValue(
+        loc, DispatchStateField::workgroup_count_x + dim, builder);
     return castValueToType(loc, dimValue, resultType, builder);
   }
 
   // Loads the workgroup_size[dim] value (XYZ) and casts it to |resultType|.
   Value loadWorkgroupSize(Location loc, int32_t dim, Type resultType,
                           OpBuilder &builder) {
-    auto workgroupSizeValue =
-        loadFieldValue(loc, Field::workgroup_size, builder);
-    auto dimValue = builder.createOrFold<LLVM::ExtractValueOp>(
-        loc, builder.getIntegerType(32), workgroupSizeValue,
-        builder.getI64ArrayAttr(dim));
+    auto dimValue = loadFieldValue(
+        loc, DispatchStateField::workgroup_size_x + dim, builder);
     return castValueToType(loc, dimValue, resultType, builder);
+  }
+
+  // Returns the total number of bytes available in workgroup local memory.
+  // This may be larger than the requested size.
+  Value loadWorkgroupLocalMemorySize(Location loc, OpBuilder &builder) {
+    auto value =
+        loadFieldValue(loc, WorkgroupStateField::local_memory_size, builder);
+    return castValueToType(loc, value,
+                           typeConverter->convertType(builder.getIndexType()),
+                           builder);
   }
 
   // Loads the base pointer of the workgroup local memory.
   // Note that this may be NULL if no workgroup local memory was requested.
   Value loadWorkgroupLocalMemoryPtr(Location loc, OpBuilder &builder) {
-    return funcOp.getArgument(2);
+    return loadFieldValue(loc, WorkgroupStateField::local_memory, builder);
   }
 
   // Returns the total push constant count as an index-converted type.
   Value loadPushConstantCount(Location loc, OpBuilder &builder) {
-    auto value = loadFieldValue(loc, Field::push_constant_count, builder);
+    auto value =
+        loadFieldValue(loc, DispatchStateField::push_constant_count, builder);
     return castValueToType(loc, value,
                            typeConverter->convertType(builder.getIndexType()),
                            builder);
@@ -195,7 +364,7 @@ class HALDispatchABI {
   Value loadPushConstant(Location loc, int64_t offset, Type resultType,
                          OpBuilder &builder) {
     auto constantsPtrValue =
-        loadFieldValue(loc, Field::push_constants, builder);
+        loadFieldValue(loc, DispatchStateField::push_constants, builder);
     auto offsetValue = getIndexValue(loc, offset, builder);
     Value constantPtrValue = builder.create<LLVM::GEPOp>(
         loc, constantsPtrValue.getType(), constantsPtrValue, offsetValue);
@@ -205,7 +374,8 @@ class HALDispatchABI {
 
   // Returns the total binding count as an index-converted type.
   Value loadBindingCount(Location loc, OpBuilder &builder) {
-    auto value = loadFieldValue(loc, Field::binding_count, builder);
+    auto value =
+        loadFieldValue(loc, DispatchStateField::binding_count, builder);
     return castValueToType(loc, value,
                            typeConverter->convertType(builder.getIndexType()),
                            builder);
@@ -215,7 +385,8 @@ class HALDispatchABI {
   // Equivalent to:
   //   int8_t** base_ptr = &state->binding_ptrs[ordinal];
   Value loadBindingPtr(Location loc, int64_t ordinal, OpBuilder &builder) {
-    auto ptrsPtrValue = loadFieldValue(loc, Field::binding_ptrs, builder);
+    auto ptrsPtrValue =
+        loadFieldValue(loc, DispatchStateField::binding_ptrs, builder);
     auto ordinalValue = getIndexValue(loc, ordinal, builder);
     auto elementPtrValue = builder.createOrFold<LLVM::GEPOp>(
         loc, ptrsPtrValue.getType(), ptrsPtrValue, ordinalValue);
@@ -224,7 +395,8 @@ class HALDispatchABI {
 
   // Loads the byte length of the binding |ordinal| as an index-converted type.
   Value loadBindingLength(Location loc, int64_t ordinal, OpBuilder &builder) {
-    auto lengthsPtrValue = loadFieldValue(loc, Field::binding_lengths, builder);
+    auto lengthsPtrValue =
+        loadFieldValue(loc, DispatchStateField::binding_lengths, builder);
     auto ordinalValue = getIndexValue(loc, ordinal, builder);
     auto elementPtrValue = builder.createOrFold<LLVM::GEPOp>(
         loc, lengthsPtrValue.getType(), lengthsPtrValue, ordinalValue);
@@ -299,15 +471,82 @@ class HALDispatchABI {
     }
   }
 
- private:
-  Value loadFieldValue(Location loc, Field field, OpBuilder &builder) {
-    auto statePtrValue = funcOp.getArgument(0);
-    auto stateValue = builder.createOrFold<LLVM::LoadOp>(loc, statePtrValue);
-    auto fieldType = dispatchStateType.getBody()[(int)field];
-    return builder.createOrFold<LLVM::ExtractValueOp>(
-        loc, fieldType, stateValue, builder.getI64ArrayAttr((int)field));
+  // Loads the processor ID the code is (most likely) being run on.
+  // Equivalent to:
+  //   uint32_t processor_id = state->processor_id;
+  Value loadProcessorID(Location loc, OpBuilder &builder) {
+    return loadFieldValue(loc, WorkgroupStateField::processor_id, builder);
   }
 
+  // Loads a processor information data field at the given index.
+  // May be 0 if the field is not available.
+  Value loadProcessorData(Location loc, int64_t index, OpBuilder &builder) {
+    // Load the value; it should always be in bounds.
+    Value dataArrayValue = loadFieldValue(loc, ProcessorField::data, builder);
+    Type elementType =
+        dataArrayValue.getType().cast<LLVM::LLVMArrayType>().getElementType();
+    Value dataValue = builder.create<LLVM::ExtractValueOp>(
+        loc, elementType, dataArrayValue, builder.getI64ArrayAttr(index));
+    return dataValue;
+  }
+
+  // Loads an executable constant at |index| and casts it to |resultType|.
+  Value loadExecutableConstant(Location loc, int64_t index, Type resultType,
+                               OpBuilder &builder) {
+    auto constantsPtrValue =
+        loadFieldValue(loc, EnvironmentField::constants, builder);
+    auto indexValue = getIndexValue(loc, index, builder);
+    Value constantPtrValue = builder.create<LLVM::GEPOp>(
+        loc, constantsPtrValue.getType(), constantsPtrValue, indexValue);
+    Value constantValue = builder.create<LLVM::LoadOp>(loc, constantPtrValue);
+    return castValueToType(loc, constantValue, resultType, builder);
+  }
+
+  // Loads the import function pointer of the import |ordinal|.
+  // Equivalent to:
+  //   iree_hal_executable_import_v0_t func_ptr = state->imports[ordinal];
+  Value loadImportFuncPtr(Location loc, int64_t ordinal, OpBuilder &builder) {
+    auto importsPtrValue =
+        loadFieldValue(loc, EnvironmentField::imports, builder);
+    auto ordinalValue = getIndexValue(loc, ordinal, builder);
+    auto elementPtrValue = builder.createOrFold<LLVM::GEPOp>(
+        loc, importsPtrValue.getType(), importsPtrValue, ordinalValue);
+    return builder.createOrFold<LLVM::LoadOp>(loc, elementPtrValue);
+  }
+
+  // Returns an i1 indicating whether the weak import with |ordinal| is defined.
+  // Equivalent to:
+  //   state->imports[ordinal] != NULL
+  Value isImportFuncAvailable(Location loc, int64_t ordinal,
+                              OpBuilder &builder) {
+    auto importPtrValue = loadImportFuncPtr(loc, ordinal, builder);
+    auto nullPtrValue =
+        builder.create<LLVM::NullOp>(loc, importPtrValue.getType()).getResult();
+    return builder.create<LLVM::ICmpOp>(loc, builder.getI1Type(),
+                                        LLVM::ICmpPredicate::ne, importPtrValue,
+                                        nullPtrValue);
+  }
+
+  // Emits a call to the import with the given |importOrdinal|.
+  // The provided |params| struct containing the function-specific arguments
+  // is passed without modification.
+  // Returns 0 on success and non-zero otherwise.
+  Value callImport(Location loc, unsigned importOrdinal, Value params,
+                   OpBuilder &builder) {
+    auto thunkPtrValue =
+        loadFieldValue(loc, EnvironmentField::import_thunk, builder);
+    auto importPtrValue = loadImportFuncPtr(loc, importOrdinal, builder);
+    auto callOp =
+        builder.create<LLVM::CallOp>(loc, TypeRange{builder.getI32Type()},
+                                     ValueRange{
+                                         /*thunk_func_ptr=*/thunkPtrValue,
+                                         /*import_func_ptr=*/importPtrValue,
+                                         /*import_params=*/params,
+                                     });
+    return callOp.getResult(0);
+  }
+
+ private:
   Value getIndexValue(Location loc, int64_t value, OpBuilder &builder) {
     return builder.createOrFold<LLVM::ConstantOp>(
         loc, typeConverter->convertType(builder.getIndexType()),
@@ -321,9 +560,48 @@ class HALDispatchABI {
     return builder.createOrFold<LLVM::ZExtOp>(loc, resultType, value);
   }
 
+  Value loadFieldValue(Location loc, EnvironmentField field,
+                       OpBuilder &builder) {
+    auto environmentPtrValue = funcOp.getArgument(0);
+    Value environmentValue =
+        builder.create<LLVM::LoadOp>(loc, environmentPtrValue);
+    Type fieldType = environmentType.getBody()[(int)field];
+    return builder.createOrFold<LLVM::ExtractValueOp>(
+        loc, fieldType, environmentValue, builder.getI64ArrayAttr((int)field));
+  }
+
+  Value loadFieldValue(Location loc, ProcessorField field, OpBuilder &builder) {
+    Value processorValue =
+        loadFieldValue(loc, EnvironmentField::processor, builder);
+    Type fieldType = processorType.getBody()[(int)field];
+    return builder.createOrFold<LLVM::ExtractValueOp>(
+        loc, fieldType, processorValue, builder.getI64ArrayAttr((int)field));
+  }
+
+  Value loadFieldValue(Location loc, DispatchStateField field,
+                       OpBuilder &builder) {
+    Value statePtrValue = funcOp.getArgument(1);
+    Value stateValue = builder.createOrFold<LLVM::LoadOp>(loc, statePtrValue);
+    Type fieldType = dispatchStateType.getBody()[(int)field];
+    return builder.createOrFold<LLVM::ExtractValueOp>(
+        loc, fieldType, stateValue, builder.getI64ArrayAttr((int)field));
+  }
+
+  Value loadFieldValue(Location loc, WorkgroupStateField field,
+                       OpBuilder &builder) {
+    Value statePtrValue = funcOp.getArgument(2);
+    Value stateValue = builder.createOrFold<LLVM::LoadOp>(loc, statePtrValue);
+    Type fieldType = dispatchStateType.getBody()[(int)field];
+    return builder.createOrFold<LLVM::ExtractValueOp>(
+        loc, fieldType, stateValue, builder.getI64ArrayAttr((int)field));
+  }
+
   LLVM::LLVMFuncOp funcOp;
   LLVMTypeConverter *typeConverter;
+  LLVM::LLVMStructType processorType;
+  LLVM::LLVMStructType environmentType;
   LLVM::LLVMStructType dispatchStateType;
+  LLVM::LLVMStructType workgroupStateType;
 };
 
 /// Converts Standard MLIR FuncOps to LLVMFuncOps matching the IREE HAL ABI.
@@ -333,7 +611,7 @@ class HALDispatchABI {
 /// Source function:
 ///
 /// ```
-/// func @foo() {
+/// func.func @foo() {
 ///   %0 = hal.interface.binding.subspan ...
 /// }
 /// ```
@@ -350,20 +628,20 @@ class HALDispatchABI {
 /// See `iree/hal/local/executable_library.h` for more information.
 ///
 /// NOTE: we bump the benefit of the pattern to 100 to pick this pattern instead
-/// of a competing pattern inserted by `populateStdToLLVMConversionPatterns`.
+/// of a competing pattern inserted by `populateFuncToLLVMConversionPatterns`.
 class ConvertHALEntryPointFuncOp : public ConvertToLLVMPattern {
  public:
   explicit ConvertHALEntryPointFuncOp(MLIRContext *context,
                                       LLVMTypeConverter &converter)
-      : ConvertToLLVMPattern(mlir::FuncOp::getOperationName(), context,
+      : ConvertToLLVMPattern(mlir::func::FuncOp::getOperationName(), context,
                              converter, 100) {}
 
   LogicalResult matchAndRewrite(
       Operation *op, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
-    auto stdFuncOp = cast<FuncOp>(op);
+    auto stdFuncOp = cast<func::FuncOp>(op);
     if (!stdFuncOp.isPublic()) return failure();
-    FunctionType fnType = stdFuncOp.getType();
+    FunctionType fnType = stdFuncOp.getFunctionType();
     if (fnType.getNumInputs() != 0 || fnType.getNumResults() != 0) {
       op->emitWarning() << "public functions on executables must be () -> ()";
       return failure();
@@ -380,8 +658,8 @@ class ConvertHALEntryPointFuncOp : public ConvertToLLVMPattern {
     // MLIR implicitly.
     SmallVector<NamedAttribute, 4> funcAttrs;
     for (auto attr : stdFuncOp->getAttrs()) {
-      if (attr.first == SymbolTable::getSymbolAttrName() ||
-          attr.first == mlir::function_like_impl::getTypeAttrName()) {
+      if (attr.getName() == SymbolTable::getSymbolAttrName() ||
+          attr.getName() == mlir::function_interface_impl::getTypeAttrName()) {
         continue;
       }
       funcAttrs.push_back(attr);
@@ -400,15 +678,26 @@ class ConvertHALEntryPointFuncOp : public ConvertToLLVMPattern {
       return failure();
     }
 
+    // Tag all arguments so LLVM can reason about our exports it otherwise
+    // cannot analyze. We do this early on so that MLIR-based LLVM transforms
+    // can use the attributes.
+    // (%arg0: environment, %arg1: dispatch_state, %arg2: workgroup_state)
+    for (unsigned i = 0; i <= 2; ++i) {
+      llvmFuncOp.setArgAttr(i, LLVM::LLVMDialect::getNoAliasAttrName(),
+                            rewriter.getUnitAttr());
+      llvmFuncOp.setArgAttr(i, LLVM::LLVMDialect::getAlignAttrName(),
+                            rewriter.getI64IntegerAttr(16));
+    }
+
     // Add default zero return value.
     // TODO(ataei): do something meaningful with the return value; non-zero will
     // have the runtime bail out with an error.
-    for (auto returnOp :
-         llvm::make_early_inc_range(llvmFuncOp.getOps<mlir::ReturnOp>())) {
+    for (auto returnOp : llvm::make_early_inc_range(
+             llvmFuncOp.getOps<mlir::func::ReturnOp>())) {
       rewriter.setInsertionPoint(returnOp);
       auto returnValue = rewriter.createOrFold<mlir::arith::ConstantIntOp>(
           returnOp.getLoc(), 0, 32);
-      rewriter.replaceOpWithNewOp<mlir::ReturnOp>(returnOp, returnValue);
+      rewriter.replaceOpWithNewOp<mlir::func::ReturnOp>(returnOp, returnValue);
     }
 
     rewriter.eraseOp(stdFuncOp);
@@ -497,7 +786,7 @@ class ConvertHALInterfaceWorkgroupCountOp : public ConvertToLLVMPattern {
   }
 };
 
-/// Rewrites hal.interface.load.constant to ops loading from the ABI structs.
+/// Rewrites hal.interface.constant.load to ops loading from the ABI structs.
 ///
 /// The parent LLVMFuncOp must be compatible with HALDispatchABI.
 class ConvertHALInterfaceLoadConstant : public ConvertToLLVMPattern {
@@ -505,7 +794,7 @@ class ConvertHALInterfaceLoadConstant : public ConvertToLLVMPattern {
   explicit ConvertHALInterfaceLoadConstant(MLIRContext *context,
                                            LLVMTypeConverter &converter)
       : ConvertToLLVMPattern(
-            IREE::HAL::InterfaceLoadConstantOp::getOperationName(), context,
+            IREE::HAL::InterfaceConstantLoadOp::getOperationName(), context,
             converter) {}
 
   LogicalResult matchAndRewrite(
@@ -514,11 +803,11 @@ class ConvertHALInterfaceLoadConstant : public ConvertToLLVMPattern {
     auto llvmFuncOp = op->getParentOfType<LLVM::LLVMFuncOp>();
     if (!llvmFuncOp) return failure();
     HALDispatchABI abi(llvmFuncOp, getTypeConverter());
-    auto loadConstantOp = cast<IREE::HAL::InterfaceLoadConstantOp>(op);
-    int64_t offset = loadConstantOp.offset().getZExtValue();
+    auto loadConstantOp = cast<IREE::HAL::InterfaceConstantLoadOp>(op);
+    int64_t index = loadConstantOp.index().getZExtValue();
     auto resultType = typeConverter->convertType(op->getResult(0).getType());
     rewriter.replaceOp(
-        op, abi.loadPushConstant(op->getLoc(), offset, resultType, rewriter));
+        op, abi.loadPushConstant(op->getLoc(), index, resultType, rewriter));
     return success();
   }
 };
@@ -540,34 +829,19 @@ class ConvertHALInterfaceBindingSubspanOp : public ConvertToLLVMPattern {
     auto llvmFuncOp = op->getParentOfType<LLVM::LLVMFuncOp>();
     if (!llvmFuncOp) return failure();
     HALDispatchABI abi(llvmFuncOp, getTypeConverter());
-    auto interfaceBindingOp =
-        cast<IREE::HAL::InterfaceBindingSubspanOp>(op).queryBindingOp();
     IREE::HAL::InterfaceBindingSubspanOpAdaptor newOperands(
         operands, op->getAttrDictionary());
     MemRefType memRefType = op->getResult(0).getType().dyn_cast<MemRefType>();
-    if (!memRefType)
+    if (!memRefType) {
       return rewriter.notifyMatchFailure(
           op,
           "failed to convert interface.binding.subspan result to memref type");
-    auto memRefDesc = abi.loadBinding(
-        op->getLoc(), interfaceBindingOp.binding().getZExtValue(),
-        newOperands.byte_offset(), memRefType, newOperands.dynamic_dims(),
-        rewriter);
+    }
+    auto memRefDesc =
+        abi.loadBinding(op->getLoc(), newOperands.bindingAttr().getInt(),
+                        newOperands.byte_offset(), memRefType,
+                        newOperands.dynamic_dims(), rewriter);
     rewriter.replaceOp(op, {memRefDesc});
-    return success();
-  }
-};
-
-class RemoveHALInterfaceOpPattern : public ConvertToLLVMPattern {
- public:
-  explicit RemoveHALInterfaceOpPattern(MLIRContext *context,
-                                       LLVMTypeConverter &typeconverter)
-      : ConvertToLLVMPattern(IREE::HAL::InterfaceOp::getOperationName(),
-                             context, typeconverter) {}
-  LogicalResult matchAndRewrite(
-      Operation *op, ArrayRef<Value> operands,
-      ConversionPatternRewriter &rewriter) const override {
-    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -577,7 +851,7 @@ class ConvertToLLVMPass : public ConvertToLLVMBase<ConvertToLLVMPass> {
   ConvertToLLVMPass() = default;
   ConvertToLLVMPass(const ConvertToLLVMPass &pass) {}
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<LLVM::LLVMDialect>();
+    registry.insert<LLVM::LLVMDialect, arm_neon::ArmNeonDialect>();
   }
 
   void runOnOperation() override;
@@ -628,28 +902,27 @@ void ConvertToLLVMPass::runOnOperation() {
 
   // Run Vector -> Vector transformations ahead of conversion to LLVM.
   {
-    OwningRewritePatternList patterns(&getContext());
+    RewritePatternSet patterns(&getContext());
     vector::populateVectorToVectorCanonicalizationPatterns(patterns);
     vector::populateVectorBroadcastLoweringPatterns(patterns);
     vector::populateVectorContractLoweringPatterns(patterns);
     vector::populateVectorMaskOpLoweringPatterns(patterns);
     vector::populateVectorShapeCastLoweringPatterns(patterns);
     vector::populateVectorTransposeLoweringPatterns(patterns);
-    (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+    populateConvertArmNeon2dToIntrPatterns(patterns);
+    if (failed(applyPatternsAndFoldGreedily(getOperation(),
+                                            std::move(patterns)))) {
+      return signalPassFailure();
+    }
   }
   {
-    OwningRewritePatternList vectorToLoopsPatterns(&getContext());
+    RewritePatternSet vectorToLoopsPatterns(&getContext());
     populateVectorToSCFConversionPatterns(
-        vectorToLoopsPatterns, VectorTransferToSCFOptions().setUnroll(true));
-    (void)applyPatternsAndFoldGreedily(getOperation(),
-                                       std::move(vectorToLoopsPatterns));
-  }
-
-  // math dialect elementry functions -> polynomial form.
-  {
-    OwningRewritePatternList mathPatterns(&getContext());
-    populateMathPolynomialApproximationPatterns(mathPatterns);
-    (void)applyPatternsAndFoldGreedily(getOperation(), std::move(mathPatterns));
+        vectorToLoopsPatterns, VectorTransferToSCFOptions().enableFullUnroll());
+    if (failed(applyPatternsAndFoldGreedily(
+            getOperation(), std::move(vectorToLoopsPatterns)))) {
+      return signalPassFailure();
+    }
   }
 
   const auto &dataLayoutAnalysis = getAnalysis<DataLayoutAnalysis>();
@@ -659,7 +932,7 @@ void ConvertToLLVMPass::runOnOperation() {
   options.overrideIndexBitwidth(options.dataLayout.getPointerSizeInBits());
   LLVMTypeConverter converter(&getContext(), options, &dataLayoutAnalysis);
 
-  OwningRewritePatternList patterns(&getContext());
+  RewritePatternSet patterns(&getContext());
 
   // Use the default 64-bit lowering for TOSA's ApplyScale operator:
   //   This lowering widens integer types to 64-bit an performs the non-fused
@@ -671,12 +944,13 @@ void ConvertToLLVMPass::runOnOperation() {
   tosa::populateTosaRescaleToStandardConversionPatterns(&patterns);
 
   populateAffineToStdConversionPatterns(patterns);
-  populateLoopToStdConversionPatterns(patterns);
+  populateSCFToControlFlowConversionPatterns(patterns);
+  cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
   populateExpandTanhPattern(patterns);
 
   populateMathToLLVMConversionPatterns(converter, patterns);
   populateMemRefToLLVMConversionPatterns(converter, patterns);
-  populateStdToLLVMConversionPatterns(converter, patterns);
+  populateFuncToLLVMConversionPatterns(converter, patterns);
   arith::populateArithmeticToLLVMConversionPatterns(converter, patterns);
   populateVectorToSCFConversionPatterns(patterns);
   populateVectorToLLVMMatrixConversionPatterns(converter, patterns);
@@ -691,53 +965,49 @@ void ConvertToLLVMPass::runOnOperation() {
     ConvertHALInterfaceWorkgroupSizeOp,
     ConvertHALInterfaceWorkgroupCountOp,
     ConvertHALInterfaceLoadConstant,
-    ConvertHALInterfaceBindingSubspanOp,
-    RemoveHALInterfaceOpPattern
+    ConvertHALInterfaceBindingSubspanOp
   >(&getContext(), converter);
   // clang-format on
 
   LLVMConversionTarget target(getContext());
-  // IREE::HAL::InterfaceOp will be removed after successful conversion of the
-  // rest of the IR.
-  target.addLegalOp<ModuleOp, IREE::HAL::InterfaceOp,
-                    IREE::HAL::InterfaceBindingOp, IREE::HAL::InterfaceEndOp>();
-  target.addIllegalDialect<ShapeDialect, StandardOpsDialect,
-                           mlir::arith::ArithmeticDialect,
+  target.addLegalOp<ModuleOp>();
+  target.addIllegalDialect<func::FuncDialect, mlir::arith::ArithmeticDialect,
                            IREE::Util::UtilDialect, IREE::HAL::HALDialect,
                            math::MathDialect, tosa::TosaDialect>();
   target.addIllegalOp<UnrealizedConversionCastOp>();
 
   // Don't apply patterns to private function (e.g num_workgroups func).
-  target.addDynamicallyLegalOp<FuncOp>([&](FuncOp funcOp) {
+  target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp funcOp) {
     if (isEntryPoint(funcOp)) return false;
     return true;
   });
-  target.addDynamicallyLegalDialect<
-      ShapeDialect, StandardOpsDialect, mlir::math::MathDialect,
-      mlir::arith::ArithmeticDialect, IREE::Util::UtilDialect,
-      IREE::HAL::HALDialect, math::MathDialect>([&](Operation *op) {
-    auto funcParent = op->getParentOfType<FuncOp>();
-    if (!funcParent) return false;
-    if (isEntryPoint(funcParent)) return false;
-    return true;
-  });
+  target.addDynamicallyLegalDialect<func::FuncDialect, mlir::math::MathDialect,
+                                    mlir::arith::ArithmeticDialect,
+                                    IREE::Util::UtilDialect,
+                                    IREE::HAL::HALDialect, math::MathDialect>(
+      [&](Operation *op) {
+        auto funcParent = op->getParentOfType<func::FuncOp>();
+        if (!funcParent) return false;
+        if (isEntryPoint(funcParent)) return false;
+        return true;
+      });
 
   if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
     signalPassFailure();
     return;
   }
 
-  // Once we're done with conversion, remove InterfaceOp.
-  module.walk([](IREE::HAL::InterfaceOp op) { op.erase(); });
-
   // Post conversion patterns.
   {
-    OwningRewritePatternList postPatterns(&getContext());
+    RewritePatternSet postPatterns(&getContext());
     // TODO(ravishankarm): Move this to a separate pass.
     llvm::Triple triple(targetTripleStr);
     if (triple.isWasm()) {
       populateUnfusedFMAOpsPassPatterns(&getContext(), postPatterns);
-      (void)applyPatternsAndFoldGreedily(module, std::move(postPatterns));
+      if (failed(
+              applyPatternsAndFoldGreedily(module, std::move(postPatterns)))) {
+        return signalPassFailure();
+      }
     }
   }
 }

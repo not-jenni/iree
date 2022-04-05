@@ -4,6 +4,7 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtDialect.h"
 #include "iree/compiler/Codegen/Dialect/IREECodegenDialect.h"
 #include "iree/compiler/Codegen/Dialect/LoweringConfig.h"
 #include "iree/compiler/Codegen/PassDetail.h"
@@ -11,9 +12,9 @@
 #include "iree/compiler/Codegen/SPIRV/KernelConfig.h"
 #include "iree/compiler/Dialect/HAL/IR/HALDialect.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
-#include "iree/compiler/Dialect/LinalgExt/IR/LinalgExtDialect.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
+#include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -37,11 +38,11 @@ class SPIRVLowerExecutableTargetPass
   SPIRVLowerExecutableTargetPass(const SPIRVLowerExecutableTargetPass &pass) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<IREE::Codegen::IREECodegenDialect, AffineDialect,
-                    gpu::GPUDialect, IREE::HAL::HALDialect,
-                    linalg::LinalgDialect, linalg_ext::LinalgExtDialect,
-                    memref::MemRefDialect, scf::SCFDialect, ShapeDialect,
-                    spirv::SPIRVDialect, vector::VectorDialect>();
+    registry
+        .insert<IREE::Codegen::IREECodegenDialect, AffineDialect,
+                gpu::GPUDialect, IREE::HAL::HALDialect, linalg::LinalgDialect,
+                IREE::LinalgExt::IREELinalgExtDialect, memref::MemRefDialect,
+                scf::SCFDialect, spirv::SPIRVDialect, vector::VectorDialect>();
   }
 
   void runOnOperation() override;
@@ -93,17 +94,14 @@ void SPIRVLowerExecutableTargetPass::runOnOperation() {
     }
   }
 
-  executableLoweringPipeline.addPass(createSetNumWorkgroupsPass());
-  executableLoweringPipeline.addPass(createCanonicalizerPass());
   if (!testLoweringConfiguration && passPipeline.hasValue()) {
     OpPassManager &nestedModulePM = executableLoweringPipeline.nest<ModuleOp>();
     switch (*passPipeline) {
       case IREE::Codegen::DispatchLoweringPassPipeline::SPIRVDistribute:
         addSPIRVTileAndDistributePassPipeline(nestedModulePM);
         break;
-      case IREE::Codegen::DispatchLoweringPassPipeline::
-          SPIRVDistributeToGlobalID:
-        addSPIRVDistributeToGlobalIDPassPipeline(nestedModulePM);
+      case IREE::Codegen::DispatchLoweringPassPipeline::SPIRVDistributeCopy:
+        addSPIRVTileAndDistributeCopyPassPipeline(nestedModulePM);
         break;
       case IREE::Codegen::DispatchLoweringPassPipeline::SPIRVVectorize:
         addSPIRVTileAndVectorizePassPipeline(nestedModulePM);
@@ -113,12 +111,13 @@ void SPIRVLowerExecutableTargetPass::runOnOperation() {
         addSPIRVTileAndVectorizeToCooperativeOpsPassPipeline(nestedModulePM);
         break;
       default:
-        llvm_unreachable("Unsupported pipeline on GPU target.");
+        variantOp.emitOpError("Unsupported pipeline on GPU target.");
+        return signalPassFailure();
     }
   }
 
   LLVM_DEBUG({
-    llvm::dbgs() << "Using SPIRV Lowering Pass pipeline :\n";
+    llvm::dbgs() << "Using SPIR-V lowering pass pipeline:\n";
     executableLoweringPipeline.printAsTextualPipeline(llvm::dbgs());
     llvm::dbgs() << "\n";
   });

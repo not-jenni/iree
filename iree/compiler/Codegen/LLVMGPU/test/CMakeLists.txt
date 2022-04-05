@@ -19,13 +19,16 @@ iree_lit_test_suite(
     "distribute_to_thread.mlir"
     "distribute_wg_copy.mlir"
     "gpu_set_num_workgroups.mlir"
+    "illegal_configuration.mlir"
     "legalize.mlir"
     "nvvm_pipeline_test.mlir"
-    "remove_loops.mlir"
+    "reduce_bank_conflicts.mlir"
     "rocdl_pipeline_test.mlir"
+    "tensorcore_vectorization.mlir"
+    "vector_to_gpu.mlir"
     "vectorization.mlir"
-  DATA
-    iree::tools::IreeFileCheck
+  TOOLS
+    FileCheck
     iree::tools::iree-opt
 )
 

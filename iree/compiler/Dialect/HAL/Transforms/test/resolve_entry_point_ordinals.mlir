@@ -1,14 +1,13 @@
-// RUN: iree-opt -split-input-file -iree-hal-resolve-entry-point-ordinals %s | IreeFileCheck %s
+// RUN: iree-opt -split-input-file -iree-hal-resolve-entry-point-ordinals %s | FileCheck %s
 
 hal.executable @exe {
-  hal.interface @interface {
-    hal.interface.binding @s0b0, set=0, binding=0, type="StorageBuffer", access="Read"
-    hal.interface.binding @s0b1, set=0, binding=1, type="StorageBuffer", access="Read|Write"
-  }
-  hal.executable.variant @target, target = #hal.executable.target<"vmvx", "vmvx-bytecode-fb"> {
-    hal.executable.entry_point @entry attributes {
-      interface = @interface,
-      ordinal = 0 : index,
+  hal.executable.variant @target, target = <"vmvx", "vmvx-bytecode-fb"> {
+    hal.executable.entry_point @entry ordinal(0) layout(#hal.executable.layout<push_constants = 0, sets = [
+      #hal.descriptor_set.layout<0, bindings = [
+        #hal.descriptor_set.binding<0, storage_buffer>,
+        #hal.descriptor_set.binding<1, storage_buffer>
+      ]>
+    ]>) {
       workgroup_size = [32 : index, 1 : index, 1 : index]
     }
   }
@@ -16,7 +15,7 @@ hal.executable @exe {
 
 // CHECK-LABEL: @dispatch_with_nested_references
 // CHECK-SAME: %[[CMD:.+]]: !hal.command_buffer
-func @dispatch_with_nested_references(%cmd : !hal.command_buffer) {
+func.func @dispatch_with_nested_references(%cmd : !hal.command_buffer) {
   %c10 = arith.constant 10 : index
   %c11 = arith.constant 11 : index
   %c12 = arith.constant 12 : index
@@ -36,7 +35,7 @@ func @dispatch_with_nested_references(%cmd : !hal.command_buffer) {
 // -----
 
 // CHECK-LABEL: @dispatch_already_using_ordinals
-func @dispatch_already_using_ordinals(
+func.func @dispatch_already_using_ordinals(
   // CHECK-SAME: %[[CMD:.+]]: !hal.command_buffer
   %cmd: !hal.command_buffer,
   // CHECK-SAME: %[[EXE:.+]]: !hal.executable
@@ -57,21 +56,20 @@ func @dispatch_already_using_ordinals(
 // -----
 
 hal.executable @exe {
-  hal.interface @interface {
-    hal.interface.binding @s0b0, set=0, binding=0, type="StorageBuffer", access="Read"
-    hal.interface.binding @s0b1, set=0, binding=1, type="StorageBuffer", access="Read|Write"
-  }
-  hal.executable.variant @target, target = #hal.executable.target<"vmvx", "vmvx-bytecode-fb"> {
-    hal.executable.entry_point @entry attributes {
-      interface = @interface,
-      ordinal = 0 : index,
+  hal.executable.variant @target, target = <"vmvx", "vmvx-bytecode-fb"> {
+    hal.executable.entry_point @entry ordinal(0) layout(#hal.executable.layout<push_constants = 0, sets = [
+      #hal.descriptor_set.layout<0, bindings = [
+        #hal.descriptor_set.binding<0, storage_buffer>,
+        #hal.descriptor_set.binding<1, storage_buffer>
+      ]>
+    ]>) {
       workgroup_size = [32 : index, 1 : index, 1 : index]
     }
   }
 }
 
 // CHECK-LABEL: @dispatch_indirect_with_nested_references
-func @dispatch_indirect_with_nested_references(
+func.func @dispatch_indirect_with_nested_references(
   // CHECK-SAME: %[[CMD:.+]]: !hal.command_buffer
   %cmd: !hal.command_buffer,
   // CHECK-SAME: %[[BUF:.+]]: !hal.buffer
@@ -92,7 +90,7 @@ func @dispatch_indirect_with_nested_references(
 // -----
 
 // CHECK-LABEL: @dispatch_indirect_already_using_ordinals
-func @dispatch_indirect_already_using_ordinals(
+func.func @dispatch_indirect_already_using_ordinals(
   // CHECK-SAME: %[[CMD:.+]]: !hal.command_buffer
   %cmd: !hal.command_buffer,
   // CHECK-SAME: %[[EXE:.+]]: !hal.executable

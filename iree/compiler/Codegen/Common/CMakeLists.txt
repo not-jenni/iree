@@ -22,48 +22,76 @@ iree_tablegen_library(
 iree_cc_library(
   NAME
     Common
+  HDRS
+    "BufferizationAnalysis.h"
+    "DestructiveUpdateUtils.h"
   SRCS
+    "BufferizationAnalysis.cpp"
+    "BufferizeCopyOnlyDispatchesPass.cpp"
     "CleanupBufferAllocViewPass.cpp"
+    "ConvertToDestinationPassingStylePass.cpp"
     "DemoteF32ToF16.cpp"
+    "DestructiveUpdateUtils.cpp"
     "FlattenMemRefSubspanPass.cpp"
+    "FoldAffineMinInDistributedLoops.cpp"
     "FoldTensorExtractOpPass.cpp"
     "ForOpCanonicalizationPass.cpp"
+    "IREEComprehensiveBufferizePass.cpp"
+    "InsertDistributionInfoPass.cpp"
     "LinalgBufferizePass.cpp"
+    "MemrefCopyToLinalg.cpp"
     "OptimizeVectorTransferPass.cpp"
+    "PolynomialApproximationPass.cpp"
+    "RemoveTrivialLoops.cpp"
+    "RewriteLinalgDestructiveUpdatesPass.cpp"
+    "SetNumWorkgroupsFromLinalgExtPass.cpp"
     "SetNumWorkgroupsPass.cpp"
+    "TileAndDistributeToWorkgroupsPass.cpp"
+    "TypePropagationPass.cpp"
     "VectorizeConv.cpp"
     "VectorizeMMT4d.cpp"
   DEPS
+    IREELinalgExtDialect
+    IREELinalgExtPasses
     LLVMSupport
     MLIRAffine
     MLIRAffineUtils
     MLIRAnalysis
+    MLIRArithmetic
+    MLIRArithmeticTransforms
+    MLIRBufferization
+    MLIRBufferizationTransforms
+    MLIRFunc
     MLIRGPUOps
     MLIRIR
     MLIRLLVMCommonConversion
     MLIRLLVMIR
     MLIRLinalg
     MLIRLinalgTransforms
+    MLIRMathTransforms
     MLIRMemRef
     MLIRMemRefTransforms
+    MLIRModuleBufferization
     MLIRPass
     MLIRSCF
-    MLIRSCFToStandard
+    MLIRSCFToControlFlow
+    MLIRSCFTransforms
     MLIRSideEffectInterfaces
-    MLIRStandard
     MLIRSupport
     MLIRTensor
     MLIRTransforms
     MLIRVector
+    MLIRVectorTransforms
+    MLIRViewLikeInterface
     iree::compiler::Codegen::Common::FoldTensorExtractOpIncGen
     iree::compiler::Codegen::Dialect::IREECodegenDialect
+    iree::compiler::Codegen::Interfaces::BufferizationInterfaces
     iree::compiler::Codegen::PassHeaders
     iree::compiler::Codegen::Transforms
     iree::compiler::Codegen::Utils
     iree::compiler::Dialect::Flow::IR
+    iree::compiler::Dialect::Flow::IR::PartitionableLoopsInterface
     iree::compiler::Dialect::HAL::IR
-    iree::compiler::Dialect::LinalgExt::IR
-    iree::compiler::Dialect::Shape::IR
     iree::compiler::Dialect::Util::IR
   PUBLIC
 )

@@ -8,6 +8,7 @@
 
 #include <memory>
 
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/PassOptions.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
@@ -18,17 +19,13 @@ namespace IREE {
 namespace TFLite {
 
 void buildTransformPassPipeline(OpPassManager &passManager) {
-  // Wraps the entry points in a "_tflite_xx" function.
+  // Wraps the entry points in a "_tflite_xx" function and adds shape support.
   passManager.addPass(createWrapEntryPointsPass());
-
-  // Materialize the functions required by the runtime bindings to manipulate
-  // the program state.
-  passManager.addPass(createMaterializeShapeSupportPass());
 
   // Cleanup the IR after manipulating it.
   passManager.addPass(createInlinerPass());
-  passManager.addNestedPass<FuncOp>(createCanonicalizerPass());
-  passManager.addNestedPass<FuncOp>(createCSEPass());
+  passManager.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  passManager.addNestedPass<func::FuncOp>(createCSEPass());
   passManager.addPass(createSymbolDCEPass());
 }
 

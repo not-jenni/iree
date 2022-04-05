@@ -19,7 +19,7 @@ set -e
 if ! command -v emcmake &> /dev/null
 then
     echo "'emcmake' not found, setup environment according to https://emscripten.org/docs/getting_started/downloads.html"
-    exit
+    exit 1
 fi
 
 CMAKE_BIN=${CMAKE_BIN:-$(which cmake)}
@@ -41,10 +41,11 @@ cd build-emscripten
 # Configure using Emscripten's CMake wrapper, then build.
 emcmake "${CMAKE_BIN?}" -G Ninja .. \
   -DIREE_HOST_BINARY_ROOT=$PWD/../build-host/install \
-  -DIREE_HAL_DRIVERS_TO_BUILD=VMVX\;DyLib \
+  -DIREE_HAL_DRIVER_DEFAULTS=OFF \
+  -DIREE_HAL_DRIVER_VMVX=ON \
   -DIREE_BUILD_COMPILER=OFF \
   -DIREE_BUILD_TESTS=OFF \
   -DIREE_BUILD_SAMPLES=ON
 
 # TODO(scotttodd): expand this list of targets
-"${CMAKE_BIN?}" --build . --target iree_samples_simple_embedding_simple_embedding_vmvx_sync
+"${CMAKE_BIN?}" --build . --target iree_samples_simple_embedding_simple_embedding_vmvx_sync -- -k 0

@@ -1,8 +1,8 @@
-// RUN: iree-opt -split-input-file -iree-vm-conversion %s | IreeFileCheck %s
+// RUN: iree-opt -split-input-file -iree-vm-conversion %s | FileCheck %s
 
 module {
   // CHECK-LABEL: vm.func private @arithmetic
-  func @arithmetic(%arg0: f32) -> f32 {
+  func.func @arithmetic(%arg0: f32) -> f32 {
 
     // CHECK: vm.atan.f32
     %0 = math.atan %arg0 : f32
@@ -49,6 +49,9 @@ module {
     // CHECK: vm.tanh.f32
     %14 = math.tanh %13 : f32
 
-    return %14 : f32
+    // CHECK: vm.erf.f32
+    %15 = math.erf %14 : f32
+
+    return %15 : f32
   }
 }

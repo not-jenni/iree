@@ -9,7 +9,7 @@
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "iree/compiler/Dialect/Util/IR/UtilTypes.h"
 #include "llvm/ADT/DenseMap.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Builders.h"
@@ -26,7 +26,7 @@ namespace iree_compiler {
 
 void populateUtilConversionPatterns(MLIRContext *context,
                                     TypeConverter &typeConverter,
-                                    OwningRewritePatternList &patterns) {
+                                    RewritePatternSet &patterns) {
   patterns.insert<GenericConvertTypesPattern<IREE::Util::DoNotOptimizeOp>>(
       typeConverter, context);
 
@@ -56,7 +56,7 @@ void populateUtilConversionPatterns(MLIRContext *context,
 void populateUtilConversionPatterns(MLIRContext *context,
                                     ConversionTarget &conversionTarget,
                                     TypeConverter &typeConverter,
-                                    OwningRewritePatternList &patterns) {
+                                    RewritePatternSet &patterns) {
   addGenericLegalOp<IREE::Util::DoNotOptimizeOp>(conversionTarget,
                                                  typeConverter);
   addGenericLegalOp<IREE::Util::ListCreateOp>(conversionTarget, typeConverter);

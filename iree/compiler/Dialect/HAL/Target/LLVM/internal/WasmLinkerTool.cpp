@@ -31,18 +31,29 @@ namespace HAL {
 // * https://github.com/WebAssembly/wabt
 // * https://github.com/bytecodealliance/wasmtime
 //
-// Use -iree-llvm-target-triple=wasm32-unknown-unknown.
+// Use with `-iree-llvm-target-triple=wasm32-unknown-unknown` (or equivalent).
+// For SIMD support, also set `-iree-llvm-target-cpu-features=+simd128`.
 class WasmLinkerTool : public LinkerTool {
  public:
   using LinkerTool::LinkerTool;
 
-  std::string getToolPath() const override {
-    // First check for setting the linker explicitly.
-    auto toolPath = LinkerTool::getToolPath();
-    if (!toolPath.empty()) return toolPath;
+  std::string getWasmToolPath() const {
+    // Always use the -iree-llvm-wasm-linker-path flag when specified as it's
+    // explicitly telling us what to use.
+    if (!targetOptions.wasmLinkerPath.empty()) {
+      return targetOptions.wasmLinkerPath;
+    }
 
-    // No explicit linker specified, search the environment for common tools.
-    toolPath = findToolInEnvironment({"wasm-ld"});
+    // Allow overriding the automatic search with an environment variable.
+    char *linkerPath = std::getenv("IREE_LLVMAOT_WASM_LINKER_PATH");
+    if (linkerPath) {
+      return std::string(linkerPath);
+    }
+
+    // No explicit linker specified, search the environment (i.e. our own build
+    // or install directories) for common tools.
+    std::string toolPath = findToolFromExecutableDir(
+        {"wasm-ld", "iree-lld", "lld", "ld.lld", "lld-link"});
     if (!toolPath.empty()) return toolPath;
 
     llvm::errs() << "No Wasm linker tool specified or discovered\n";
@@ -77,21 +88,31 @@ class WasmLinkerTool : public LinkerTool {
     artifacts.libraryFile.close();
 
     SmallVector<std::string, 8> flags = {
-        getToolPath(),
+        getWasmToolPath(),
+
+        // Forces LLD to act like wasm ld and produce WebAssembly files.
+        // If not specified then lld tries to figure out what it is by progname
+        // (ld, ld64, link, etc).
+        // NOTE: must be first because lld sniffs argv[1]/argv[2].
+        "-flavor wasm",
 
         // entry symbol not defined (pass --no-entry to suppress): _start
         "--no-entry",
 
-        // Allow undefined symbols, provided by the runtime environment (?)
-        // TODO(scotttodd): figure out how to avoid this.
-        "--allow-undefined",
-
         // Treat warnings as errors.
         "--fatal-warnings",
 
-        // Generated a shared object, not an executable.
-        // Note: disabled since creating shared libraries is not yet supported.
-        // "--shared",
+        // Generated a shared object containing position-independent-code.
+        "--experimental-pic",
+        "--shared",
+
+        // Import [shared] memory from the environment.
+        // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WebAssembly/Memory#creating_a_shared_memory
+        // TODO(scotttodd): Add a flag controlling these - some combination is
+        //   required when using multithreading + SharedArrayBuffer, but they
+        //   must be left off when running single threaded.
+        // "--import-memory",
+        // "--shared-memory",
 
         "-o " + artifacts.libraryFile.path,
     };

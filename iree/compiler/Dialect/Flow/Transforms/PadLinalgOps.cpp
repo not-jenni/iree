@@ -6,7 +6,8 @@
 
 #include "iree/compiler/Dialect/Flow/Transforms/PassDetail.h"
 #include "iree/compiler/Dialect/Flow/Transforms/Passes.h"
-#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Tensor/Utils/Utils.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -54,8 +55,9 @@ class PadMatmulOp : public OpRewritePattern<linalg::MatmulOp> {
     int paddingForN = newNSize - N;
     int paddingForK = newKSize - K;
 
-    if (paddingForM == 0 && paddingForN == 0 && paddingForK == 0)
+    if (paddingForM == 0 && paddingForN == 0 && paddingForK == 0) {
       return failure();
+    }
 
     auto lhsPaddedType =
         RankedTensorType::get({newMSize, newKSize}, lhsType.getElementType());
@@ -79,7 +81,7 @@ class PadMatmulOp : public OpRewritePattern<linalg::MatmulOp> {
 
     Value paddedLhs =
         (paddingForM > 0 || paddingForK > 0)
-            ? linalg::PadTensorOp::createPadScalarOp(
+            ? tensor::createPadScalarOp(
                   lhsPaddedType, lhs, lhsPaddingValue, createPadding({0, 0}),
                   createPadding({paddingForM, paddingForK}), /*nofold=*/false,
                   loc, rewriter)
@@ -87,7 +89,7 @@ class PadMatmulOp : public OpRewritePattern<linalg::MatmulOp> {
 
     auto paddedrhs =
         (paddingForK > 0 || paddingForN > 0)
-            ? linalg::PadTensorOp::createPadScalarOp(
+            ? tensor::createPadScalarOp(
                   rhsPaddedType, rhs, rhsPaddingValue, createPadding({0, 0}),
                   createPadding({paddingForK, paddingForN}), /*nofold=*/false,
                   loc, rewriter)
@@ -105,7 +107,7 @@ class PadMatmulOp : public OpRewritePattern<linalg::MatmulOp> {
                                                  resultType.getElementType());
       auto resultPaddingValue = rewriter.create<arith::ConstantOp>(
           loc, rewriter.getZeroAttr(resultType.getElementType()));
-      Value paddedResult = linalg::PadTensorOp::createPadScalarOp(
+      Value paddedResult = tensor::createPadScalarOp(
           newResultType, result, resultPaddingValue, createPadding({0, 0}),
           createPadding({paddingForM, paddingForN}), /*nofold=*/false, loc,
           rewriter);
@@ -137,9 +139,12 @@ class PadLinalgOpsPass : public PadLinalgOpsBase<PadLinalgOpsPass> {
   }
   void runOnOperation() override {
     MLIRContext *context = &getContext();
-    OwningRewritePatternList patterns(context);
+    RewritePatternSet patterns(context);
     patterns.insert<PadMatmulOp>(context, paddingSize);
-    (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
+    if (failed(applyPatternsAndFoldGreedily(getOperation(),
+                                            std::move(patterns)))) {
+      return signalPassFailure();
+    }
   }
 
  private:
@@ -147,8 +152,7 @@ class PadLinalgOpsPass : public PadLinalgOpsBase<PadLinalgOpsPass> {
 };
 }  // namespace
 
-std::unique_ptr<OperationPass<mlir::FuncOp>>
-createPadLinalgOpsToIntegerMultiplePass(int paddingSize) {
+std::unique_ptr<Pass> createPadLinalgOpsToIntegerMultiplePass(int paddingSize) {
   return std::make_unique<PadLinalgOpsPass>(paddingSize);
 }
 

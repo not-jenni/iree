@@ -20,21 +20,18 @@ iree_cc_library(
     "WrapEntryPoints.cpp"
   DEPS
     LLVMSupport
+    MLIRAffineUtils
+    MLIRFunc
     MLIRIR
-    MLIRMemRef
     MLIRPass
     MLIRShape
     MLIRShapeOpsTransforms
-    MLIRStandard
     MLIRSupport
     MLIRTensor
     MLIRTransformUtils
     MLIRTransforms
     iree::compiler::Dialect::Flow::IR
     iree::compiler::Dialect::HAL::IR
-    iree::compiler::Dialect::Shape::IR
-    iree::compiler::Dialect::Shape::Transforms
-    iree::compiler::Dialect::Shape::Utils::TypeConversion
     iree::compiler::Dialect::Util::IR
     iree::compiler::Utils
   PUBLIC

@@ -13,7 +13,7 @@ include(CMakeParseArguments)
 # SRC: MLIR source file to compile into a c module.
 # H_FILE_OUTPUT: The H header file to output.
 # TRANSLATE_TOOL: Translation tool to invoke (CMake target). The default
-#     tool is "iree-translate".
+#     tool is "iree-compile".
 # FLAGS: Flags to pass to the translation tool (list of strings).
 # TESTONLY: When added, this target will only be built if user passes
 #    -DIREE_BUILD_TESTS=ON to CMake.
@@ -41,13 +41,13 @@ function(iree_c_module)
 
   # Prefix the library with the package name, so we get: iree_package_name.
   iree_package_name(_PACKAGE_NAME)
-  set(_NAME "${_PACKAGE_NAME}_${_RULE_NAME}")
+  set(_NAME "${_PACKAGE_NAME}_${_RULE_NAME}_hdrs")
 
   # Set defaults for TRANSLATE_TOOL.
   if(DEFINED _RULE_TRANSLATE_TOOL)
     set(_TRANSLATE_TOOL ${_RULE_TRANSLATE_TOOL})
   else()
-    set(_TRANSLATE_TOOL "iree-translate")
+    set(_TRANSLATE_TOOL "iree-compile")
   endif()
 
   iree_get_executable_path(_TRANSLATE_TOOL_EXECUTABLE ${_TRANSLATE_TOOL})
@@ -65,22 +65,37 @@ function(iree_c_module)
     DEPENDS ${_TRANSLATE_TOOL_EXECUTABLE} ${_RULE_SRC}
   )
 
+  iree_cc_library(
+    NAME ${_RULE_NAME}
+    HDRS "${_RULE_H_FILE_OUTPUT}"
+    SRCS "${IREE_SOURCE_DIR}/iree/vm/module_impl_emitc.c"
+    INCLUDES "${CMAKE_CURRENT_BINARY_DIR}"
+    COPTS "-DEMITC_IMPLEMENTATION=\"${_RULE_H_FILE_OUTPUT}\""
+    "${_TESTONLY_ARG}"
+  )
+
   set(_GEN_TARGET "${_NAME}_gen")
   add_custom_target(
     ${_GEN_TARGET}
     DEPENDS
       ${_RULE_H_FILE_OUTPUT}
   )
-  
+
   add_library(${_NAME} INTERFACE)
   add_dependencies(${_NAME} ${_GEN_TARGET})
+  add_dependencies(${_NAME}
+    iree::vm
+    iree::vm::ops
+    iree::vm::ops_emitc
+    iree::vm::shims_emitc
+  )
 
   # Alias the iree_package_name library to iree::package::name.
   # This lets us more clearly map to Bazel and makes it possible to
   # disambiguate the underscores in paths vs. the separators.
-  add_library(${_PACKAGE_NS}::${_RULE_NAME} ALIAS ${_NAME})
+  add_library(${_PACKAGE_NS}::${_RULE_NAME}_hdrs ALIAS ${_NAME})
   iree_package_dir(_PACKAGE_DIR)
-  if(${_RULE_NAME} STREQUAL ${_PACKAGE_DIR})
+  if(${_RULE_NAME}_hdrs STREQUAL ${_PACKAGE_DIR})
     # If the library name matches the package then treat it as a default.
     # For example, foo/bar/ library 'bar' would end up as 'foo::bar'.
     add_library(${_PACKAGE_NS} ALIAS ${_NAME})

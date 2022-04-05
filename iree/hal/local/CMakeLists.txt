@@ -12,26 +12,45 @@ iree_add_all_subdirs()
 
 iree_cc_library(
   NAME
+    executable_environment
+  HDRS
+    "executable_environment.h"
+  SRCS
+    "executable_environment.c"
+  DEPS
+    ::executable_library
+    iree::base
+    iree::base::internal::cpu
+    iree::base::tracing
+    iree::hal
+  PUBLIC
+)
+
+iree_cc_library(
+  NAME
     executable_library
   HDRS
     "executable_library.h"
   PUBLIC
 )
 
-iree_cc_test(
+iree_cc_binary_benchmark(
   NAME
     executable_library_benchmark
   SRCS
     "executable_library_benchmark.c"
   DEPS
+    ::executable_environment
     ::executable_library
     ::local
     iree::base
+    iree::base::internal::file_io
     iree::base::internal::flags
     iree::base::tracing
     iree::hal
     iree::hal::local::loaders::embedded_library_loader
     iree::testing::benchmark
+  TESTONLY
 )
 
 iree_cc_test(
@@ -42,9 +61,10 @@ iree_cc_test(
     "executable_library_demo.h"
     "executable_library_test.c"
   DEPS
+    ::executable_environment
+    ::executable_library
     iree::base
     iree::base::core_headers
-    iree::hal::local::executable_library
 )
 
 iree_cc_library(
@@ -67,6 +87,7 @@ iree_cc_library(
     "local_executable_cache.c"
     "local_executable_layout.c"
   DEPS
+    ::executable_environment
     ::executable_library
     iree::base
     iree::base::core_headers
@@ -99,30 +120,16 @@ iree_cc_library(
     iree::base::internal::synchronization
     iree::base::tracing
     iree::hal
+    iree::hal::utils::buffer_transfer
   PUBLIC
 )
 
 # task_driver is used by asynchronuous drivers.
-if(NOT (${IREE_HAL_DRIVER_DYLIB} OR ${IREE_HAL_DRIVER_VMVX}))
+# TODO(scotttodd): refactor this - code depending on threading should be
+#   possible to declare in the build system but conditionally link in
+if(NOT EMSCRIPTEN AND NOT (${IREE_HAL_DRIVER_DYLIB} OR ${IREE_HAL_DRIVER_VMVX}))
   return()
 endif()
-
-iree_cc_library(
-  NAME
-    event_pool
-  HDRS
-    "event_pool.h"
-  SRCS
-    "event_pool.c"
-  DEPS
-    iree::base
-    iree::base::core_headers
-    iree::base::internal
-    iree::base::internal::synchronization
-    iree::base::internal::wait_handle
-    iree::base::tracing
-  PUBLIC
-)
 
 iree_cc_library(
   NAME
@@ -144,17 +151,20 @@ iree_cc_library(
     "task_queue_state.c"
     "task_semaphore.c"
   DEPS
-    ::event_pool
+    ::executable_environment
     ::executable_library
     ::local
     iree::base
     iree::base::core_headers
     iree::base::internal
     iree::base::internal::arena
+    iree::base::internal::event_pool
     iree::base::internal::synchronization
     iree::base::internal::wait_handle
     iree::base::tracing
     iree::hal
+    iree::hal::utils::buffer_transfer
+    iree::hal::utils::resource_set
     iree::task
   PUBLIC
 )

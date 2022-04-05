@@ -11,8 +11,7 @@ add_compile_definitions("MLIR_PYTHON_PACKAGE_PREFIX=iree.compiler.")
 declare_mlir_python_sources(IREECompilerAPIPythonSources
   ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/iree/compiler"
   SOURCES
-    api/driver.py
-    version.py
+    transforms/ireec.py
 )
 declare_mlir_python_sources(IREECompilerAPIPythonExtensions)
 
@@ -31,11 +30,11 @@ declare_mlir_python_sources(IREECompilerAPIPythonTools
 # Extensions
 ################################################################################
 
-declare_mlir_python_extension(IREECompilerAPIPythonExtensions.CompilerDriver
-  MODULE_NAME _ireeCompilerDriver
+declare_mlir_python_extension(IREECompilerAPIPythonExtensions.IREECTransforms
+  MODULE_NAME _ireecTransforms
   ADD_TO_PARENT IREECompilerAPIPythonExtensions
   SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/CompilerModule.cpp
+    IREECTransforms.cpp
   EMBED_CAPI_LINK_LIBS
     IREECompilerAPICompilerCAPI
   PRIVATE_LINK_LIBS
@@ -62,11 +61,12 @@ set(_source_components
   # Core dialects (constrained to IREE input dialects).
   MLIRPythonSources.Dialects.arith
   MLIRPythonSources.Dialects.builtin
+  MLIRPythonSources.Dialects.cf
+  MLIRPythonSources.Dialects.func
   MLIRPythonSources.Dialects.linalg
   MLIRPythonSources.Dialects.math
   MLIRPythonSources.Dialects.memref
   MLIRPythonSources.Dialects.shape
-  MLIRPythonSources.Dialects.std
   MLIRPythonSources.Dialects.tensor
   MLIRPythonSources.Dialects.tosa
   MLIRPythonSources.Dialects.vector
@@ -126,15 +126,17 @@ function(add_iree_compiler_busybox_tool target)
 endfunction()
 
 add_iree_compiler_busybox_tool(
-  IREECompilerIREECTool
-  OUTPUT_NAME ireec
+  IREECompilerIREECompileTool
+  OUTPUT_NAME iree-compile
   SRCS
-    IREECTool.c
+    IREECompileTool.c
 )
 
-add_iree_compiler_busybox_tool(
-  IREECompilerLldTool
-  OUTPUT_NAME iree-lld
-  SRCS
-    LldTool.c
-)
+if(TARGET lld)
+  add_iree_compiler_busybox_tool(
+    IREECompilerLldTool
+    OUTPUT_NAME iree-lld
+    SRCS
+      LldTool.c
+  )
+endif()

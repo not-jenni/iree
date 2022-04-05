@@ -10,8 +10,8 @@
 #include "iree/compiler/Dialect/VM/Conversion/TargetOptions.h"
 #include "iree/compiler/Dialect/VM/Conversion/TypeConverter.h"
 #include "iree/compiler/Dialect/VM/IR/VMOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -29,23 +29,23 @@ class UnaryArithmeticOpConversion : public OpConversionPattern<SrcOpTy> {
   using OpConversionPattern<SrcOpTy>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
-      SrcOpTy srcOp, ArrayRef<Value> operands,
+      SrcOpTy srcOp, typename SrcOpTy::Adaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     // TODO(benvanik): support vectors.
-    if (srcOp.result().getType().template isa<VectorType>()) return failure();
+    if (srcOp.getResult().getType().template isa<VectorType>())
+      return failure();
 
-    typename SrcOpTy::Adaptor srcAdaptor(operands);
-    switch (srcAdaptor.operand().getType().getIntOrFloatBitWidth()) {
+    switch (adaptor.getOperand().getType().getIntOrFloatBitWidth()) {
       case 32:
         rewriter.replaceOpWithNewOp<Dst32OpTy>(
-            srcOp, srcAdaptor.operand().getType(), srcAdaptor.operand());
+            srcOp, adaptor.getOperand().getType(), adaptor.getOperand());
         break;
       case 64:
         rewriter.replaceOpWithNewOp<Dst64OpTy>(
-            srcOp, srcAdaptor.operand().getType(), srcAdaptor.operand());
+            srcOp, adaptor.getOperand().getType(), adaptor.getOperand());
         break;
       default:
-        llvm_unreachable("invalid target type");
+        assert(false && "invalid target type");
     }
     return success();
   }
@@ -56,25 +56,25 @@ class BinaryArithmeticOpConversion : public OpConversionPattern<SrcOpTy> {
   using OpConversionPattern<SrcOpTy>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
-      SrcOpTy srcOp, ArrayRef<Value> operands,
+      SrcOpTy srcOp, typename SrcOpTy::Adaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     // TODO(benvanik): support vectors.
-    if (srcOp.result().getType().template isa<VectorType>()) return failure();
+    if (srcOp.getResult().getType().template isa<VectorType>())
+      return failure();
 
-    typename SrcOpTy::Adaptor srcAdaptor(operands);
-    switch (srcAdaptor.lhs().getType().getIntOrFloatBitWidth()) {
+    switch (adaptor.getLhs().getType().getIntOrFloatBitWidth()) {
       case 32:
         rewriter.replaceOpWithNewOp<Dst32OpTy>(
-            srcOp, srcAdaptor.lhs().getType(), srcAdaptor.lhs(),
-            srcAdaptor.rhs());
+            srcOp, adaptor.getLhs().getType(), adaptor.getLhs(),
+            adaptor.getRhs());
         break;
       case 64:
         rewriter.replaceOpWithNewOp<Dst64OpTy>(
-            srcOp, srcAdaptor.lhs().getType(), srcAdaptor.lhs(),
-            srcAdaptor.rhs());
+            srcOp, adaptor.getLhs().getType(), adaptor.getLhs(),
+            adaptor.getRhs());
         break;
       default:
-        llvm_unreachable("invalid target type");
+        assert(false && "invalid target type");
     }
     return success();
   }
@@ -84,7 +84,7 @@ class BinaryArithmeticOpConversion : public OpConversionPattern<SrcOpTy> {
 
 void populateMathToVMPatterns(MLIRContext *context,
                               TypeConverter &typeConverter,
-                              OwningRewritePatternList &patterns) {
+                              RewritePatternSet &patterns) {
   patterns
       .insert<UnaryArithmeticOpConversion<math::AtanOp, IREE::VM::AtanF32Op,
                                           IREE::VM::AtanF64Op>,
@@ -115,8 +115,10 @@ void populateMathToVMPatterns(MLIRContext *context,
               UnaryArithmeticOpConversion<math::SqrtOp, IREE::VM::SqrtF32Op,
                                           IREE::VM::SqrtF64Op>,
               UnaryArithmeticOpConversion<math::TanhOp, IREE::VM::TanhF32Op,
-                                          IREE::VM::TanhF64Op>>(typeConverter,
-                                                                context);
+                                          IREE::VM::TanhF64Op>,
+              UnaryArithmeticOpConversion<math::ErfOp, IREE::VM::ErfF32Op,
+                                          IREE::VM::ErfF64Op>>(typeConverter,
+                                                               context);
 }
 
 }  // namespace iree_compiler

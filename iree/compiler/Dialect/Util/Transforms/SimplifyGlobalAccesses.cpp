@@ -223,7 +223,8 @@ static bool rearrangeBlockGlobalAccesses(
 namespace {
 
 class SimplifyGlobalAccessesPass
-    : public PassWrapper<SimplifyGlobalAccessesPass, OperationPass<void>> {
+    : public PassWrapper<SimplifyGlobalAccessesPass,
+                         InterfacePass<CallableOpInterface>> {
  public:
   StringRef getArgument() const override {
     return "iree-util-simplify-global-accesses";
@@ -235,8 +236,8 @@ class SimplifyGlobalAccessesPass
   }
 
   void runOnOperation() override {
-    auto callableOp = dyn_cast<CallableOpInterface>(getOperation());
-    if (!callableOp || !callableOp.getCallableRegion() ||
+    auto callableOp = getOperation();
+    if (!callableOp.getCallableRegion() ||
         callableOp.getCallableRegion()->empty()) {
       return;
     }
@@ -246,7 +247,13 @@ class SimplifyGlobalAccessesPass
     assert(moduleOp && "func not in a module");
 
     // Build a set of all immutable globals for fast lookup.
-    auto immutableGlobals = gatherImmutableGlobals(moduleOp);
+    // We only do this if we are in a normal function - if we are in an
+    // initializer we can't rely on the mutability of globals as we ourselves
+    // may be initializing them.
+    DenseSet<StringRef> immutableGlobals;
+    if (!isa<IREE::Util::InitializerOp>(callableOp)) {
+      immutableGlobals = gatherImmutableGlobals(moduleOp);
+    }
 
     // Hoist immutable globals first. These have no hazards and don't care
     // about control flow - like `constant` - so getting them handled first

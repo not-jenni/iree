@@ -80,9 +80,9 @@ markdown_extensions:
       options:
         custom_icons:
           - overrides/.icons
-  - pymdownx.tabbed
   - pymdownx.superfences
-  - pymdownx.tabbed
+  - pymdownx.tabbed:
+      alternate_style: true
   - pymdownx.tasklist:
       custom_checkbox: true
   - tables
@@ -94,20 +94,21 @@ markdown_extensions:
 # Note: may include external links and titles are optional for internal links
 nav:
   - Home: 'index.md'
-  - 'ML frameworks':
-      - 'ml-frameworks/index.md'
-      - TensorFlow: 'ml-frameworks/tensorflow.md'
-      - TensorFlow Lite: 'ml-frameworks/tensorflow-lite.md'
-      - JAX: 'ml-frameworks/jax.md'
+  - 'Getting Started':
+      - 'getting-started/index.md'
+      - TensorFlow: 'getting-started/tensorflow.md'
+      - TensorFlow Lite: 'getting-started/tflite.md'
+      - JAX: 'getting-started/jax.md'
   - 'Deployment configurations':
       - 'deployment-configurations/index.md'
       - CPU - Dylib: 'deployment-configurations/cpu-dylib.md'
       - CPU - Bare-Metal: 'deployment-configurations/bare-metal.md'
       - GPU - Vulkan: 'deployment-configurations/gpu-vulkan.md'
+      - GPU - CUDA/ROCm: 'deployment-configurations/gpu-cuda-rocm.md'
   - 'Building from source':
       - 'building-from-source/index.md'
       - 'building-from-source/getting-started.md'
-      - 'building-from-source/optional-features.md'
+      - 'building-from-source/python-bindings-and-importers.md'
       - 'building-from-source/android.md'
       - 'building-from-source/riscv.md'
   - 'Bindings':
@@ -115,10 +116,15 @@ nav:
       - C API: 'bindings/c-api.md'
       - Python: 'bindings/python.md'
       - TensorFlow Lite: 'bindings/tensorflow-lite.md'
-  - 'Community':
-      - Projects: 'community/projects.md'
+  - 'Extensions':
+      - 'extensions/index.md'
   - 'Blog':
       - 'blog/index.md'
       - CUDA backend: 'blog/2021-10-15-cuda-backend.md'
       - Work in progress on Matrix Multiplication on CPU: 'blog/2021-10-13-mmt4d.md'
       - TFLite Support via TOSA: 'blog/2021-07-19-tflite-tosa.md'
+  - 'Reference':
+      - Glossary: 'reference/glossary.md'
+      - Optimization Options: 'reference/optimization-options.md'
+  - 'Community':
+      - 'community/index.md'

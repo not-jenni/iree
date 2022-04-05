@@ -66,6 +66,11 @@ iree_task_dispatch_statistics_t iree_task_scope_consume_statistics(
   return result;
 }
 
+bool iree_task_scope_has_failed(iree_task_scope_t* scope) {
+  return iree_atomic_load_intptr(&scope->permanent_status,
+                                 iree_memory_order_seq_cst) != 0;
+}
+
 iree_status_t iree_task_scope_consume_status(iree_task_scope_t* scope) {
   iree_status_t old_status = iree_ok_status();
   iree_status_t new_status = iree_ok_status();
@@ -105,9 +110,7 @@ void iree_task_scope_abort(iree_task_scope_t* scope) {
   iree_task_scope_try_set_status(scope, status);
 }
 
-void iree_task_scope_fail(iree_task_scope_t* scope, iree_task_t* task,
-                          iree_status_t status) {
-  // TODO(benvanik): logging/tracing based on task.
+void iree_task_scope_fail(iree_task_scope_t* scope, iree_status_t status) {
   iree_task_scope_try_set_status(scope, status);
 }
 
@@ -119,11 +122,12 @@ void iree_task_scope_begin(iree_task_scope_t* scope) {
 
 void iree_task_scope_end(iree_task_scope_t* scope) {
   iree_slim_mutex_lock(&scope->mutex);
-  if (--scope->pending_submissions == 0) {
+  bool signal = (--scope->pending_submissions == 0);
+  iree_slim_mutex_unlock(&scope->mutex);
+  if (signal) {
     // All submissions have completed in this scope - notify any waiters.
     iree_notification_post(&scope->idle_notification, IREE_ALL_WAITERS);
   }
-  iree_slim_mutex_unlock(&scope->mutex);
 }
 
 bool iree_task_scope_is_idle(iree_task_scope_t* scope) {
@@ -145,16 +149,13 @@ iree_status_t iree_task_scope_wait_idle(iree_task_scope_t* scope,
     } else {
       status = iree_status_from_code(IREE_STATUS_DEADLINE_EXCEEDED);
     }
-  } else if (deadline_ns == IREE_TIME_INFINITE_FUTURE) {
-    // Wait for the scope to enter the idle state.
-    iree_notification_await(&scope->idle_notification,
-                            (iree_condition_fn_t)iree_task_scope_is_idle,
-                            scope);
   } else {
-    // NOTE: we are currently ignoring |deadline_ns|.
-    // We need to support timeouts on iree_notification_t to support this.
-    status = iree_make_status(IREE_STATUS_UNIMPLEMENTED,
-                              "scope-based waits do not yet support timeouts");
+    // Wait for the scope to enter the idle state.
+    if (!iree_notification_await(&scope->idle_notification,
+                                 (iree_condition_fn_t)iree_task_scope_is_idle,
+                                 scope, iree_make_deadline(deadline_ns))) {
+      status = iree_status_from_code(IREE_STATUS_DEADLINE_EXCEEDED);
+    }
   }
 
   IREE_TRACE_ZONE_END(z0);

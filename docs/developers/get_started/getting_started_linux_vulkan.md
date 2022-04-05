@@ -58,16 +58,14 @@ Tests in IREE's HAL "Conformance Test Suite" (CTS) actually exercise the Vulkan
 HAL, which includes checking for supported layers and extensions.
 
 Run the
-[driver test](https://github.com/google/iree/blob/main/iree/hal/cts/driver_test.cc):
+[driver test](https://github.com/google/iree/blob/main/iree/hal/cts/driver_test.h):
 
 ```shell
 # -- CMake --
 $ export VK_LOADER_DEBUG=all
-$ cmake --build ../iree-build/ --target iree_hal_cts_driver_test
-$ ../iree-build/iree/hal/cts/iree_hal_cts_driver_test
-
-# -- Bazel --
-$ bazel test iree/hal/cts:driver_test --test_env=VK_LOADER_DEBUG=all --test_output=all
+$ cmake --build ../iree-build/ --target iree_hal_vulkan_cts_vulkan_driver_test
+$ cd ../iree-build/
+$ ctest -R iree/hal/vulkan/cts/vulkan_driver_test
 ```
 
 If these tests pass, you can skip down to the next section.
@@ -112,15 +110,15 @@ test --test_env="VK_ICD_FILENAMES={PATH_TO_IREE}/build-swiftshader/Linux/vk_swif
 
 ### Compiling for the Vulkan HAL
 
-Pass the flag `-iree-hal-target-backends=vulkan-spirv` to `iree-translate`:
+Pass the flag `-iree-hal-target-backends=vulkan-spirv` to `iree-compile`:
 
 ```shell
 # -- CMake --
-$ cmake --build ../iree-build/ --target iree_tools_iree-translate
-$ ../iree-build/iree/tools/iree-translate -iree-mlir-to-vm-bytecode-module -iree-hal-target-backends=vulkan-spirv ./iree/samples/models/simple_abs.mlir -o /tmp/module.vmfb
+$ cmake --build ../iree-build/ --target iree_tools_iree-compile
+$ ../iree-build/iree/tools/iree-compile -iree-mlir-to-vm-bytecode-module -iree-hal-target-backends=vulkan-spirv ./iree/samples/models/simple_abs.mlir -o /tmp/module.vmfb
 
 # -- Bazel --
-$ bazel run iree/tools:iree-translate -- -iree-mlir-to-vm-bytecode-module -iree-hal-target-backends=vulkan-spirv $PWD/iree/samples/models/simple_abs.mlir -o /tmp/module.vmfb
+$ bazel run iree/tools:iree-compile -- -iree-mlir-to-vm-bytecode-module -iree-hal-target-backends=vulkan-spirv $PWD/iree/samples/models/simple_abs.mlir -o /tmp/module.vmfb
 ```
 
 > Tip:<br>

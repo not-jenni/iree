@@ -7,7 +7,7 @@
 #include "iree/compiler/Dialect/HAL/IR/HALDialect.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/HAL/IR/HALTypes.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
@@ -18,13 +18,14 @@ namespace {
 
 // A pass converting the IREE flow dialect into the IREE HAL dialect.
 class BenchmarkBatchDispatchesPass
-    : public PassWrapper<BenchmarkBatchDispatchesPass, OperationPass<FuncOp>> {
+    : public PassWrapper<BenchmarkBatchDispatchesPass,
+                         OperationPass<func::FuncOp>> {
  public:
   explicit BenchmarkBatchDispatchesPass(unsigned repeatCount)
       : repeatCount_(repeatCount) {}
 
   void getDependentDialects(DialectRegistry& registry) const override {
-    registry.insert<HALDialect, StandardOpsDialect,
+    registry.insert<HALDialect, func::FuncDialect,
                     mlir::arith::ArithmeticDialect>();
   }
 
@@ -37,7 +38,7 @@ class BenchmarkBatchDispatchesPass
   }
 
   void runOnOperation() override {
-    FuncOp f = getOperation();
+    func::FuncOp f = getOperation();
     SmallVector<HAL::CommandBufferDispatchOp> ops;
     f.walk([&](HAL::CommandBufferDispatchOp op) { ops.push_back(op); });
 
@@ -68,7 +69,7 @@ class BenchmarkBatchDispatchesPass
 
 }  // namespace
 
-std::unique_ptr<OperationPass<FuncOp>> createBenchmarkBatchDispatchesPass(
+std::unique_ptr<OperationPass<func::FuncOp>> createBenchmarkBatchDispatchesPass(
     unsigned repeatCount) {
   return std::make_unique<BenchmarkBatchDispatchesPass>(repeatCount);
 }

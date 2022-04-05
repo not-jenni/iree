@@ -13,6 +13,7 @@ package(
 cc_library(
     name = "UtilToVM",
     srcs = [
+        "ConvertAlignmentOps.cpp",
         "ConvertGlobalOps.cpp",
         "ConvertListOps.cpp",
         "ConvertStatusOps.cpp",
@@ -25,9 +26,9 @@ cc_library(
         "//iree/compiler/Dialect/Util/IR",
         "//iree/compiler/Dialect/VM/Conversion",
         "//iree/compiler/Dialect/VM/IR",
+        "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
-        "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:TransformUtils",
         "@llvm-project//mlir:Transforms",
     ],

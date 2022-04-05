@@ -13,10 +13,14 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
-#include "mlir/Parser.h"
+#include "mlir/Parser/Parser.h"
 
 namespace mlir {
 namespace iree_compiler {
+
+// TODO(benvanik): replace with iree/compiler/Utils/ModuleUtils.h.
+// There may be some special insertion order arrangement required based on the
+// nested vm.module here.
 
 LogicalResult appendImportModule(IREE::VM::ModuleOp importModuleOp,
                                  ModuleOp targetModuleOp) {

@@ -37,12 +37,8 @@ static iree_status_t iree_syscall_poll(struct pollfd* fds, nfds_t nfds,
   *out_signaled_count = 0;
   int rv = -1;
   do {
-    iree_duration_t timeout_ns =
-        iree_absolute_deadline_to_timeout_ns(deadline_ns);
-    int timeout_ms = timeout_ns != IREE_TIME_INFINITE_FUTURE
-                         ? (int)(timeout_ns / 1000000ull)
-                         : (int)timeout_ns;
-    rv = poll(fds, nfds, timeout_ms);
+    uint32_t timeout_ms = iree_absolute_deadline_to_timeout_ms(deadline_ns);
+    rv = poll(fds, nfds, (int)timeout_ms);
   } while (rv < 0 && errno == EINTR);
   if (rv > 0) {
     // One or more events set.
@@ -139,6 +135,8 @@ struct iree_wait_set_t {
 iree_status_t iree_wait_set_allocate(iree_host_size_t capacity,
                                      iree_allocator_t allocator,
                                      iree_wait_set_t** out_set) {
+  IREE_ASSERT_ARGUMENT(out_set);
+
   // Be reasonable; 64K objects is too high (even if poll supports it, which is
   // hard to tell if it does).
   if (capacity >= UINT16_MAX) {
@@ -147,6 +145,8 @@ iree_status_t iree_wait_set_allocate(iree_host_size_t capacity,
                             capacity);
   }
 
+  IREE_TRACE_ZONE_BEGIN(z0);
+
   iree_host_size_t user_handle_list_size =
       capacity * iree_sizeof_struct(iree_wait_handle_t);
   iree_host_size_t poll_fd_list_size = capacity * sizeof(struct pollfd);
@@ -154,8 +154,8 @@ iree_status_t iree_wait_set_allocate(iree_host_size_t capacity,
                                 user_handle_list_size + poll_fd_list_size;
 
   iree_wait_set_t* set = NULL;
-  IREE_RETURN_IF_ERROR(
-      iree_allocator_malloc(allocator, total_size, (void**)&set));
+  IREE_RETURN_AND_END_ZONE_IF_ERROR(
+      z0, iree_allocator_malloc(allocator, total_size, (void**)&set));
   set->allocator = allocator;
   set->handle_capacity = capacity;
   iree_wait_set_clear(set);
@@ -167,11 +167,19 @@ iree_status_t iree_wait_set_allocate(iree_host_size_t capacity,
       (struct pollfd*)((uint8_t*)set->user_handles + user_handle_list_size);
 
   *out_set = set;
+  IREE_TRACE_ZONE_END(z0);
   return iree_ok_status();
 }
 
 void iree_wait_set_free(iree_wait_set_t* set) {
+  if (!set) return;
+  IREE_TRACE_ZONE_BEGIN(z0);
   iree_allocator_free(set->allocator, set);
+  IREE_TRACE_ZONE_END(z0);
+}
+
+bool iree_wait_set_is_empty(const iree_wait_set_t* set) {
+  return set->handle_count != 0;
 }
 
 iree_status_t iree_wait_set_insert(iree_wait_set_t* set,
@@ -184,8 +192,7 @@ iree_status_t iree_wait_set_insert(iree_wait_set_t* set,
   iree_host_size_t index = set->handle_count++;
 
   iree_wait_handle_t* user_handle = &set->user_handles[index];
-  IREE_IGNORE_ERROR(
-      iree_wait_handle_wrap_primitive(handle.type, handle.value, user_handle));
+  iree_wait_handle_wrap_primitive(handle.type, handle.value, user_handle);
 
   // NOTE: poll will ignore any negative fds.
   struct pollfd* poll_fd = &set->poll_fds[index];

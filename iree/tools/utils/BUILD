@@ -4,6 +4,8 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+load("//iree:build_defs.oss.bzl", "iree_cmake_extra_content")
+
 package(
     default_visibility = ["//visibility:public"],
     features = ["layering_check"],
@@ -38,7 +40,6 @@ cc_library(
         "//iree/base:cc",
         "//iree/base:logging",
         "//iree/base:tracing",
-        "//iree/base/internal:file_io",
         "//iree/base/internal:span",
         "//iree/hal",
         "//iree/modules/hal",
@@ -46,6 +47,13 @@ cc_library(
         "//iree/vm:bytecode_module",
         "//iree/vm:cc",
     ],
+)
+
+iree_cmake_extra_content(
+    content = """
+if(${IREE_HAL_DRIVER_VMVX})
+""",
+    inline = True,
 )
 
 cc_test(
@@ -64,6 +72,13 @@ cc_test(
     ],
 )
 
+iree_cmake_extra_content(
+    content = """
+endif()
+""",
+    inline = True,
+)
+
 cc_library(
     name = "yaml_util",
     srcs = ["yaml_util.c"],
@@ -71,5 +86,15 @@ cc_library(
     deps = [
         "//iree/base",
         "@com_github_yaml_libyaml//:yaml",
+    ],
+)
+
+cc_library(
+    name = "cpu_features",
+    srcs = ["cpu_features.c"],
+    hdrs = ["cpu_features.h"],
+    deps = [
+        "//iree/base",
+        "//iree/base:target_platform",
     ],
 )

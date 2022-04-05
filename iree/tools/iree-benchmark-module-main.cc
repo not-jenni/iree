@@ -85,7 +85,8 @@ namespace {
 static void BenchmarkFunction(const std::string& benchmark_name, int batch_size,
                               iree_vm_context_t* context,
                               iree_vm_function_t function,
-                              iree_vm_list_t* inputs, benchmark::State& state) {
+                              iree_vm_list_t* inputs, iree_hal_device_t* device,
+                              benchmark::State& state) {
   IREE_TRACE_SCOPE_DYNAMIC(benchmark_name.c_str());
   IREE_TRACE_FRAME_MARK();
 
@@ -100,21 +101,25 @@ static void BenchmarkFunction(const std::string& benchmark_name, int batch_size,
         context, function, IREE_VM_INVOCATION_FLAG_NONE, /*policy=*/nullptr,
         inputs, outputs.get(), iree_allocator_system()));
   }
+
+  // Force a full flush and get the device back to an idle state.
+  IREE_CHECK_OK(iree_hal_device_wait_idle(device, iree_infinite_timeout()));
 }
 
 void RegisterModuleBenchmarks(const std::string& function_name,
                               iree_vm_context_t* context,
                               iree_vm_function_t function,
-                              iree_vm_list_t* inputs) {
+                              iree_vm_list_t* inputs,
+                              iree_hal_device_t* device) {
   auto benchmark_name = "BM_" + function_name;
   int batch_size = FLAG_batch_size;
-  benchmark::RegisterBenchmark(benchmark_name.c_str(),
-                               [benchmark_name, batch_size, context, function,
-                                inputs](benchmark::State& state) -> void {
-                                 BenchmarkFunction(benchmark_name, batch_size,
-                                                   context, function, inputs,
-                                                   state);
-                               })
+  benchmark::RegisterBenchmark(
+      benchmark_name.c_str(),
+      [benchmark_name, batch_size, context, function, inputs,
+       device](benchmark::State& state) -> void {
+        BenchmarkFunction(benchmark_name, batch_size, context, function, inputs,
+                          device, state);
+      })
       // By default only the main thread is included in CPU time. Include all
       // the threads instead.
       ->MeasureProcessCPUTime()
@@ -130,16 +135,15 @@ void RegisterModuleBenchmarks(const std::string& function_name,
       ->Unit(benchmark::kMillisecond);
 }
 
-iree_status_t GetModuleContentsFromFlags(std::string* out_contents) {
+iree_status_t GetModuleContentsFromFlags(iree_file_contents_t** out_contents) {
   IREE_TRACE_SCOPE0("GetModuleContentsFromFlags");
   auto module_file = std::string(FLAG_module_file);
   if (module_file == "-") {
-    *out_contents = std::string{std::istreambuf_iterator<char>(std::cin),
-                                std::istreambuf_iterator<char>()};
+    return iree_stdin_read_contents(iree_allocator_system(), out_contents);
   } else {
-    IREE_RETURN_IF_ERROR(GetFileContents(module_file.c_str(), out_contents));
+    return iree_file_read_contents(module_file.c_str(), iree_allocator_system(),
+                                   out_contents);
   }
-  return iree_ok_status();
 }
 
 // TODO(hanchung): Consider to refactor this out and reuse in iree-run-module.
@@ -189,7 +193,9 @@ class IREEBenchmark {
     IREE_TRACE_SCOPE0("IREEBenchmark::Init");
     IREE_TRACE_FRAME_MARK_BEGIN_NAMED("init");
 
-    IREE_RETURN_IF_ERROR(GetModuleContentsFromFlags(&module_data_));
+    iree_file_contents_t* flatbuffer_contents = NULL;
+    IREE_RETURN_IF_ERROR(
+        iree::GetModuleContentsFromFlags(&flatbuffer_contents));
 
     IREE_RETURN_IF_ERROR(iree_hal_module_register_types());
     IREE_RETURN_IF_ERROR(
@@ -200,9 +206,9 @@ class IREEBenchmark {
     IREE_RETURN_IF_ERROR(
         iree_hal_module_create(device_, iree_allocator_system(), &hal_module_));
     IREE_RETURN_IF_ERROR(iree_vm_bytecode_module_create(
-        iree_make_const_byte_span((void*)module_data_.data(),
-                                  module_data_.size()),
-        iree_allocator_null(), iree_allocator_system(), &input_module_));
+        flatbuffer_contents->const_buffer,
+        iree_file_contents_deallocator(flatbuffer_contents),
+        iree_allocator_system(), &input_module_));
 
     // Order matters. The input module will likely be dependent on the hal
     // module.
@@ -229,7 +235,8 @@ class IREEBenchmark {
         iree::span<const std::string>{FLAG_function_inputs.data(),
                                       FLAG_function_inputs.size()},
         &inputs_));
-    RegisterModuleBenchmarks(function_name, context_, function, inputs_.get());
+    RegisterModuleBenchmarks(function_name, context_, function, inputs_.get(),
+                             device_);
     return iree_ok_status();
   }
 
@@ -272,12 +279,11 @@ class IREEBenchmark {
       iree::RegisterModuleBenchmarks(
           std::string(function_name.data, function_name.size), context_,
           function,
-          /*inputs=*/nullptr);
+          /*inputs=*/nullptr, device_);
     }
     return iree_ok_status();
   }
 
-  std::string module_data_;
   iree_vm_instance_t* instance_ = nullptr;
   iree_hal_device_t* device_ = nullptr;
   iree_vm_module_t* hal_module_ = nullptr;

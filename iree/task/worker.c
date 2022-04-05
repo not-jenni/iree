@@ -37,6 +37,8 @@ iree_status_t iree_task_worker_initialize(
   iree_prng_minilcg128_initialize(iree_prng_splitmix64_next(seed_prng),
                                   &out_worker->theft_prng);
   out_worker->local_memory = local_memory;
+  out_worker->processor_id = 0;
+  out_worker->processor_tag = 0;
 
   iree_task_worker_state_t initial_state = IREE_TASK_WORKER_STATE_RUNNING;
   if (executor->scheduling_mode &
@@ -74,40 +76,6 @@ iree_status_t iree_task_worker_initialize(
   return status;
 }
 
-// Returns true if the worker is in the zombie state (exited and awaiting
-// teardown).
-static bool iree_task_worker_is_zombie(iree_task_worker_t* worker) {
-  return iree_atomic_load_int32(&worker->state, iree_memory_order_seq_cst) ==
-         IREE_TASK_WORKER_STATE_ZOMBIE;
-}
-
-void iree_task_worker_deinitialize(iree_task_worker_t* worker) {
-  IREE_TRACE_ZONE_BEGIN(z0);
-
-  // Wait for the thread to enter the zombie state indicating it has exited our
-  // main function - it may still be live in the OS, but it'll not be touching
-  // any of our data structures again so it's fine to blast away.
-  if (worker->thread) {
-    iree_notification_await(&worker->state_notification,
-                            (iree_condition_fn_t)iree_task_worker_is_zombie,
-                            worker);
-  }
-  iree_thread_release(worker->thread);
-
-  // Release unfinished tasks by flushing the mailbox (which if we're here can't
-  // get anything more posted to it) and then discarding everything we still
-  // have a reference to.
-  iree_atomic_task_slist_discard(&worker->mailbox_slist);
-  iree_task_list_discard(&worker->local_task_queue.list);
-
-  iree_notification_deinitialize(&worker->wake_notification);
-  iree_notification_deinitialize(&worker->state_notification);
-  iree_atomic_task_slist_deinitialize(&worker->mailbox_slist);
-  iree_task_queue_deinitialize(&worker->local_task_queue);
-
-  IREE_TRACE_ZONE_END(z0);
-}
-
 void iree_task_worker_request_exit(iree_task_worker_t* worker) {
   if (!worker->thread) return;
   IREE_TRACE_ZONE_BEGIN(z0);
@@ -135,6 +103,42 @@ void iree_task_worker_request_exit(iree_task_worker_t* worker) {
 
   // Kick the worker in case it is waiting for work.
   iree_notification_post(&worker->wake_notification, 1);
+
+  IREE_TRACE_ZONE_END(z0);
+}
+
+// Returns true if the worker is in the zombie state (exited and awaiting
+// teardown).
+static bool iree_task_worker_is_zombie(iree_task_worker_t* worker) {
+  return iree_atomic_load_int32(&worker->state, iree_memory_order_seq_cst) ==
+         IREE_TASK_WORKER_STATE_ZOMBIE;
+}
+
+void iree_task_worker_deinitialize(iree_task_worker_t* worker) {
+  IREE_TRACE_ZONE_BEGIN(z0);
+
+  // Wait for the thread to enter the zombie state indicating it has exited our
+  // main function - it may still be live in the OS, but it'll not be touching
+  // any of our data structures again so it's fine to blast away.
+  iree_task_worker_request_exit(worker);
+  if (worker->thread) {
+    iree_notification_await(&worker->state_notification,
+                            (iree_condition_fn_t)iree_task_worker_is_zombie,
+                            worker, iree_infinite_timeout());
+  }
+  iree_thread_release(worker->thread);
+  worker->thread = NULL;
+
+  // Release unfinished tasks by flushing the mailbox (which if we're here can't
+  // get anything more posted to it) and then discarding everything we still
+  // have a reference to.
+  iree_atomic_task_slist_discard(&worker->mailbox_slist);
+  iree_task_list_discard(&worker->local_task_queue.list);
+
+  iree_notification_deinitialize(&worker->wake_notification);
+  iree_notification_deinitialize(&worker->state_notification);
+  iree_atomic_task_slist_deinitialize(&worker->mailbox_slist);
+  iree_task_queue_deinitialize(&worker->local_task_queue);
 
   IREE_TRACE_ZONE_END(z0);
 }
@@ -167,7 +171,7 @@ iree_task_t* iree_task_worker_try_steal_task(iree_task_worker_t* worker,
 // Executes a task on a worker.
 // Only task types that are scheduled to workers are handled; all others must be
 // handled by the coordinator during scheduling.
-static iree_status_t iree_task_worker_execute(
+static void iree_task_worker_execute(
     iree_task_worker_t* worker, iree_task_t* task,
     iree_task_submission_t* pending_submission) {
   // Execute the task and resolve the task and gather any tasks that are now
@@ -180,31 +184,22 @@ static iree_status_t iree_task_worker_execute(
   // TODO(benvanik): handle partial tasks and re-queuing.
   switch (task->type) {
     case IREE_TASK_TYPE_CALL: {
-      IREE_RETURN_IF_ERROR(
-          iree_task_call_execute((iree_task_call_t*)task, pending_submission));
-      break;
-    }
-    case IREE_TASK_TYPE_DISPATCH_SLICE: {
-      IREE_RETURN_IF_ERROR(iree_task_dispatch_slice_execute(
-          (iree_task_dispatch_slice_t*)task, worker->local_memory,
-          pending_submission));
+      iree_task_call_execute((iree_task_call_t*)task, pending_submission);
       break;
     }
     case IREE_TASK_TYPE_DISPATCH_SHARD: {
-      IREE_RETURN_IF_ERROR(iree_task_dispatch_shard_execute(
-          (iree_task_dispatch_shard_t*)task, worker->local_memory,
-          pending_submission));
+      iree_task_dispatch_shard_execute(
+          (iree_task_dispatch_shard_t*)task, worker->processor_id,
+          worker->local_memory, pending_submission);
       break;
     }
     default:
-      return iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
-                              "incorrect task type for worker execution");
+      IREE_ASSERT_UNREACHABLE("incorrect task type for worker execution");
+      break;
   }
 
-  // NOTE: task is invalidated here!
+  // NOTE: task is invalidated above and must not be used!
   task = NULL;
-
-  return iree_ok_status();
 }
 
 // Pumps the worker thread once, processing a single task.
@@ -252,28 +247,26 @@ static bool iree_task_worker_pump_once(
 
   // Execute the task (may call out to arbitrary user code and may submit more
   // tasks for execution).
-  iree_status_t status =
-      iree_task_worker_execute(worker, task, pending_submission);
-
-  // TODO(#4026): propagate failure to task scope.
-  // We currently drop the error on the floor here; that's because the error
-  // should have already been propagated to the scope and everyone should be
-  // checking that before running things anyway.
-  //
-  // Since we can host work from multiple scopes and want to ensure an error
-  // in one doesn't bring down the whole system we pretend we executed
-  // something here by falling through.
-  IREE_ASSERT_TRUE(iree_status_is_ok(status));
-  iree_status_ignore(status);
+  iree_task_worker_execute(worker, task, pending_submission);
 
   IREE_TRACE_ZONE_END(z0);
   return true;  // try again
+}
+
+// Updates the cached processor ID field in the worker.
+static void iree_task_worker_update_processor_id(iree_task_worker_t* worker) {
+  iree_cpu_requery_processor_id(&worker->processor_tag, &worker->processor_id);
 }
 
 // Alternates between pumping ready tasks in the worker queue and waiting
 // for more tasks to arrive. Only returns when the worker has been asked by
 // the executor to exit.
 static void iree_task_worker_pump_until_exit(iree_task_worker_t* worker) {
+  // Initial processor ID assignment. We normally refresh this upon waking from
+  // a wait but it's possible that there's already work pending and we want to
+  // be able to process it with the proper processor ID immediately.
+  iree_task_worker_update_processor_id(worker);
+
   // Pump the thread loop to process more tasks.
   while (true) {
     // If we fail to find any work to do we'll wait at the end of this loop.
@@ -295,6 +288,9 @@ static void iree_task_worker_pump_until_exit(iree_task_worker_t* worker) {
       // TODO(benvanik): complete tasks before exiting?
       break;
     }
+
+    // TODO(benvanik): we could try to update the processor ID here before we
+    // begin a new batch of work - assuming it's not too expensive.
 
     iree_task_submission_t pending_submission;
     iree_task_submission_initialize(&pending_submission);
@@ -325,8 +321,7 @@ static void iree_task_worker_pump_until_exit(iree_task_worker_t* worker) {
 
     // First self-nominate; this *may* do something or just be ignored (if
     // another worker is already coordinating).
-    iree_task_executor_coordinate(worker->executor, worker,
-                                  /*speculative=*/true);
+    iree_task_executor_coordinate(worker->executor, worker);
 
     // If nothing has been enqueued since we started this loop (so even
     // coordination didn't find anything) we go idle. Otherwise we fall
@@ -338,8 +333,13 @@ static void iree_task_worker_pump_until_exit(iree_task_worker_t* worker) {
     } else {
       IREE_TRACE_ZONE_BEGIN_NAMED(z_wait,
                                   "iree_task_worker_main_pump_wake_wait");
-      iree_notification_commit_wait(&worker->wake_notification, wait_token);
+      iree_notification_commit_wait(&worker->wake_notification, wait_token,
+                                    IREE_TIME_INFINITE_FUTURE);
       IREE_TRACE_ZONE_END(z_wait);
+
+      // Woke from a wait - query the processor ID in case we migrated during
+      // the sleep.
+      iree_task_worker_update_processor_id(worker);
     }
 
     // Wait completed.
@@ -363,7 +363,7 @@ static int iree_task_worker_main(iree_task_worker_t* worker) {
   // Enter the running state immediately. Note that we could have been requested
   // to exit while suspended/still starting up, so check that here before we
   // mess with any data structures.
-  bool should_run =
+  const bool should_run =
       iree_atomic_exchange_int32(&worker->state, IREE_TASK_WORKER_STATE_RUNNING,
                                  iree_memory_order_seq_cst) !=
       IREE_TASK_WORKER_STATE_EXITING;

@@ -1,13 +1,11 @@
-// Tests printing and parsing of executable/structural ops.
-
-// RUN: iree-opt -split-input-file %s | iree-opt -split-input-file | IreeFileCheck %s
+// RUN: iree-opt -split-input-file %s | iree-opt -split-input-file | FileCheck %s
 
 // CHECK-LABEL: @dispatch_ex
 flow.executable @dispatch_ex {
   // CHECK: module {
   builtin.module {
     // CHECK: @dispatch0
-    func @dispatch0() {
+    func.func @dispatch0() {
       return
     }
   }

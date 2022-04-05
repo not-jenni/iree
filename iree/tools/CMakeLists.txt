@@ -12,6 +12,17 @@ if(NOT ${IREE_ENABLE_THREADING})
   return()
 endif()
 
+# Depending on which target backends are enabled, we may or may not have built
+# LLD.
+if(IREE_LLD_TARGET)
+  # lld install - required by the compiler to link codegen executables.
+  install(
+    TARGETS lld
+    COMPONENT Compiler
+    RUNTIME DESTINATION bin
+  )
+endif()
+
 add_subdirectory(android)
 add_subdirectory(test)
 add_subdirectory(utils)
@@ -19,36 +30,37 @@ add_subdirectory(utils)
 # Enable compiler targets based on options.
 set(IREE_COMPILER_TARGETS "")
 set(IREE_COMPILER_TARGET_COPTS "")
-if("${IREE_TARGET_BACKEND_DYLIB-LLVM-AOT}" OR "${IREE_TARGET_BACKEND_WASM-LLVM-AOT}")
+if(IREE_TARGET_BACKEND_DYLIB_LLVM_AOT OR IREE_TARGET_BACKEND_WASM_LLVM_AOT)
   list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::LLVM)
   list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_LLVMAOT_TARGET")
 endif()
-if("${IREE_TARGET_BACKEND_METAL-SPIRV}")
+if(IREE_TARGET_BACKEND_METAL_SPIRV)
   list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::MetalSPIRV)
   list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_METALSPIRV_TARGET")
 endif()
-if("${IREE_TARGET_BACKEND_VMVX}")
+if(IREE_TARGET_BACKEND_VMVX)
   list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::VMVX)
   list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_VMVX_TARGET")
 endif()
-if("${IREE_TARGET_BACKEND_VULKAN-SPIRV}")
+if(IREE_TARGET_BACKEND_VULKAN_SPIRV)
   list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::VulkanSPIRV)
   list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_VULKANSPIRV_TARGET")
 endif()
-if("${IREE_TARGET_BACKEND_CUDA}")
+if(IREE_TARGET_BACKEND_WEBGPU)
+  list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::WebGPU)
+  list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_WEBGPU_TARGET")
+endif()
+if(IREE_TARGET_BACKEND_CUDA)
   list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::CUDA)
   list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_CUDA_TARGET")
 endif()
-if("${IREE_TARGET_BACKEND_ROCM}")
+if(IREE_TARGET_BACKEND_ROCM)
   list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::ROCM)
   list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_ROCM_TARGET")
 endif()
 
-if(IREE_ENABLE_EMITC)
-  set(IREE_EMITC_CONDITIONAL_DEP
-    MLIREmitC
-  )
-endif()
+# Write some important CMake options to a file for convenient use from scripts.
+configure_file(build_config_template.txt.in build_config.txt)
 
 iree_cc_binary(
   NAME
@@ -120,14 +132,13 @@ iree_cc_binary(
   NAME
     iree-dump-module
   SRCS
-    "iree-dump-module-main.cc"
+    "iree-dump-module-main.c"
   DEPS
     flatcc::runtime
     iree::base
     iree::base::internal::file_io
     iree::base::internal::flatcc::debugging
     iree::schemas::bytecode_module_def_c_fbs
-    iree::tools::utils::vm_util
 )
 
 iree_cc_binary(
@@ -181,6 +192,7 @@ iree_cc_binary(
     iree::hal
     iree::hal::drivers
     iree::modules::hal
+    iree::tools::utils::cpu_features
     iree::tools::utils::trace_replay
     iree::tools::utils::yaml_util
     iree::vm
@@ -201,6 +213,7 @@ if(${IREE_BUILD_COMPILER})
       LLVMTableGen
       MLIRSupport
       MLIRTableGen
+      iree::compiler::Utils
     HOSTONLY
   )
 
@@ -211,23 +224,26 @@ if(${IREE_BUILD_COMPILER})
       "init_iree_dialects.h"
       "init_iree_passes.h"
     DEPS
-      IREEDialectsIREEPyDMDialect
-      IREEDialectsIREEDialect
+      IREEInputDialect
+      IREELinalgExtDialect
+      IREELinalgExtTransforms
+      IREELinalgExtOpInterfaceImpl
+      IREELinalgTransformDialect
+      IREELinalgTransformDialectTransforms
+      IREEPyDMDialect
       MLIRIR
       iree::compiler::Bindings::Native::Transforms
       iree::compiler::Bindings::TFLite::Transforms
+      iree::compiler::Codegen::Dialect::IREECodegenDialect
+      iree::compiler::Codegen::Interfaces::Interfaces
       iree::compiler::Dialect::Flow::IR
       iree::compiler::Dialect::Flow::Transforms
       iree::compiler::Dialect::HAL::IR::HALDialect
       iree::compiler::Dialect::HAL::Transforms
-      iree::compiler::Dialect::LinalgExt::IR
-      iree::compiler::Dialect::LinalgExt::IR::TiledOpInterface
-      iree::compiler::Dialect::LinalgExt::Transforms
       iree::compiler::Dialect::Modules::VMVX::IR::VMVXDialect
       iree::compiler::Dialect::Modules::VMVX::Transforms
-      iree::compiler::Dialect::Shape::IR
-      iree::compiler::Dialect::Shape::Transforms
       iree::compiler::Dialect::Stream::IR
+      iree::compiler::Dialect::Stream::Transforms
       iree::compiler::Dialect::Util::IR
       iree::compiler::Dialect::Util::Transforms
       iree::compiler::Dialect::VM::Analysis
@@ -236,7 +252,10 @@ if(${IREE_BUILD_COMPILER})
       iree::compiler::Dialect::Vulkan::IR
       iree::compiler::InputConversion::Common
       iree::compiler::InputConversion::MHLO
+      iree::compiler::InputConversion::TMTensor
       iree::compiler::InputConversion::TOSA
+      iree::compiler::ConstEval
+      iree::compiler::Translation::HALExecutable
       iree::compiler::Translation::IREEVM
     PUBLIC
   )
@@ -248,8 +267,15 @@ if(${IREE_BUILD_COMPILER})
       "init_mlir_dialects.h"
       "init_mlir_passes.h"
     DEPS
+      # Sets IREE_HAVE_EMITC_DIALECT and transitively depends on MLIREmitC
+      # if enabled.
+      iree::compiler::Dialect::VM::Target::C::Enabled
       MLIRAffine
       MLIRAffineTransforms
+      MLIRArmNeon
+      MLIRArmNeon2dToIntr
+      MLIRBufferization
+      MLIRControlFlow
       MLIRGPUOps
       MLIRGPUToSPIRV
       MLIRIR
@@ -259,14 +285,16 @@ if(${IREE_BUILD_COMPILER})
       MLIRLinalgToSPIRV
       MLIRLinalgTransforms
       MLIRQuant
+      MLIRQuantTransforms
       MLIRSCF
       MLIRSCFToGPU
       MLIRSCFTransforms
       MLIRSPIRV
       MLIRSPIRVTransforms
       MLIRShape
-      MLIRStandard
-      MLIRStandardToSPIRV
+      MLIRFunc
+      MLIRFuncToSPIRV
+      MLIRTensorInferTypeOpInterfaceImpl
       MLIRTosa
       MLIRTosaTransforms
       MLIRTransforms
@@ -284,9 +312,21 @@ if(${IREE_BUILD_COMPILER})
       ::init_compiler_modules
       ::init_iree_passes_and_dialects
       ::init_mlir_passes_and_dialects
+      ::init_torch_mlir_dialects
       ::init_xla_dialects
       iree::compiler::Codegen::Codegen
       iree::compiler::Dialect::HAL::Conversion::Passes
+    PUBLIC
+  )
+
+  iree_cc_library(
+    NAME
+      init_llvmir_translations
+    HDRS
+      "init_llvmir_translations.h"
+    DEPS
+      MLIRArmNeonToLLVMIRTranslation
+      MLIRLLVMToLLVMIRTranslation
     PUBLIC
   )
 
@@ -319,7 +359,19 @@ if(${IREE_BUILD_COMPILER})
     HDRS
       "init_xla_dialects.h"
     DEPS
-      tensorflow::mlir_hlo
+      tensorflow::external_mhlo_includes
+      ChloDialect
+      MhloDialect
+    PUBLIC
+  )
+
+  iree_cc_library(
+    NAME
+      init_torch_mlir_dialects
+    HDRS
+      "init_torch_mlir_dialects.h"
+    DEPS
+      TorchMLIRTMTensorDialect
     PUBLIC
   )
 
@@ -329,6 +381,7 @@ if(${IREE_BUILD_COMPILER})
     HDRS
       "init_translations.h"
     DEPS
+      iree::compiler::Translation::HALExecutable
       iree::compiler::Translation::IREEVM
       MLIRSPIRVTranslateRegistration
   )
@@ -345,7 +398,6 @@ if(${IREE_BUILD_COMPILER})
       MLIRIR
       MLIROptLib
       MLIRSupport
-      ${IREE_EMITC_CONDITIONAL_DEP}
     PUBLIC
   )
 
@@ -355,27 +407,30 @@ if(${IREE_BUILD_COMPILER})
     HDRS
       "iree_translate_lib.h"
     SRCS
+      "iree_compile_lib.cc"
       "iree_translate_lib.cc"
     DEPS
-      ::init_compiler_modules
-      ::init_iree_passes_and_dialects
-      ::init_mlir_passes_and_dialects
+      ::init_llvmir_translations
+      ::init_passes_and_dialects
       ::init_targets
       ::init_translations
-      ::init_xla_dialects
       LLVMSupport
       MLIRIR
-      MLIRLLVMToLLVMIRTranslation
       MLIRSCFTransforms
+      MLIRParser
       MLIRPass
       MLIRSupport
       MLIRTargetLLVMIRExport
-      MLIRTranslation
+      MLIRTranslateLib
       iree::compiler::Codegen::Codegen
+      iree::compiler::ConstEval
       iree::compiler::Dialect::VM::Target::Bytecode
       iree::compiler::Dialect::VM::Target::init_targets
+      iree::compiler::Dialect::VM::Target::C
+      iree::compiler::Pipelines
+      iree::compiler::Translation::HALExecutable
       iree::compiler::Translation::IREEVM
-      ${IREE_EMITC_CONDITIONAL_DEP}
+      iree::compiler::Utils
     PUBLIC
   )
 
@@ -387,7 +442,19 @@ if(${IREE_BUILD_COMPILER})
     DEPS
       ::iree_translate_lib
     DATA
-      lld
+      ${IREE_LLD_TARGET}
+    HOSTONLY
+  )
+
+  iree_cc_binary(
+    NAME
+      iree-compile
+    SRCS
+      "iree-compile-main.cc"
+    DEPS
+      ::iree_translate_lib
+    DATA
+      ${IREE_LLD_TARGET}
     HOSTONLY
   )
 
@@ -397,7 +464,7 @@ if(${IREE_BUILD_COMPILER})
     DEPS
       ::iree_opt_main
     DATA
-      lld
+      ${IREE_LLD_TARGET}
     HOSTONLY
   )
 
@@ -411,8 +478,8 @@ if(${IREE_BUILD_COMPILER})
       MLIRIR
       MLIRLspServerLib
       MLIRSupport
-      ${IREE_EMITC_CONDITIONAL_DEP}
     PUBLIC
+    EXCLUDE_FROM_ALL
   )
 
   iree_cc_binary(
@@ -446,77 +513,15 @@ if(${IREE_BUILD_COMPILER})
       iree::vm::bytecode_module
       iree::vm::cc
     DATA
-      lld
+      ${IREE_LLD_TARGET}
     HOSTONLY
   )
 
-  # IreeFileCheck
-  # We could encapsulate this in iree_sh_binary, but we only have one use of it
-  # in the project and this file is already not covered by Bazel->CMake
-
-  # Symlink the shell script into the build tree as the expected executable name
-  add_custom_command(
-    OUTPUT
-      IreeFileCheck
-    COMMAND
-      ${CMAKE_COMMAND} -E create_symlink
-      ${CMAKE_CURRENT_SOURCE_DIR}/IreeFileCheck.sh
-      IreeFileCheck
-  )
-
-  # CMake always needs to custom targets to drive custom commands. We have to
-  # give it a different name.
-  add_custom_target(iree_tools_IreeFileCheck_Driver ALL DEPENDS IreeFileCheck)
-
-  # But custom target doesn't have the TARGET_FILE property, which we need, so
-  # wrap it yet again in an executable. This is marked as an imported executable
-  # because otherwise CMake would try to compile it as C++.
-  add_executable(iree_tools_IreeFileCheck IMPORTED GLOBAL)
-  set_property(
-    TARGET
-    iree_tools_IreeFileCheck
-    PROPERTY IMPORTED_LOCATION
-    "${CMAKE_CURRENT_BINARY_DIR}/IreeFileCheck"
-  )
-  add_dependencies(iree_tools_IreeFileCheck iree_tools_IreeFileCheck_Driver)
-  # Finally do our normal aliasing tricks to make this accessible as a qualified
-  # target name throughout the project. Accessing this as an unqualified target
-  # is not supported as the name would conflict with the file name, which CMake
-  # does not support (https://gitlab.kitware.com/cmake/cmake/-/issues/18627).
-  add_executable(iree::tools::IreeFileCheck ALIAS iree_tools_IreeFileCheck)
-
-  add_custom_target(BundledLLVMFileCheck ALL
-    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:FileCheck> FileCheck
-    DEPENDS FileCheck
-  )
-
-  # lld install - required by the compiler to link codegen executables.
-  install(
-    TARGETS lld
-    COMPONENT Compiler
-    RUNTIME DESTINATION bin
-  )
-
-  # General test dependency binary/scripts installed.
-  install(
-    PROGRAMS
-      IreeFileCheck.bat
-      run_lit.bat
-      run_lit.ps1
-      run_lit.sh
-    DESTINATION "tests/bin"
-    COMPONENT Tests
-  )
-
-  # Rename IreeFileCheck.sh -> IreeFileCheck in lieu of symlink (as is used in
-  # the build tree).
-  install(
-    PROGRAMS
-      IreeFileCheck.sh
-    DESTINATION "tests/bin"
-    RENAME "IreeFileCheck"
-    COMPONENT Tests
-  )
+  # Ensure FileCheck gets built. Tests don't have dependencies in CMake because
+  # they aren't targets. So until we fix that, we just force this to get built.
+  # Limiting this to when IREE_BUILD_TESTS is set prevents the installation
+  # below, which we use for cross-platform testing.
+  set_target_properties(FileCheck PROPERTIES EXCLUDE_FROM_ALL OFF)
 
   # Bundle the FileCheck binary from LLVM into our tests/bin directory so
   # installed FileCheck tests are hermetic.

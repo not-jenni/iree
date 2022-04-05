@@ -17,7 +17,7 @@
 #include "iree/base/internal/wait_handle.h"
 #include "iree/base/target_platform.h"
 
-#if defined(IREE_PLATFORM_WINDOWS)
+#if IREE_WAIT_API == IREE_WAIT_API_WIN32
 
 #include "iree/base/tracing.h"
 
@@ -35,7 +35,7 @@ static_assert(
 
 // Clones a wait handle such that both the |source_handle| and new
 // |out_target_handle| both reference the same wait primitive. The handle must
-// be closed with iree_wait_primitive_close as if it had been created.
+// be closed with iree_wait_handle_close as if it had been created.
 static iree_status_t iree_wait_primitive_clone(
     iree_wait_handle_t* source_handle, iree_wait_handle_t* out_target_handle) {
   if (source_handle->type != IREE_WAIT_PRIMITIVE_TYPE_WIN32_HANDLE) {
@@ -53,14 +53,15 @@ static iree_status_t iree_wait_primitive_clone(
         iree_status_code_from_win32_error(GetLastError()),
         "unable to duplicate HANDLE; possibly out of process handles");
   }
-  return iree_wait_handle_wrap_primitive(IREE_WAIT_PRIMITIVE_TYPE_WIN32_HANDLE,
-                                         value, out_target_handle);
+  iree_wait_handle_wrap_primitive(IREE_WAIT_PRIMITIVE_TYPE_WIN32_HANDLE, value,
+                                  out_target_handle);
+  return iree_ok_status();
 }
 
 // Closes an existing handle that was either created manually or via
 // iree_wait_primitive_clone. Must not be called while there are any waiters on
 // the handle.
-static void iree_wait_primitive_close(iree_wait_handle_t* handle) {
+void iree_wait_handle_close(iree_wait_handle_t* handle) {
   if (IREE_LIKELY(handle->value.win32.handle != 0)) {
     CloseHandle((HANDLE)handle->value.win32.handle);
   }
@@ -137,12 +138,16 @@ struct iree_wait_set_t {
 iree_status_t iree_wait_set_allocate(iree_host_size_t capacity,
                                      iree_allocator_t allocator,
                                      iree_wait_set_t** out_set) {
+  IREE_ASSERT_ARGUMENT(out_set);
+
   // Be reasonable; 64 MAXIMUM_WAIT_OBJECTS is low, but 64K objects is too high.
   if (capacity >= UINT16_MAX) {
     return iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
                             "wait set capacity of %zu is unreasonably large",
                             capacity);
   }
+
+  IREE_TRACE_ZONE_BEGIN(z0);
 
   iree_host_size_t user_handle_list_size =
       capacity * sizeof(iree_wait_handle_t);
@@ -151,8 +156,8 @@ iree_status_t iree_wait_set_allocate(iree_host_size_t capacity,
                                 user_handle_list_size + native_handle_list_size;
 
   iree_wait_set_t* set = NULL;
-  IREE_RETURN_IF_ERROR(
-      iree_allocator_malloc(allocator, total_size, (void**)&set));
+  IREE_RETURN_AND_END_ZONE_IF_ERROR(
+      z0, iree_allocator_malloc(allocator, total_size, (void**)&set));
   set->allocator = allocator;
   set->handle_capacity = capacity;
   iree_wait_set_clear(set);
@@ -164,18 +169,28 @@ iree_status_t iree_wait_set_allocate(iree_host_size_t capacity,
       (HANDLE*)((uint8_t*)set->user_handles + user_handle_list_size);
 
   *out_set = set;
+  IREE_TRACE_ZONE_END(z0);
   return iree_ok_status();
 }
 
 void iree_wait_set_free(iree_wait_set_t* set) {
+  if (!set) return;
+  IREE_TRACE_ZONE_BEGIN(z0);
   iree_allocator_free(set->allocator, set);
+  IREE_TRACE_ZONE_END(z0);
+}
+
+bool iree_wait_set_is_empty(const iree_wait_set_t* set) {
+  return set->handle_count != 0;
 }
 
 iree_status_t iree_wait_set_insert(iree_wait_set_t* set,
                                    iree_wait_handle_t handle) {
   if (set->total_handle_count + 1 > set->handle_capacity) {
     return iree_make_status(IREE_STATUS_RESOURCE_EXHAUSTED,
-                            "wait set capacity reached");
+                            "wait set capacity %" PRIhsz
+                            " reached; no more wait handles available",
+                            set->handle_capacity);
   }
 
   // First check to see if we already have the handle in the set; since APIs
@@ -225,8 +240,7 @@ iree_status_t iree_wait_set_insert(iree_wait_set_t* set,
   ++set->total_handle_count;
   iree_host_size_t index = set->handle_count++;
   iree_wait_handle_t* user_handle = &set->user_handles[index];
-  IREE_IGNORE_ERROR(
-      iree_wait_handle_wrap_primitive(handle.type, handle.value, user_handle));
+  iree_wait_handle_wrap_primitive(handle.type, handle.value, user_handle);
   user_handle->set_internal.dupe_count = 0;  // just us so far
   set->native_handles[index] = native_handle;
 
@@ -292,8 +306,7 @@ static iree_status_t iree_wait_multi(iree_wait_set_t* set, bool require_all,
 
   // Remap absolute timeout to relative timeout, handling special values as
   // needed.
-  DWORD timeout_ms =
-      (DWORD)(iree_absolute_deadline_to_timeout_ns(deadline_ns) / 1000000ull);
+  DWORD timeout_ms = iree_absolute_deadline_to_timeout_ms(deadline_ns);
 
   // Perform the wait; this is allowed to yield the calling thread even if the
   // timeout_ms is 0 to indicate a poll.
@@ -374,8 +387,7 @@ iree_status_t iree_wait_one(iree_wait_handle_t* handle,
 
   // Remap absolute timeout to relative timeout, handling special values as
   // needed.
-  DWORD timeout_ms =
-      (DWORD)(iree_absolute_deadline_to_timeout_ns(deadline_ns) / 1000000ull);
+  DWORD timeout_ms = iree_absolute_deadline_to_timeout_ms(deadline_ns);
 
   // Perform the wait; this is allowed to yield the calling thread even if the
   // timeout_ms is 0 to indicate a poll.
@@ -390,7 +402,7 @@ iree_status_t iree_wait_one(iree_wait_handle_t* handle,
     // here as we don't want to track all that in non-exceptional cases.
     status = iree_status_from_code(IREE_STATUS_DEADLINE_EXCEEDED);
   } else if (result == WAIT_OBJECT_0) {
-    // Handle was signaled sucessfully.
+    // Handle was signaled successfully.
     status = iree_ok_status();
   } else if (result == WAIT_ABANDONED_0) {
     // The mutex handle was abandonded during the wait.
@@ -434,20 +446,23 @@ iree_status_t iree_event_initialize(bool initial_state,
     return iree_make_status(iree_status_code_from_win32_error(GetLastError()),
                             "unable to create event");
   }
-  return iree_wait_handle_wrap_primitive(IREE_WAIT_PRIMITIVE_TYPE_WIN32_HANDLE,
-                                         value, out_event);
+  iree_wait_handle_wrap_primitive(IREE_WAIT_PRIMITIVE_TYPE_WIN32_HANDLE, value,
+                                  out_event);
+  return iree_ok_status();
 }
 
 void iree_event_deinitialize(iree_event_t* event) {
-  iree_wait_primitive_close(event);
+  iree_wait_handle_close(event);
 }
 
 void iree_event_set(iree_event_t* event) {
-  SetEvent((HANDLE)event->value.win32.handle);
+  HANDLE handle = (HANDLE)event->value.win32.handle;
+  if (handle) SetEvent(handle);
 }
 
 void iree_event_reset(iree_event_t* event) {
-  ResetEvent((HANDLE)event->value.win32.handle);
+  HANDLE handle = (HANDLE)event->value.win32.handle;
+  if (handle) ResetEvent(handle);
 }
 
-#endif  // IREE_PLATFORM_WINDOWS
+#endif  // IREE_WAIT_API == IREE_WAIT_API_WIN32

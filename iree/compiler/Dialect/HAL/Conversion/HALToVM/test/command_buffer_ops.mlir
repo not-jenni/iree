@@ -1,7 +1,7 @@
-// RUN: iree-opt -split-input-file -iree-convert-hal-to-vm %s | IreeFileCheck %s
+// RUN: iree-opt -split-input-file -iree-convert-hal-to-vm -canonicalize %s | FileCheck %s
 
 // CHECK-LABEL: @command_buffer_create
-func @command_buffer_create(%arg0: !hal.device) {
+func.func @command_buffer_create(%arg0: !hal.device) {
   // CHECK: %ref = vm.call @hal.command_buffer.create(%arg0, %c1, %c3) : (!vm.ref<!hal.device>, i32, i32) -> !vm.ref<!hal.command_buffer>
   %cmd = hal.command_buffer.create device(%arg0 : !hal.device) mode("OneShot") categories("Transfer|Dispatch") : !hal.command_buffer
   return
@@ -10,7 +10,7 @@ func @command_buffer_create(%arg0: !hal.device) {
 // -----
 
 // CHECK-LABEL: @command_buffer_begin_end
-func @command_buffer_begin_end(%arg0: !hal.command_buffer) {
+func.func @command_buffer_begin_end(%arg0: !hal.command_buffer) {
   // CHECK: vm.call @hal.command_buffer.begin(%arg0) : (!vm.ref<!hal.command_buffer>) -> ()
   hal.command_buffer.begin<%arg0 : !hal.command_buffer>
   // CHECK: vm.call @hal.command_buffer.end(%arg0) : (!vm.ref<!hal.command_buffer>) -> ()
@@ -21,7 +21,7 @@ func @command_buffer_begin_end(%arg0: !hal.command_buffer) {
 // -----
 
 // CHECK-LABEL: @command_buffer_execution_barrier
-func @command_buffer_execution_barrier(
+func.func @command_buffer_execution_barrier(
   %arg0: !hal.command_buffer,
   %arg1: !hal.buffer
 ) {
@@ -35,25 +35,64 @@ func @command_buffer_execution_barrier(
 
 // -----
 
-// CHECK-LABEL: @command_buffer_fill_buffer
-func @command_buffer_fill_buffer(
+// CHECK-LABEL: @command_buffer_fill_buffer_i8
+func.func @command_buffer_fill_buffer_i8(
   %arg0: !hal.command_buffer,
-  %arg1: !hal.buffer
+  %arg1: !hal.buffer,
+  %arg2: i8
 ) {
   %c100 = arith.constant 100 : index
   %c200 = arith.constant 200 : index
-  %c300 = arith.constant 300 : i32
-  // CHECK: vm.call @hal.command_buffer.fill_buffer(%arg0, %arg1, %c100, %c200, %c300) : (!vm.ref<!hal.command_buffer>, !vm.ref<!hal.buffer>, i32, i32, i32) -> ()
+  // CHECK-DAG: %[[PATTERN_LENGTH:.+]] = vm.const.i32 1
+  // CHECK-DAG: %[[EXTEND:.+]] = vm.ext.i8.i32.u %arg2 : i32 -> i32
+  // CHECK: vm.call @hal.command_buffer.fill_buffer(%arg0, %arg1, %c100, %c200, %[[EXTEND]], %[[PATTERN_LENGTH]]) : (!vm.ref<!hal.command_buffer>, !vm.ref<!hal.buffer>, i32, i32, i32, i32) -> ()
   hal.command_buffer.fill_buffer<%arg0 : !hal.command_buffer>
       target(%arg1 : !hal.buffer)[%c100, %c200]
-      pattern(%c300 : i32)
+      pattern(%arg2 : i8)
+  return
+}
+
+// -----
+
+// CHECK-LABEL: @command_buffer_fill_buffer_i16
+func.func @command_buffer_fill_buffer_i16(
+  %arg0: !hal.command_buffer,
+  %arg1: !hal.buffer,
+  %arg2: i16
+) {
+  %c100 = arith.constant 100 : index
+  %c200 = arith.constant 200 : index
+  // CHECK-DAG: %[[PATTERN_LENGTH:.+]] = vm.const.i32 2
+  // CHECK-DAG: %[[EXTEND:.+]] = vm.ext.i16.i32.u %arg2 : i32 -> i32
+  // CHECK: vm.call @hal.command_buffer.fill_buffer(%arg0, %arg1, %c100, %c200, %[[EXTEND]], %[[PATTERN_LENGTH]]) : (!vm.ref<!hal.command_buffer>, !vm.ref<!hal.buffer>, i32, i32, i32, i32) -> ()
+  hal.command_buffer.fill_buffer<%arg0 : !hal.command_buffer>
+      target(%arg1 : !hal.buffer)[%c100, %c200]
+      pattern(%arg2 : i16)
+  return
+}
+
+// -----
+
+// CHECK-LABEL: @command_buffer_fill_buffer_i32
+func.func @command_buffer_fill_buffer_i32(
+  %arg0: !hal.command_buffer,
+  %arg1: !hal.buffer,
+  %arg2: i32
+) {
+  %c100 = arith.constant 100 : index
+  %c200 = arith.constant 200 : index
+  // CHECK-DAG: %[[PATTERN_LENGTH:.+]] = vm.const.i32 4
+  // CHECK: vm.call @hal.command_buffer.fill_buffer(%arg0, %arg1, %c100, %c200, %arg2, %[[PATTERN_LENGTH]]) : (!vm.ref<!hal.command_buffer>, !vm.ref<!hal.buffer>, i32, i32, i32, i32) -> ()
+  hal.command_buffer.fill_buffer<%arg0 : !hal.command_buffer>
+      target(%arg1 : !hal.buffer)[%c100, %c200]
+      pattern(%arg2 : i32)
   return
 }
 
 // -----
 
 // CHECK-LABEL: @command_buffer_copy_buffer
-func @command_buffer_copy_buffer(
+func.func @command_buffer_copy_buffer(
   %arg0: !hal.command_buffer,
   %arg1: !hal.buffer
 ) {
@@ -71,7 +110,7 @@ func @command_buffer_copy_buffer(
 // -----
 
 // CHECK-LABEL: @command_buffer_bind_descriptor_set
-func @command_buffer_bind_descriptor_set(
+func.func @command_buffer_bind_descriptor_set(
   %arg0: !hal.command_buffer,
   %arg1: !hal.executable_layout,
   %arg2: !hal.descriptor_set
@@ -93,7 +132,7 @@ func @command_buffer_bind_descriptor_set(
 // -----
 
 // CHECK-LABEL: @command_buffer_dispatch
-func @command_buffer_dispatch(
+func.func @command_buffer_dispatch(
   %arg0: !hal.command_buffer,
   %arg1: !hal.executable
 ) {
@@ -110,7 +149,7 @@ func @command_buffer_dispatch(
 // -----
 
 // CHECK-LABEL: @command_buffer_dispatch_indirect
-func @command_buffer_dispatch_indirect(
+func.func @command_buffer_dispatch_indirect(
   %arg0: !hal.command_buffer,
   %arg1: !hal.executable,
   %arg2: !hal.buffer

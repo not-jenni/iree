@@ -17,7 +17,7 @@ template <typename T>
 struct GenericConvertTypesPattern : public OpConversionPattern<T> {
   using OpConversionPattern<T>::OpConversionPattern;
   LogicalResult matchAndRewrite(
-      T op, llvm::ArrayRef<Value> newOperands,
+      T op, typename T::Adaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     SmallVector<Type> resultTypes;
     for (auto oldType : op.getOperation()->getResultTypes()) {
@@ -29,8 +29,8 @@ struct GenericConvertTypesPattern : public OpConversionPattern<T> {
       // resultTypes.append(newTypes);
       resultTypes.push_back(newTypes.front());
     }
-    auto newOp = rewriter.create<T>(op.getLoc(), resultTypes, newOperands,
-                                    op->getAttrs());
+    auto newOp = rewriter.create<T>(op.getLoc(), resultTypes,
+                                    adaptor.getOperands(), op->getAttrs());
     rewriter.replaceOp(op, newOp->getResults());
     return success();
   }
@@ -54,11 +54,11 @@ inline void addGenericLegalOp(ConversionTarget &conversionTarget,
 // |typeConverter|.
 void populateUtilConversionPatterns(MLIRContext *context,
                                     TypeConverter &typeConverter,
-                                    OwningRewritePatternList &patterns);
+                                    RewritePatternSet &patterns);
 void populateUtilConversionPatterns(MLIRContext *context,
                                     ConversionTarget &conversionTarget,
                                     TypeConverter &typeConverter,
-                                    OwningRewritePatternList &patterns);
+                                    RewritePatternSet &patterns);
 
 }  // namespace iree_compiler
 }  // namespace mlir

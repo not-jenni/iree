@@ -15,14 +15,12 @@ iree_cc_library(
     Bytecode
   HDRS
     "BytecodeModuleTarget.h"
-    "TranslationFlags.h"
   SRCS
     "BytecodeEncoder.cpp"
     "BytecodeEncoder.h"
     "BytecodeModuleTarget.cpp"
     "DebugDatabaseBuilder.cpp"
     "DebugDatabaseBuilder.h"
-    "TranslationFlags.cpp"
     "TranslationRegistration.cpp"
   DEPS
     LLVMSupport
@@ -30,7 +28,7 @@ iree_cc_library(
     MLIRPass
     MLIRSupport
     MLIRTransforms
-    MLIRTranslation
+    MLIRTranslateLib
     iree::compiler::Dialect::Util::IR
     iree::compiler::Dialect::Util::Transforms
     iree::compiler::Dialect::VM::Analysis

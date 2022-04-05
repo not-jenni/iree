@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 load("//iree:build_defs.oss.bzl", "iree_cmake_extra_content")
-load("//build_tools/bazel:run_binary_test.bzl", "run_binary_test")
+load("//build_tools/bazel:native_binary.bzl", "native_test")
 
 package(
     default_visibility = ["//visibility:public"],
@@ -16,6 +16,22 @@ package(
 #===------------------------------------------------------------------------===#
 # Hello World!
 #===------------------------------------------------------------------------===#
+
+cc_binary(
+    name = "hello_world_file",
+    srcs = ["hello_world_explained.c"],
+    defines = [
+        # Load data from a file passed on the command line.
+        "IREE_RUNTIME_DEMO_LOAD_FILE_FROM_COMMAND_LINE_ARG",
+    ],
+    deps = [
+        "//iree/runtime",
+    ],
+)
+
+# TODO(benvanik): native_test that passes the file as a flag. Right now we
+# can't specify data through native_test, though, so this isn't possible to
+# automate.
 
 iree_cmake_extra_content(
     content = """
@@ -39,26 +55,10 @@ cc_binary(
     ],
 )
 
-run_binary_test(
+native_test(
     name = "hello_world_embedded_test",
-    test_binary = ":hello_world_embedded",
+    src = ":hello_world_embedded",
 )
-
-cc_binary(
-    name = "hello_world_file",
-    srcs = ["hello_world_explained.c"],
-    defines = [
-        # Load data from a file passed on the command line.
-        "IREE_RUNTIME_DEMO_LOAD_FILE_FROM_COMMAND_LINE_ARG",
-    ],
-    deps = [
-        "//iree/runtime",
-    ],
-)
-
-# TODO(benvanik): run_binary_test that passes the file as a flag. Right now we
-# can't specify data through run_binary_test, though, so this isn't possible to
-# automate.
 
 cc_binary(
     name = "hello_world_terse",
@@ -69,7 +69,7 @@ cc_binary(
     ],
 )
 
-run_binary_test(
+native_test(
     name = "hello_world_terse_test",
-    test_binary = ":hello_world_terse",
+    src = ":hello_world_terse",
 )

@@ -15,8 +15,8 @@
 #include "iree/compiler/Codegen/Utils/MarkerUtils.h"
 #include "iree/compiler/Codegen/Utils/Utils.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/IR/LinalgInterfaces.h"
-#include "mlir/Dialect/Linalg/IR/LinalgOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
@@ -30,7 +30,7 @@ namespace {
 }  // namespace
 
 LogicalResult defineWorkgroupCountRegion(
-    OpBuilder &builder, FuncOp funcOp,
+    OpBuilder &builder, func::FuncOp funcOp,
     WorkgroupCountRegionBuilder regionBuilder) {
   IREE::HAL::ExecutableEntryPointOp entryPointOp = getEntryPoint(funcOp);
   if (!entryPointOp) {
@@ -44,25 +44,25 @@ LogicalResult defineWorkgroupCountRegion(
 
   auto clonedOp = builder.create<IREE::HAL::ExecutableEntryPointOp>(
       loc, entryPointOp.sym_nameAttr(), entryPointOp.ordinalAttr(),
-      entryPointOp.interfaceAttr(), entryPointOp.workgroup_sizeAttr(),
+      entryPointOp.layoutAttr(), entryPointOp.workgroup_sizeAttr(),
       entryPointOp.workgroup_local_memoryAttr(), 1);
   // Copy over all attributes
   for (auto attr : entryPointOp->getAttrs()) {
-    if (attr.first != entryPointOp.sym_nameAttrName() &&
-        attr.first != entryPointOp.ordinalAttrName() &&
-        attr.first != entryPointOp.interfaceAttrName() &&
-        attr.first != entryPointOp.workgroup_sizeAttrName() &&
-        attr.first != entryPointOp.workgroup_local_memoryAttrName()) {
-      clonedOp->setAttr(attr.first, attr.second);
+    if (attr.getName() != entryPointOp.sym_nameAttrName() &&
+        attr.getName() != entryPointOp.ordinalAttrName() &&
+        attr.getName() != entryPointOp.layoutAttr() &&
+        attr.getName() != entryPointOp.workgroup_sizeAttrName() &&
+        attr.getName() != entryPointOp.workgroup_local_memoryAttrName()) {
+      clonedOp->setAttr(attr.getName(), attr.getValue());
     }
   }
   Region *region = clonedOp.getBody();
   Block *entryBlock = builder.createBlock(region);
   // Add 3 index arguments for the workload.
   auto indexType = builder.getIndexType();
-  std::array<Value, 3> workload = {entryBlock->addArgument(indexType),
-                                   entryBlock->addArgument(indexType),
-                                   entryBlock->addArgument(indexType)};
+  std::array<Value, 3> workload = {entryBlock->addArgument(indexType, loc),
+                                   entryBlock->addArgument(indexType, loc),
+                                   entryBlock->addArgument(indexType, loc)};
   std::array<Value, 3> workgroupCount = regionBuilder(builder, loc, workload);
   builder.create<IREE::HAL::ReturnOp>(loc, workgroupCount);
   entryPointOp.erase();

@@ -19,17 +19,16 @@ iree_cc_library(
     "ConvertStandardToVMVX.cpp"
   DEPS
     MLIRAffine
+    MLIRFunc
     MLIRIR
     MLIRLinalg
     MLIRMath
     MLIRMemRef
     MLIRPass
-    MLIRStandard
     MLIRSupport
     MLIRTransforms
     iree::compiler::Dialect::Modules::VMVX::IR
     iree::compiler::Dialect::Modules::VMVX::IR::VMVXDialect
-    iree::compiler::Dialect::Shape::IR
     iree::compiler::Dialect::Util::IR
   PUBLIC
 )

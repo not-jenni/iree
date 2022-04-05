@@ -14,11 +14,12 @@ iree_lit_test_suite(
   NAME
     lit
   SRCS
-    "do_not_optimize.mlir"
+    "hal_executable.mlir"
     "smoketest.mlir"
-  DATA
-    iree::tools::IreeFileCheck
-    iree::tools::iree-opt
+    "streams.mlir"
+  TOOLS
+    FileCheck
+    iree::tools::iree-compile
     iree::tools::iree-translate
 )
 

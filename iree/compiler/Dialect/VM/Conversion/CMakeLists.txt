@@ -26,13 +26,13 @@ iree_cc_library(
     "TypeConverter.cpp"
   DEPS
     LLVMSupport
+    MLIRFunc
     MLIRIR
     MLIRParser
-    MLIRStandard
     MLIRTransforms
-    iree::compiler::Dialect::Shape::IR
     iree::compiler::Dialect::Util::IR
     iree::compiler::Dialect::VM::IR
+    iree::compiler::Utils
   PUBLIC
 )
 

@@ -21,7 +21,7 @@ class DeviceQueryIntCastOpConversion
       : OpConversionPattern(typeConverter, context) {}
 
   LogicalResult matchAndRewrite(
-      IREE::HAL::DeviceQueryOp op, llvm::ArrayRef<Value> operands,
+      IREE::HAL::DeviceQueryOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     // We only deal with in-dialect conversions to i32 in this pattern.
     auto targetType = op.value().getType();
@@ -33,7 +33,6 @@ class DeviceQueryIntCastOpConversion
     // ourselves instead of allowing the i32 do the same. We could let it handle
     // things but then we are generating more IR that may prevent other
     // canonicalizations (a select of i1 to i1 is easier to handle).
-    IREE::HAL::DeviceQueryOp::Adaptor adaptor(operands);
     auto queryOp = rewriter.create<IREE::HAL::DeviceQueryOp>(
         op.getLoc(), rewriter.getI1Type(), rewriter.getI32Type(),
         adaptor.device(), op.categoryAttr(), op.keyAttr(), Attribute{});
@@ -63,7 +62,7 @@ class DeviceQueryIntCastOpConversion
       // Select the default value based on the converted type as that's the type
       // of the attribute we have is in. 'ok' result is set to true as we've
       // already handled the error case.
-      value = rewriter.createOrFold<SelectOp>(
+      value = rewriter.createOrFold<arith::SelectOp>(
           op.getLoc(), ok, value,
           rewriter.createOrFold<arith::ConstantOp>(op.getLoc(),
                                                    op.default_valueAttr()));
@@ -86,17 +85,16 @@ class DeviceQueryI32OpConversion
   }
 
   LogicalResult matchAndRewrite(
-      IREE::HAL::DeviceQueryOp op, llvm::ArrayRef<Value> operands,
+      IREE::HAL::DeviceQueryOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     if (!op.value().getType().isInteger(32)) return failure();
-    IREE::HAL::DeviceQueryOp::Adaptor adaptor(operands);
     auto results =
         rewriteToCall(op, adaptor, importOp, *getTypeConverter(), rewriter);
     if (!results.hasValue()) return failure();
     auto ok = results->front();
     auto value = results->back();
     if (op.default_value().hasValue()) {
-      value = rewriter.createOrFold<SelectOp>(
+      value = rewriter.createOrFold<arith::SelectOp>(
           op.getLoc(), ok, value,
           rewriter.createOrFold<IREE::VM::ConstI32Op>(op.getLoc(),
                                                       op.default_valueAttr()));
@@ -113,7 +111,7 @@ class DeviceQueryI32OpConversion
 void populateHALDeviceToVMPatterns(MLIRContext *context,
                                    SymbolTable &importSymbols,
                                    TypeConverter &typeConverter,
-                                   OwningRewritePatternList &patterns) {
+                                   RewritePatternSet &patterns) {
   patterns.insert<VMImportOpConversion<IREE::HAL::DeviceAllocatorOp>>(
       context, importSymbols, typeConverter, "hal.device.allocator");
 

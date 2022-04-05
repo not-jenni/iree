@@ -7,7 +7,7 @@
 #include "iree/compiler/Dialect/Modules/Check/IR/CheckOps.h"
 
 #include "iree/compiler/Dialect/HAL/IR/HALTypes.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
 
@@ -29,13 +29,13 @@ struct ExpandAttributeToConst : public OpRewritePattern<SrcOp> {
 };
 }  // namespace
 
-void ExpectEqConstOp::getCanonicalizationPatterns(
-    OwningRewritePatternList &results, MLIRContext *context) {
+void ExpectEqConstOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                                  MLIRContext *context) {
   results.insert<ExpandAttributeToConst<ExpectEqConstOp, ExpectEqOp>>(context);
 }
 
 void ExpectAlmostEqConstOp::getCanonicalizationPatterns(
-    OwningRewritePatternList &results, MLIRContext *context) {
+    RewritePatternSet &results, MLIRContext *context) {
   results
       .insert<ExpandAttributeToConst<ExpectAlmostEqConstOp, ExpectAlmostEqOp>>(
           context);

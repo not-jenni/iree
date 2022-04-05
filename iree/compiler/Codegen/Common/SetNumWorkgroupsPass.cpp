@@ -11,8 +11,11 @@
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "iree/compiler/Dialect/HAL/IR/HALDialect.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
+#include "llvm/Support/Debug.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+
+#define DEBUG_TYPE "iree-codegen-set-num-workgroups"
 
 static const unsigned kNumMaxParallelDims = 3;
 
@@ -79,7 +82,7 @@ void SetNumWorkgroupsPass::runOnOperation() {
 
   llvm::StringMap<IREE::HAL::ExecutableEntryPointOp> entryPoints =
       getAllEntryPoints(module);
-  for (auto funcOp : module.getOps<FuncOp>()) {
+  for (auto funcOp : module.getOps<func::FuncOp>()) {
     auto entryPointOp = entryPoints.lookup(funcOp.getName());
     if (!entryPointOp) continue;
 
@@ -96,7 +99,7 @@ void SetNumWorkgroupsPass::runOnOperation() {
 
     if (!currWorkloadPerWorkgroup.empty()) {
       // Fold hal.workgroup.size ops.
-      OwningRewritePatternList patterns(funcOp.getContext());
+      RewritePatternSet patterns(funcOp.getContext());
       patterns.insert<SetWorkgroupSizePattern>(funcOp.getContext(),
                                                currWorkloadPerWorkgroup);
       if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
@@ -106,7 +109,7 @@ void SetNumWorkgroupsPass::runOnOperation() {
 
     // The workgroup count region might already be set by op-specific
     // configuration logic. If so, just return to avoid overwriting that.
-    if (!entryPointOp.workgroup_count_region().empty()) return;
+    if (!entryPointOp.workgroup_count_region().empty()) continue;
 
     WorkgroupCountRegionBuilder regionBuilder;
     if (currWorkloadPerWorkgroup.empty()) {
@@ -126,7 +129,7 @@ void SetNumWorkgroupsPass::runOnOperation() {
         Value one = b.create<arith::ConstantIndexOp>(loc, 1);
         std::array<Value, 3> returnValues = {one, one, one};
         for (auto ts : llvm::enumerate(currWorkloadPerWorkgroup)) {
-          returnValues[ts.index()] = linalg::applyMapToValues(
+          returnValues[ts.index()] = applyMapToValues(
               b, loc,
               AffineMap::get(0, 1,
                              b.getAffineSymbolExpr(0).ceilDiv(ts.value())),
@@ -142,12 +145,15 @@ void SetNumWorkgroupsPass::runOnOperation() {
   }
 
   // Apply post distribution canonicalization passes.
-  OwningRewritePatternList canonicalization(context);
+  RewritePatternSet canonicalization(context);
   AffineMinOp::getCanonicalizationPatterns(canonicalization, context);
   populateAffineMinSCFCanonicalizationPattern(canonicalization);
   IREE::Flow::populateFlowDispatchCanonicalizationPatterns(canonicalization,
                                                            context);
-  (void)applyPatternsAndFoldGreedily(module, std::move(canonicalization));
+  if (failed(
+          applyPatternsAndFoldGreedily(module, std::move(canonicalization)))) {
+    return signalPassFailure();
+  }
 }
 
 std::unique_ptr<OperationPass<IREE::HAL::ExecutableVariantOp>>

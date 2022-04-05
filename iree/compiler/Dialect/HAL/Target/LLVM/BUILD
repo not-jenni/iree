@@ -14,7 +14,7 @@ package(
 
 iree_cmake_extra_content(
     content = """
-if(NOT "${IREE_TARGET_BACKEND_DYLIB-LLVM-AOT}" AND NOT "${IREE_TARGET_BACKEND_WASM-LLVM-AOT}")
+if(NOT "${IREE_TARGET_BACKEND_DYLIB_LLVM_AOT}" AND NOT "${IREE_TARGET_BACKEND_WASM_LLVM_AOT}")
   return()
 endif()
 """,
@@ -41,14 +41,18 @@ cc_library(
         "//iree/compiler/Codegen/LLVMCPU",
         "//iree/compiler/Codegen/Utils",
         "//iree/compiler/Dialect/HAL/Target",
-        "//iree/compiler/Dialect/HAL/Target/LLVM/librt",
+        "//iree/compiler/Dialect/HAL/Target/LLVM/Builtins",
+        "//llvm-external-projects/iree-dialects:IREELinalgExtDialect",
+        "//llvm-external-projects/iree-dialects:IREELinalgTransformDialect",
         "@llvm-project//llvm:AArch64AsmParser",
         "@llvm-project//llvm:AArch64CodeGen",
         "@llvm-project//llvm:ARMAsmParser",
         "@llvm-project//llvm:ARMCodeGen",
+        "@llvm-project//llvm:Analysis",
         "@llvm-project//llvm:BitReader",
         "@llvm-project//llvm:BitWriter",
         "@llvm-project//llvm:Core",
+        "@llvm-project//llvm:Linker",
         "@llvm-project//llvm:RISCVAsmParser",
         "@llvm-project//llvm:RISCVCodeGen",
         "@llvm-project//llvm:Support",
@@ -56,8 +60,12 @@ cc_library(
         "@llvm-project//llvm:WebAssemblyCodeGen",
         "@llvm-project//llvm:X86AsmParser",
         "@llvm-project//llvm:X86CodeGen",
+        "@llvm-project//llvm:config",
+        "@llvm-project//mlir:ArmNeon",
         "@llvm-project//mlir:LLVMDialect",
         "@llvm-project//mlir:LLVMToLLVMIRTranslation",
+        "@llvm-project//mlir:PDLDialect",
+        "@llvm-project//mlir:PDLInterpDialect",
         "@llvm-project//mlir:ToLLVMIRTranslation",
     ],
 )

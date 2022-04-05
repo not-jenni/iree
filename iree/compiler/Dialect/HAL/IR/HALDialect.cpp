@@ -6,7 +6,6 @@
 
 #include "iree/compiler/Dialect/HAL/IR/HALDialect.h"
 
-#include "iree/compiler/Dialect/HAL/Conversion/HALToHAL/ConvertHALToHAL.h"
 #include "iree/compiler/Dialect/HAL/Conversion/HALToVM/ConvertHALToVM.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/HAL/IR/HALTypes.h"
@@ -15,10 +14,10 @@
 #include "iree/compiler/Dialect/VM/Conversion/ConversionDialectInterface.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/SourceMgr.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
-#include "mlir/Parser.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Transforms/InliningUtils.h"
 
 namespace mlir {
@@ -42,6 +41,9 @@ struct HALOpAsmInterface : public OpAsmDialectInterface {
       return AliasResult::OverridableAlias;
     } else if (auto targetAttr = attr.dyn_cast<ExecutableTargetAttr>()) {
       os << "executable_target_" << targetAttr.getSymbolNameFragment();
+      return AliasResult::OverridableAlias;
+    } else if (auto layoutAttr = attr.dyn_cast<ExecutableLayoutAttr>()) {
+      os << "executable_layout";
       return AliasResult::OverridableAlias;
     }
     return AliasResult::NoAlias;
@@ -75,17 +77,15 @@ class HALToVMConversionInterface : public VMConversionDialectInterface {
  public:
   using VMConversionDialectInterface::VMConversionDialectInterface;
 
-  OwningModuleRef parseVMImportModule() const override {
+  OwningOpRef<mlir::ModuleOp> parseVMImportModule() const override {
     return mlir::parseSourceString(StringRef(iree_hal_imports_create()->data,
                                              iree_hal_imports_create()->size),
                                    getDialect()->getContext());
   }
 
   void populateVMConversionPatterns(
-      SymbolTable &importSymbols, OwningRewritePatternList &patterns,
+      SymbolTable &importSymbols, RewritePatternSet &patterns,
       TypeConverter &typeConverter) const override {
-    populateHALToHALPatterns(getDialect()->getContext(), patterns,
-                             typeConverter);
     populateHALToVMPatterns(getDialect()->getContext(), importSymbols, patterns,
                             typeConverter);
   }
@@ -93,8 +93,13 @@ class HALToVMConversionInterface : public VMConversionDialectInterface {
   void walkAttributeStorage(
       Attribute attr,
       const function_ref<void(Attribute elementAttr)> &fn) const override {
-    if (auto structAttr = attr.dyn_cast<DescriptorSetLayoutBindingAttr>()) {
-      structAttr.walkStorage(fn);
+    // TODO(benvanik): remove this interface or make it an attr interface.
+    if (auto bindingAttr =
+            attr.dyn_cast<IREE::HAL::DescriptorSetBindingAttr>()) {
+      fn(IntegerAttr::get(IndexType::get(attr.getContext()),
+                          APInt(64, bindingAttr.getOrdinal())));
+      fn(IREE::HAL::DescriptorTypeAttr::get(attr.getContext(),
+                                            bindingAttr.getType()));
     }
   }
 };

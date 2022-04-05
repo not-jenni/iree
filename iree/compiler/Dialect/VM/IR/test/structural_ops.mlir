@@ -1,6 +1,4 @@
-// Tests printing and parsing of structural ops.
-
-// RUN: iree-opt -split-input-file %s | iree-opt -split-input-file | IreeFileCheck %s
+// RUN: iree-opt -split-input-file %s | iree-opt -split-input-file | FileCheck %s
 
 // CHECK-LABEL: @module_empty
 vm.module @module_empty {}
@@ -88,8 +86,8 @@ vm.module @initializers {
 
   // CHECK-NEXT: vm.initializer {
   vm.initializer {
-    // CHECK-NEXT: %zero = vm.const.i32 0 : i32
-    %zero = vm.const.i32 0 : i32
+    // CHECK-NEXT: %zero = vm.const.i32 0
+    %zero = vm.const.i32 0
     // CHECK-NEXT:   vm.br ^bb1(%zero : i32)
     vm.br ^bb1(%zero: i32)
     // CHECK-NEXT: ^bb1(%0: i32):

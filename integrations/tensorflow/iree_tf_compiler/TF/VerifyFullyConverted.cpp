@@ -4,8 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "iree/compiler/Utils/ConversionUtils.h"
 #include "iree_tf_compiler/TF/Passes.h"
+#include "iree_tf_compiler/Utils/ConversionUtils.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "mlir/Pass/Pass.h"
@@ -21,7 +21,7 @@ namespace iree_integrations {
 namespace TF {
 
 class VerifyFullyConvertedPass
-    : public PassWrapper<VerifyFullyConvertedPass, FunctionPass> {
+    : public PassWrapper<VerifyFullyConvertedPass, OperationPass<FuncOp>> {
  public:
   StringRef getArgument() const override {
     return "iree-tf-verify-fully-converted";
@@ -33,7 +33,7 @@ class VerifyFullyConvertedPass
   }
 
   // Validates that no TensorFlow frontends ops are in the function.
-  void runOnFunction() override {
+  void runOnOperation() override {
     ConversionTarget target(getContext());
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     target

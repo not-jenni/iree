@@ -16,7 +16,7 @@
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -30,6 +30,11 @@ namespace iree_compiler {
 namespace IREE {
 namespace Util {
 namespace {
+
+template <typename R>
+static size_t count(R &&range) {
+  return std::distance(range.begin(), range.end());
+}
 
 struct Global {
   size_t ordinal = 0;
@@ -241,6 +246,23 @@ static bool updateGlobalImmutability(GlobalTable &globalTable) {
   });
 }
 
+// Tries to materialize a constant op for |attr| of |type|.
+// Returns nullptr if the attribute could not be materialized as a constant.
+static Value tryMaterializeConstant(Location loc, Type type, Attribute attr,
+                                    OpBuilder &builder) {
+  if (arith::ConstantOp::isBuildableWith(attr, type)) {
+    // Common case fast-path.
+    return builder.create<arith::ConstantOp>(loc, type, attr);
+  } else if (mlir::func::ConstantOp::isBuildableWith(attr, type)) {
+    return builder.create<mlir::func::ConstantOp>(
+        loc, type, attr.cast<FlatSymbolRefAttr>());
+  }
+  // Fallback that asks a dialect to materialize things. This may fail!
+  auto *op = attr.getDialect().materializeConstant(builder, attr, type, loc);
+  if (!op) return nullptr;
+  return op->getResult(0);
+}
+
 // Inlines constant global values that are known to not change.
 static bool inlineConstantGlobalLoads(GlobalTable &globalTable) {
   return globalTable.forEach([&](Global &global) {
@@ -258,10 +280,17 @@ static bool inlineConstantGlobalLoads(GlobalTable &globalTable) {
     // Inline initial value into all loads.
     for (auto loadOp : global.loadOps) {
       OpBuilder builder(loadOp);
-      auto constantOp = builder.create<arith::ConstantOp>(
-          loadOp.getLoc(), loadOp.result().getType(),
-          global.op.initial_valueAttr());
-      loadOp.replaceAllUsesWith(constantOp.getResult());
+      auto constantValue =
+          tryMaterializeConstant(loadOp.getLoc(), loadOp.result().getType(),
+                                 global.op.initial_valueAttr(), builder);
+      if (!constantValue) {
+        // Failed to materialize the constant. This is going to fail for all the
+        // others as well so we bail here. This may be intentional for example
+        // if some value-type has no default value (similar to a deleted default
+        // constructor in C++) - in which case the global is preserved as-is.
+        return GlobalAction::PRESERVE;
+      }
+      loadOp.replaceAllUsesWith(constantValue);
       loadOp.erase();
     }
     global.loadOps.clear();
@@ -356,6 +385,9 @@ static bool deduplicateConstantGlobals(GlobalTable &globalTable) {
 class FoldGlobalsPass
     : public PassWrapper<FoldGlobalsPass, OperationPass<mlir::ModuleOp>> {
  public:
+  explicit FoldGlobalsPass() = default;
+  FoldGlobalsPass(const FoldGlobalsPass &pass) {}
+
   StringRef getArgument() const override { return "iree-util-fold-globals"; }
 
   StringRef getDescription() const override {
@@ -363,25 +395,26 @@ class FoldGlobalsPass
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<mlir::StandardOpsDialect>();
+    registry.insert<mlir::func::FuncDialect>();
     registry.insert<mlir::arith::ArithmeticDialect>();
     registry.insert<IREE::Util::UtilDialect>();
   }
 
   void runOnOperation() override {
     auto *context = &getContext();
-    OwningRewritePatternList patterns(context);
+    RewritePatternSet patterns(context);
 
     for (auto *dialect : context->getLoadedDialects()) {
       dialect->getCanonicalizationPatterns(patterns);
     }
-    for (auto *op : context->getRegisteredOperations()) {
-      op->getCanonicalizationPatterns(patterns, context);
+    for (auto op : context->getRegisteredOperations()) {
+      op.getCanonicalizationPatterns(patterns, context);
     }
 
     FrozenRewritePatternSet frozenPatterns(std::move(patterns));
 
     auto moduleOp = getOperation();
+    beforeFoldingGlobals = count(moduleOp.getOps<IREE::Util::GlobalOp>());
     for (int i = 0; i < 10; ++i) {
       // TODO(benvanik): determine if we need this expensive folding.
       if (failed(applyPatternsAndFoldGreedily(moduleOp, frozenPatterns))) {
@@ -429,7 +462,15 @@ class FoldGlobalsPass
 
       if (!didChange) break;
     }
+
+    afterFoldingGlobals = count(moduleOp.getOps<IREE::Util::GlobalOp>());
   }
+
+ private:
+  Statistic beforeFoldingGlobals{this, "global ops before folding",
+                                 "Number of util.global ops before folding"};
+  Statistic afterFoldingGlobals{this, "global ops after folding",
+                                "Number of util.global ops after folding"};
 };
 
 }  // namespace

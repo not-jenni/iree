@@ -76,11 +76,12 @@ as a reference of how to set up the cmake configuration.
 ```shell
 cmake -GNinja -B ../iree-build-riscv/ \
   -DCMAKE_TOOLCHAIN_FILE="./build_tools/cmake/riscv.toolchain.cmake" \
-  -DIREE_HOST_BINARY_ROOT=$(realpath ../iree-build-host/install) \
+  -DIREE_HOST_BINARY_ROOT=$(realpath ../iree-build/install) \
   -DRISCV_CPU=rv64 \
   -DIREE_BUILD_COMPILER=OFF \
   -DRISCV_TOOLCHAIN_ROOT=${RISCV_TOOLCHAIN_ROOT} \
   .
+cmake --build ../iree-build-riscv/
 ```
 
 ## Running IREE bytecode modules on the RISC-V system
@@ -102,7 +103,7 @@ export QEMU_BIN=<path to qemu-riscv64 binary>
 Invoke the host compiler tools to produce a bytecode module flatbuffer:
 
 ``` shell
-../iree-build/install/bin/iree-translate \
+../iree-build/install/bin/iree-compile \
   -iree-mlir-to-vm-bytecode-module \
   -iree-hal-target-backends=vmvx \
   iree/samples/models/simple_abs.mlir \
@@ -129,13 +130,13 @@ ${QEMU_BIN} \
  toolchain and the emulator, build the tools from the following sources:
 
 * RISC-V toolchain is built from
-[https://github.com/llvm/llvm-project](https://github.com/llvm/llvm-project) (main branch).
-  * Currently, the LLVM compiler is built on GNU toolchain, including libgcc,
-    GNU linker, and C libraries. You need to build GNU toolchain first.
-  * Clone GNU toolchain from:
-  [https://github.com/riscv/riscv-gnu-toolchain](https://github.com/riscv/riscv-gnu-toolchain)
-    (master branch). Switch the "riscv-binutils" submodule to `rvv-1.0.x-zfh`
-    branch manually.
+<https://github.com/llvm/llvm-project> (main branch).
+    * Currently, the LLVM compiler is built on GNU toolchain, including libgcc,
+      GNU linker, and C libraries. You need to build GNU toolchain first.
+    * Clone GNU toolchain from:
+      <https://github.com/riscv/riscv-gnu-toolchain>
+      (master branch). Switch the "riscv-binutils" submodule to
+      `git://sourceware.org/git/binutils-gdb.git` (master branch) manually.
 * RISC-V QEMU is built from
 [https://github.com/sifive/qemu/tree/v5.2.0-rvv-rvb-zfh](https://github.com/sifive/qemu/tree/v5.2.0-rvv-rvb-zfh).
 
@@ -144,13 +145,13 @@ The SIMD code can be generated following the
 with the additional command-line flags
 
 ```shell hl_lines="3 4 5 6 7 8"
-iree/tools/iree-translate \
+iree/tools/iree-compile \
   -iree-mlir-to-vm-bytecode-module \
   -iree-hal-target-backends=dylib-llvm-aot \
   -iree-llvm-target-triple=riscv64 \
   -iree-llvm-target-cpu=generic-rv64 \
   -iree-llvm-target-abi=lp64d \
-  -iree-llvm-target-cpu-features="+m,+a,+f,+d,+experimental-v" \
+  -iree-llvm-target-cpu-features="+m,+a,+f,+d,+v" \
   -riscv-v-vector-bits-min=256 -riscv-v-fixed-length-vector-lmul-max=8 \
   iree_input.mlir -o mobilenet-dylib.vmfb
 ```

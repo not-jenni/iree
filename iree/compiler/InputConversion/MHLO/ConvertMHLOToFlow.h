@@ -12,6 +12,7 @@
 
 namespace mlir {
 namespace iree_compiler {
+namespace MHLO {
 
 // Setup the |conversionTarget| op legality for early-phase direct-to-flow
 // conversion from the MHLO dialect. This will make certain ops illegal that we
@@ -22,8 +23,9 @@ void setupDirectMHLOToFlowLegality(MLIRContext *context,
 
 // Appends all patterns for converting MHLO ops to flow ops.
 void populateMHLOToFlowPatterns(MLIRContext *context,
-                                OwningRewritePatternList &patterns);
+                                RewritePatternSet &patterns);
 
+}  // namespace MHLO
 }  // namespace iree_compiler
 }  // namespace mlir
 
