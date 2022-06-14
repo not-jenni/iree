@@ -1,0 +1,12 @@
+name: Break CI for a commit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+  jobs:
+    break_commit:
+      steps:
+        exit 1
