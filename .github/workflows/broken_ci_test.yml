@@ -8,6 +8,7 @@ on:
 
 jobs:
   break_commit:
+    runs-on: ubuntu-18.04
     steps:
       - name: exit
         run: exit 1
