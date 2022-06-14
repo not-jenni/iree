@@ -11,4 +11,4 @@ jobs:
     runs-on: ubuntu-18.04
     steps:
       - name: exit
-        run: exit 1
+        run: exit 0
