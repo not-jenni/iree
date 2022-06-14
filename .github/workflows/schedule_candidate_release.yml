@@ -15,7 +15,7 @@ jobs:
     steps:
       - name: Get the last green commit
         id: last_green_commit
-        uses: talentpair/last-green-commit-action@master
+        uses: talentpair/last-green-commit-action@8b4b3bcd4ab5d9ab16875ce20ae012c4ce47ae68
         with:
           github-token: ${{ secrets.WRITE_ACCESS_TOKEN }}
 
